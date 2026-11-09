@@ -1,30 +1,36 @@
+
 """
 Binance Spot V3 Smart Signal Scanner
-Public market-data provider.
+Validated public market-data provider.
 
 Rules:
-- Binance Spot only
-- USDT quote pairs only
+- Binance Spot public endpoints only
+- USDT quote symbols only
 - No Futures or Margin
-- Only closed candles are returned
+- Closed candles only
+- Strict OHLCV, ticker and order-book validation
+- Config-driven data freshness
 - No API key required
 """
 
-import time
+import copy
 import logging
+import math
+import time
 from datetime import datetime, timezone
 
-import requests
 import pandas as pd
+import requests
 
 from config import API_CONFIG
 
 
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------
-# API CONFIGURATION
-# --------------------------------------------------
+
+# ==================================================
+# 1. API CONFIGURATION
+# ==================================================
 
 BASE_URL = (
     API_CONFIG.get("BASE_URL")
@@ -63,20 +69,19 @@ TIMEOUT = API_CONFIG.get("REQUEST_TIMEOUT_SECONDS", 10)
 MAX_RETRIES = API_CONFIG.get("MAX_RETRIES", 3)
 BACKOFF_SECONDS = API_CONFIG.get("RETRY_BACKOFF_SECONDS", 1)
 
-# Exchange information cache
+FRESHNESS_CONFIG = API_CONFIG.get(
+    "DATA_FRESHNESS_SECONDS", {}
+)
+
 EXCHANGE_INFO_CACHE_SECONDS = 3600
 
 _exchange_info_cache = None
 _exchange_info_cache_time = 0
 
 
-# --------------------------------------------------
-# EXPLICIT ASSET EXCLUSIONS
-# --------------------------------------------------
-
-# Binance exchange metadata cannot reliably identify every
-# tokenized stock or synthetic asset. This list provides
-# an additional configurable safety filter.
+# ==================================================
+# 2. SYMBOL FILTERS
+# ==================================================
 
 EXCLUDED_SYMBOLS = {
     "TSLAUSDT",
@@ -91,7 +96,6 @@ EXCLUDED_SYMBOLS = {
     "HOODUSDT",
 }
 
-# Common leveraged-token suffixes
 LEVERAGED_SUFFIXES = (
     "UPUSDT",
     "DOWNUSDT",
@@ -100,35 +104,69 @@ LEVERAGED_SUFFIXES = (
 )
 
 
-# --------------------------------------------------
-# EXCEPTIONS
-# --------------------------------------------------
+# ==================================================
+# 3. EXCEPTIONS
+# ==================================================
 
 class BinanceDataError(Exception):
     """Base exception for Binance data errors."""
 
 
 class BinanceAPIError(BinanceDataError):
-    """Raised when Binance returns an API or HTTP error."""
+    """Binance HTTP or API error."""
 
 
 class BinanceDataValidationError(BinanceDataError):
-    """Raised when returned data has an invalid structure."""
+    """Invalid or unreliable market data."""
 
 
-# --------------------------------------------------
-# GENERAL HELPERS
-# --------------------------------------------------
+# ==================================================
+# 4. GENERAL HELPERS
+# ==================================================
 
 def _utc_now_ms():
     return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
+def _is_finite_number(value):
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _safe_float(value, field_name):
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise BinanceDataValidationError(
+            f"Invalid numeric field: {field_name}"
+        ) from exc
+
+    if not math.isfinite(number):
+        raise BinanceDataValidationError(
+            f"Non-finite numeric field: {field_name}"
+        )
+
+    return number
+
+
+def _safe_int(value, field_name):
+    number = _safe_float(value, field_name)
+
+    if not number.is_integer():
+        raise BinanceDataValidationError(
+            f"Invalid integer field: {field_name}"
+        )
+
+    return int(number)
 
 
 def _is_valid_usdt_symbol(symbol):
     if not isinstance(symbol, str):
         return False
 
-    symbol = symbol.upper()
+    symbol = symbol.upper().strip()
 
     if not symbol.endswith("USDT"):
         return False
@@ -139,16 +177,43 @@ def _is_valid_usdt_symbol(symbol):
     if symbol.endswith(LEVERAGED_SUFFIXES):
         return False
 
+    if len(symbol) <= 4:
+        return False
+
     return True
 
 
+def _get_freshness_seconds(key, default):
+    value = FRESHNESS_CONFIG.get(key, default)
+
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return default
+
+    if not math.isfinite(value) or value <= 0:
+        return default
+
+    return value
+
+
+# ==================================================
+# 5. HTTP REQUEST ENGINE
+# ==================================================
+
 def _request_json(endpoint, params=None):
     """
-    Request JSON data with retry and basic rate-limit handling.
+    Request public Binance JSON data.
+
+    Retries:
+    - Network errors
+    - HTTP 418 / 429
+    - HTTP 5xx
+
+    Does not retry ordinary HTTP 4xx errors.
     """
 
     url = BASE_URL + endpoint
-
     last_error = None
 
     for attempt in range(MAX_RETRIES + 1):
@@ -161,33 +226,42 @@ def _request_json(endpoint, params=None):
             )
 
             if response.status_code in (418, 429):
-                retry_after = response.headers.get("Retry-After")
+                retry_after = response.headers.get(
+                    "Retry-After"
+                )
 
                 try:
                     wait_time = float(retry_after)
                 except (TypeError, ValueError):
-                    wait_time = BACKOFF_SECONDS * (2 ** attempt)
+                    wait_time = (
+                        BACKOFF_SECONDS * (2 ** attempt)
+                    )
 
                 if attempt < MAX_RETRIES:
-                    time.sleep(min(wait_time, 60))
+                    time.sleep(min(max(wait_time, 1), 60))
                     continue
 
                 raise BinanceAPIError(
-                    f"Binance rate limit: HTTP {response.status_code}"
+                    f"Binance rate limit: HTTP "
+                    f"{response.status_code}"
                 )
 
             if response.status_code >= 500:
                 if attempt < MAX_RETRIES:
-                    time.sleep(BACKOFF_SECONDS * (2 ** attempt))
+                    time.sleep(
+                        BACKOFF_SECONDS * (2 ** attempt)
+                    )
                     continue
 
                 raise BinanceAPIError(
-                    f"Binance server error: HTTP {response.status_code}"
+                    f"Binance server error: HTTP "
+                    f"{response.status_code}"
                 )
 
             if response.status_code >= 400:
                 raise BinanceAPIError(
-                    f"Binance HTTP error: {response.status_code}"
+                    f"Binance HTTP error: "
+                    f"{response.status_code}"
                 )
 
             try:
@@ -198,9 +272,11 @@ def _request_json(endpoint, params=None):
                 ) from exc
 
             if isinstance(data, dict) and "code" in data:
-                if data.get("code", 0) < 0:
+                code = data.get("code")
+
+                if isinstance(code, (int, float)) and code < 0:
                     raise BinanceAPIError(
-                        f"Binance API error: {data.get('msg', 'Unknown error')}"
+                        "Binance returned an API error."
                     )
 
             return data
@@ -212,23 +288,27 @@ def _request_json(endpoint, params=None):
             last_error = exc
 
             if attempt < MAX_RETRIES:
-                time.sleep(BACKOFF_SECONDS * (2 ** attempt))
+                time.sleep(
+                    BACKOFF_SECONDS * (2 ** attempt)
+                )
                 continue
 
     raise BinanceAPIError(
-        f"Binance request failed after retries: {last_error}"
+        f"Binance request failed after retries: "
+        f"{type(last_error).__name__ if last_error else 'Unknown'}"
     )
 
 
-# --------------------------------------------------
-# 1. EXCHANGE INFORMATION
-# --------------------------------------------------
+# ==================================================
+# 6. EXCHANGE INFORMATION
+# ==================================================
 
 def get_exchange_info(force_refresh=False):
     """
-    Return Binance Spot exchange information.
+    Return cached Binance Spot exchange information.
 
-    Cached for one hour unless force_refresh=True.
+    Returned data is a deep copy so callers cannot
+    accidentally modify the internal cache.
     """
 
     global _exchange_info_cache
@@ -243,7 +323,7 @@ def get_exchange_info(force_refresh=False):
     )
 
     if cache_valid and not force_refresh:
-        return _exchange_info_cache
+        return copy.deepcopy(_exchange_info_cache)
 
     data = _request_json(EXCHANGE_INFO_ENDPOINT)
 
@@ -257,26 +337,19 @@ def get_exchange_info(force_refresh=False):
             "Exchange information has no valid symbols list."
         )
 
-    _exchange_info_cache = data
+    _exchange_info_cache = copy.deepcopy(data)
     _exchange_info_cache_time = now
 
-    return data
+    return copy.deepcopy(_exchange_info_cache)
 
 
-# --------------------------------------------------
-# 2. GET ELIGIBLE SPOT USDT SYMBOLS
-# --------------------------------------------------
+# ==================================================
+# 7. ELIGIBLE SPOT USDT SYMBOLS
+# ==================================================
 
 def get_usdt_symbols(force_refresh=False):
     """
-    Return eligible Binance Spot USDT trading symbols.
-
-    Filters:
-    - TRADING status
-    - USDT quote asset
-    - Spot trading enabled
-    - Explicitly excluded assets
-    - Common leveraged tokens excluded
+    Return eligible Binance Spot USDT symbols.
     """
 
     exchange_info = get_exchange_info(
@@ -290,7 +363,7 @@ def get_usdt_symbols(force_refresh=False):
         if not isinstance(item, dict):
             continue
 
-        symbol = item.get("symbol", "").upper()
+        symbol = item.get("symbol", "")
 
         if not _is_valid_usdt_symbol(symbol):
             continue
@@ -304,33 +377,37 @@ def get_usdt_symbols(force_refresh=False):
         if item.get("isSpotTradingAllowed") is not True:
             continue
 
-        eligible_symbols.append(symbol)
+        eligible_symbols.append(symbol.upper())
 
     return sorted(set(eligible_symbols))
 
 
-# --------------------------------------------------
-# 3. KLINE DATA
-# --------------------------------------------------
+# ==================================================
+# 8. KLINE CONFIGURATION
+# ==================================================
 
 VALID_INTERVALS = {
-    "1m",
-    "3m",
-    "5m",
-    "15m",
-    "30m",
-    "1h",
-    "2h",
-    "4h",
-    "6h",
-    "8h",
-    "12h",
-    "1d",
-    "3d",
-    "1w",
-    "1M",
+    "1m", "3m", "5m", "15m", "30m",
+    "1h", "2h", "4h", "6h", "8h",
+    "12h", "1d", "3d", "1w", "1M",
 }
 
+INTERVAL_MS = {
+    "1m": 60_000,
+    "3m": 180_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "2h": 7_200_000,
+    "4h": 14_400_000,
+    "6h": 21_600_000,
+    "8h": 28_800_000,
+    "12h": 43_200_000,
+    "1d": 86_400_000,
+    "3d": 259_200_000,
+    "1w": 604_800_000,
+}
 
 KLINE_COLUMNS = [
     "open_time",
@@ -346,22 +423,170 @@ KLINE_COLUMNS = [
     "taker_buy_quote_volume",
 ]
 
+NUMERIC_COLUMNS = [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "quote_volume",
+    "taker_buy_base_volume",
+    "taker_buy_quote_volume",
+]
+
+INTEGER_COLUMNS = [
+    "open_time",
+    "close_time",
+    "trade_count",
+]
+
+
+def _validate_candle_rows(df):
+    """
+    Reject invalid OHLCV rows instead of silently
+    passing corrupted market data to indicators.
+    """
+
+    if df.empty:
+        return df
+
+    for column in NUMERIC_COLUMNS + INTEGER_COLUMNS:
+        if df[column].isna().any():
+            raise BinanceDataValidationError(
+                f"Kline contains missing values: {column}"
+            )
+
+    for column in NUMERIC_COLUMNS:
+        values = df[column].astype(float)
+
+        if not values.map(math.isfinite).all():
+            raise BinanceDataValidationError(
+                f"Kline contains non-finite values: {column}"
+            )
+
+    for column in INTEGER_COLUMNS:
+        values = df[column].astype(float)
+
+        if not values.map(
+            lambda x: math.isfinite(x) and x >= 0 and x.is_integer()
+        ).all():
+            raise BinanceDataValidationError(
+                f"Kline contains invalid integer values: {column}"
+            )
+
+    prices = df[["open", "high", "low", "close"]]
+
+    if (prices <= 0).any().any():
+        raise BinanceDataValidationError(
+            "Kline contains non-positive prices."
+        )
+
+    if (df[["volume", "quote_volume"]] < 0).any().any():
+        raise BinanceDataValidationError(
+            "Kline contains negative volume."
+        )
+
+    if (df["trade_count"] < 0).any():
+        raise BinanceDataValidationError(
+            "Kline contains negative trade count."
+        )
+
+    invalid_ohlc = (
+        (df["high"] < df["open"])
+        | (df["high"] < df["close"])
+        | (df["low"] > df["open"])
+        | (df["low"] > df["close"])
+        | (df["high"] < df["low"])
+    )
+
+    if invalid_ohlc.any():
+        raise BinanceDataValidationError(
+            "Kline contains inconsistent OHLC prices."
+        )
+
+    if (
+        df["taker_buy_base_volume"] > df["volume"] * 1.001
+    ).any():
+        raise BinanceDataValidationError(
+            "Taker-buy base volume exceeds total volume."
+        )
+
+    return df
+
+
+def _validate_candle_continuity(df, interval):
+    """
+    Detect missing candles for fixed-duration intervals.
+
+    Monthly candles are excluded because their duration
+    is variable.
+    """
+
+    interval_ms = INTERVAL_MS.get(interval)
+
+    if interval_ms is None or len(df) < 2:
+        return
+
+    differences = df["open_time"].diff().dropna()
+
+    if (differences != interval_ms).any():
+        raise BinanceDataValidationError(
+            f"Candle gap detected for interval {interval}."
+        )
+
+
+def _validate_candle_freshness(df, interval):
+    if df.empty:
+        raise BinanceDataValidationError(
+            "No closed candles available."
+        )
+
+    defaults = {
+        "5m": 600,
+        "15m": 1800,
+        "30m": 3600,
+        "1h": 7200,
+    }
+
+    default_age = defaults.get(
+        interval,
+        2 * INTERVAL_MS.get(interval, 3_600_000) / 1000,
+    )
+
+    max_age = _get_freshness_seconds(
+        interval,
+        default_age,
+    )
+
+    latest_close = int(df.iloc[-1]["close_time"])
+    age_seconds = (_utc_now_ms() - latest_close) / 1000
+
+    if age_seconds < 0:
+        raise BinanceDataValidationError(
+            "Latest candle has a future close timestamp."
+        )
+
+    if age_seconds > max_age:
+        raise BinanceDataValidationError(
+            f"Stale {interval} candle data: "
+            f"{age_seconds:.0f}s old."
+        )
+
+
+# ==================================================
+# 9. GET CLOSED KLINES
+# ==================================================
 
 def get_klines(symbol, interval, limit=300):
     """
-    Return closed Binance Spot candles as a pandas DataFrame.
-
-    Current/unclosed candles are always removed.
-
-    Numeric price and volume columns are converted to float.
-    Timestamp and trade-count columns are integers.
+    Return validated, closed Binance Spot candles.
     """
 
-    symbol = str(symbol).upper()
+    symbol = str(symbol).upper().strip()
 
     if not _is_valid_usdt_symbol(symbol):
         raise BinanceDataValidationError(
-            f"Symbol is not an eligible USDT asset: {symbol}"
+            f"Invalid USDT symbol: {symbol}"
         )
 
     if interval not in VALID_INTERVALS:
@@ -369,7 +594,11 @@ def get_klines(symbol, interval, limit=300):
             f"Unsupported candle interval: {interval}"
         )
 
-    if not isinstance(limit, int) or not 1 <= limit <= 1000:
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or not 1 <= limit <= 1000
+    ):
         raise BinanceDataValidationError(
             "Kline limit must be an integer between 1 and 1000."
         )
@@ -396,63 +625,41 @@ def get_klines(symbol, interval, limit=300):
     for candle in data:
 
         if not isinstance(candle, list) or len(candle) < 11:
-            continue
+            raise BinanceDataValidationError(
+                "Malformed kline row received."
+            )
 
         rows.append(candle[:11])
-
-    if not rows:
-        return pd.DataFrame(columns=KLINE_COLUMNS)
 
     df = pd.DataFrame(
         rows,
         columns=KLINE_COLUMNS,
     )
 
-    numeric_columns = [
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "quote_volume",
-        "taker_buy_base_volume",
-        "taker_buy_quote_volume",
-    ]
-
-    for column in numeric_columns:
+    for column in NUMERIC_COLUMNS + INTEGER_COLUMNS:
         df[column] = pd.to_numeric(
             df[column],
             errors="coerce",
         )
 
-    integer_columns = [
-        "open_time",
-        "close_time",
-        "trade_count",
-    ]
-
-    for column in integer_columns:
-        df[column] = pd.to_numeric(
-            df[column],
-            errors="coerce",
+    if df.isna().any().any():
+        raise BinanceDataValidationError(
+            "Kline response contains invalid numeric values."
         )
 
-    df = df.dropna(
-        subset=[
-            "open_time",
-            "close_time",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ]
-    )
+    for column in INTEGER_COLUMNS:
+        values = df[column].astype(float)
 
-    for column in integer_columns:
-        df[column] = df[column].astype("int64")
+        if not values.map(
+            lambda x: math.isfinite(x) and x.is_integer()
+        ).all():
+            raise BinanceDataValidationError(
+                f"Invalid integer values in {column}."
+            )
 
-    # Keep only candles whose close time has passed.
+        df[column] = values.astype("int64")
+
+    # Keep only closed candles.
     now_ms = _utc_now_ms()
 
     df = df[
@@ -468,33 +675,27 @@ def get_klines(symbol, interval, limit=300):
 
     df = df.reset_index(drop=True)
 
+    if df.empty:
+        raise BinanceDataValidationError(
+            "No closed candles returned."
+        )
+
+    _validate_candle_rows(df)
+    _validate_candle_continuity(df, interval)
+    _validate_candle_freshness(df, interval)
+
     return df
 
 
-# --------------------------------------------------
-# 4. 24-HOUR TICKER DATA
-# --------------------------------------------------
+# ==================================================
+# 10. 24-HOUR TICKER
+# ==================================================
 
 def get_24h_ticker(symbols=None):
     """
-    Fetch 24-hour ticker data in one API request.
+    Return validated 24-hour ticker records.
 
-    Returns:
-        {
-            "BTCUSDT": {
-                "symbol": "BTCUSDT",
-                "last_price": float,
-                "price_change_percent": float,
-                "quote_volume": float,
-                "volume": float,
-                "trade_count": int,
-                "high_price": float,
-                "low_price": float,
-                "weighted_avg_price": float
-            }
-        }
-
-    If symbols is provided, only those symbols are returned.
+    Ticker freshness is checked using Binance closeTime.
     """
 
     data = _request_json(TICKER_ENDPOINT)
@@ -513,16 +714,24 @@ def get_24h_ticker(symbols=None):
         requested = {
             str(symbol).upper()
             for symbol in symbols
+            if _is_valid_usdt_symbol(str(symbol))
         }
 
     result = {}
+
+    max_age = _get_freshness_seconds(
+        "ticker",
+        120,
+    )
+
+    now_ms = _utc_now_ms()
 
     for item in data:
 
         if not isinstance(item, dict):
             continue
 
-        symbol = item.get("symbol", "").upper()
+        symbol = str(item.get("symbol", "")).upper()
 
         if not _is_valid_usdt_symbol(symbol):
             continue
@@ -531,26 +740,88 @@ def get_24h_ticker(symbols=None):
             continue
 
         try:
-            result[symbol] = {
+            record = {
                 "symbol": symbol,
-                "last_price": float(item["lastPrice"]),
-                "price_change_percent": float(
-                    item["priceChangePercent"]
+                "last_price": _safe_float(
+                    item["lastPrice"], "lastPrice"
                 ),
-                "quote_volume": float(item["quoteVolume"]),
-                "volume": float(item["volume"]),
-                "trade_count": int(item["count"]),
-                "high_price": float(item["highPrice"]),
-                "low_price": float(item["lowPrice"]),
-                "weighted_avg_price": float(
-                    item["weightedAvgPrice"]
+                "price_change_percent": _safe_float(
+                    item["priceChangePercent"],
+                    "priceChangePercent",
                 ),
-                "open_price": float(item["openPrice"]),
-                "open_time": int(item["openTime"]),
-                "close_time": int(item["closeTime"]),
+                "quote_volume": _safe_float(
+                    item["quoteVolume"], "quoteVolume"
+                ),
+                "volume": _safe_float(
+                    item["volume"], "volume"
+                ),
+                "trade_count": _safe_int(
+                    item["count"], "count"
+                ),
+                "high_price": _safe_float(
+                    item["highPrice"], "highPrice"
+                ),
+                "low_price": _safe_float(
+                    item["lowPrice"], "lowPrice"
+                ),
+                "weighted_avg_price": _safe_float(
+                    item["weightedAvgPrice"],
+                    "weightedAvgPrice",
+                ),
+                "open_price": _safe_float(
+                    item["openPrice"], "openPrice"
+                ),
+                "open_time": _safe_int(
+                    item["openTime"], "openTime"
+                ),
+                "close_time": _safe_int(
+                    item["closeTime"], "closeTime"
+                ),
             }
 
-        except (KeyError, TypeError, ValueError):
+            if record["last_price"] <= 0:
+                continue
+
+            if record["open_price"] <= 0:
+                continue
+
+            if record["weighted_avg_price"] <= 0:
+                continue
+
+            if record["low_price"] <= 0:
+                continue
+
+            if record["high_price"] < record["low_price"]:
+                continue
+
+            if record["volume"] < 0:
+                continue
+
+            if record["quote_volume"] < 0:
+                continue
+
+            if record["trade_count"] < 0:
+                continue
+
+            age_seconds = (
+                now_ms - record["close_time"]
+            ) / 1000
+
+            if age_seconds < 0 or age_seconds > max_age:
+                logger.warning(
+                    "Skipping stale ticker for %s",
+                    symbol,
+                )
+                continue
+
+            result[symbol] = record
+
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            BinanceDataValidationError,
+        ):
             logger.warning(
                 "Skipping invalid ticker data for %s",
                 symbol,
@@ -559,133 +830,10 @@ def get_24h_ticker(symbols=None):
     return result
 
 
-# --------------------------------------------------
-# 5. ORDER BOOK DATA
-# --------------------------------------------------
+# ==================================================
+# 11. ORDER BOOK VALIDATION
+# ==================================================
 
-def get_order_book(symbol, limit=100):
-    """
-    Return Binance Spot order book data.
-
-    Output:
-        {
-            "symbol": str,
-            "bids": [[price, quantity], ...],
-            "asks": [[price, quantity], ...],
-            "last_update_id": int,
-            "received_at": int
-        }
-    """
-
-    symbol = str(symbol).upper()
-
-    if not _is_valid_usdt_symbol(symbol):
-        raise BinanceDataValidationError(
-            f"Symbol is not an eligible USDT asset: {symbol}"
-        )
-
-    valid_limits = {
-        5,
-        10,
-        20,
-        50,
-        100,
-        500,
-        1000,
-    }
-
-    if limit not in valid_limits:
-        raise BinanceDataValidationError(
-            "Invalid order book limit."
-        )
-
-    data = _request_json(
-        ORDER_BOOK_ENDPOINT,
-        params={
-            "symbol": symbol,
-            "limit": limit,
-        },
-    )
-
-    if not isinstance(data, dict):
-        raise BinanceDataValidationError(
-            "Invalid order book response."
-        )
-
-    bids = data.get("bids")
-    asks = data.get("asks")
-
-    if not isinstance(bids, list) or not isinstance(asks, list):
-        raise BinanceDataValidationError(
-            "Order book bids or asks are missing."
-        )
-
-    try:
-        normalized_bids = [
-            [float(level[0]), float(level[1])]
-            for level in bids
-            if len(level) >= 2
-        ]
-
-        normalized_asks = [
-            [float(level[0]), float(level[1])]
-            for level in asks
-            if len(level) >= 2
-        ]
-
-    except (TypeError, ValueError, IndexError) as exc:
-        raise BinanceDataValidationError(
-            "Invalid order book price or quantity."
-        ) from exc
-
-    if not normalized_bids or not normalized_asks:
-        raise BinanceDataValidationError(
-            "Order book has empty bids or asks."
-        )
-
-    return {
-        "symbol": symbol,
-        "bids": normalized_bids,
-        "asks": normalized_asks,
-        "last_update_id": int(data.get("lastUpdateId", 0)),
-        "received_at": _utc_now_ms(),
-    }
-
-
-# --------------------------------------------------
-# MODULE CHECK
-# --------------------------------------------------
-
-if __name__ == "__main__":
-
-    logging.basicConfig(level=logging.INFO)
-
-    print("Binance Spot V3 Data Provider")
-    print("API:", BASE_URL)
-
-    try:
-        symbols = get_usdt_symbols()
-
-        print("Eligible Spot USDT pairs:", len(symbols))
-        print("Sample:", symbols[:10])
-
-        ticker = get_24h_ticker(symbols[:10])
-
-        print("Ticker records:", len(ticker))
-
-        if symbols:
-            sample_symbol = symbols[0]
-
-            candles = get_klines(
-                sample_symbol,
-                "5m",
-                limit=250,
-            )
-
-            print(
-                f"{sample_symbol} closed 5m candles:",
-                len(candles),
-            )
-
-    except BinanceDataError as error:
-        print("DATA PROVIDER ERROR:", error)
+def _normalize_order_book_side(levels, side_name):
+    if not isinstance(levels, list):
+        ra

@@ -333,7 +333,10 @@ API_CONFIG = {
         "30m": 3600,
         "1h": 7200,
         "4h": 14400,
-        "TICKER_24H": 120,
+        max_age = _get_freshness_seconds(
+    "TICKER_24H",
+    120,
+)
         "ORDER_BOOK": 10,
     },
 

@@ -94,8 +94,15 @@ def _env_bool(name: str, default: bool) -> bool:
 
 DRY_RUN = _env_bool("DRY_RUN", True)
 
-CAPITAL_USDT = float(
-    os.getenv("SCANNER_CAPITAL_USDT", "0")
+CAPITAL_USDT_RAW = os.getenv(
+    "SCANNER_CAPITAL_USDT",
+    "0"
+).strip()
+
+CAPITAL_USDT = (
+    float(CAPITAL_USDT_RAW)
+    if CAPITAL_USDT_RAW
+    else 0.0
 )
 
 MAX_ORDERBOOK_CANDIDATES = 30

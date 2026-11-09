@@ -697,7 +697,10 @@ def get_24h_ticker(symbols=None):
 
     Ticker freshness is checked using Binance closeTime.
     """
-
+max_age = _get_freshness_seconds(
+    "TICKER_24H",
+    120,
+)
     data = _request_json(TICKER_ENDPOINT)
 
     if isinstance(data, dict):

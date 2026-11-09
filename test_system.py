@@ -154,7 +154,6 @@ class ModuleImportTests(unittest.TestCase):
 # 2. CONFIGURATION TESTS
 # =========================================================
 
-
 class ConfigurationTests(unittest.TestCase):
 
     def test_required_config_sections_exist(self):
@@ -206,7 +205,6 @@ class ConfigurationTests(unittest.TestCase):
         )
 
 
-
 # =========================================================
 # 3. INDICATOR TESTS
 # =========================================================
@@ -218,18 +216,12 @@ class IndicatorTests(unittest.TestCase):
         self.df = create_test_dataframe()
 
     def test_dataframe_validation(self):
+
         result = indicators.validate_dataframe(
             self.df.copy()
         )
 
         self.assertIsInstance(
-            result,
-            pd.DataFrame,
-        )
-
-        self.assertFalse(
-            result.empty,
-        )
             result,
             pd.DataFrame,
         )

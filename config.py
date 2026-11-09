@@ -327,16 +327,15 @@ API_CONFIG = {
         "ORDER_BOOK": "/api/v3/depth",
     },
 
-    "DATA_FRESHNESS_SECONDS": {
-        "5m": 600,
-        "15m": 1800,
-        "30m": 3600,
-        "1h": 7200,
-        "4h": 14400,
-        max_age = _get_freshness_seconds(
-    "TICKER_24H",
-    120,
-)
+"DATA_FRESHNESS_SECONDS": {
+    "5m": 600,
+    "15m": 1800,
+    "30m": 3600,
+    "1h": 7200,
+    "4h": 14400,
+    "TICKER_24H": 120,
+    "ORDER_BOOK": 10,
+},
         "ORDER_BOOK": 10,
     },
 

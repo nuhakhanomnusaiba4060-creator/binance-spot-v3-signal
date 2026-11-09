@@ -386,13 +386,15 @@ def _get_breakout_data(df):
     """
     Required sequence:
 
-    - Previous pre-breakout candle closes at/below resistance.
-    - Breakout candle closes above resistance.
-    - NEXT separate candle retests resistance.
-    - Retest candle closes back above resistance.
+    1. Previous pre-breakout candle closes at/below resistance.
+    2. Breakout candle closes above resistance.
+    3. NEXT separate candle retests resistance.
+    4. Retest candle closes back above resistance.
 
-    The latest candle is the retest candle.
-    The previous candle is the breakout candle.
+    Latest candle = retest candle.
+    Previous candle = breakout candle.
+
+    Breakout is valid only when the separate retest succeeds.
     """
 
     if not isinstance(df, pd.DataFrame):
@@ -410,11 +412,19 @@ def _get_breakout_data(df):
         breakout_index - BREAKOUT_LOOKBACK
     )
 
+    if resistance_start < 0:
+        return {}
+
     resistance_data = df.iloc[
         resistance_start:breakout_index
     ]
 
     if len(resistance_data) != BREAKOUT_LOOKBACK:
+        return {}
+
+    required_columns = {"high", "low", "close"}
+
+    if not required_columns.issubset(df.columns):
         return {}
 
     resistance = _number(
@@ -453,13 +463,20 @@ def _get_breakout_data(df):
     if resistance <= 0:
         return {}
 
-    # Breakout must occur on a separate closed candle.
-    breakout = (
+    if RETEST_TOLERANCE_PCT < 0:
+        return {}
+
+    # Step 1: Previous candle must not already have broken resistance.
+    pre_breakout_valid = (
         pre_breakout_close <= resistance
-        and breakout_close > resistance
     )
 
-    # Retest must occur on the candle AFTER breakout.
+    # Step 2: Separate breakout candle must close above resistance.
+    breakout_candle_valid = (
+        breakout_close > resistance
+    )
+
+    # Step 3: Latest separate candle must retest the resistance zone.
     lower_boundary = (
         resistance
         * (1 - RETEST_TOLERANCE_PCT / 100)
@@ -470,14 +487,24 @@ def _get_breakout_data(df):
         * (1 + RETEST_TOLERANCE_PCT / 100)
     )
 
-    retest = (
-        breakout
+    retest_candle_valid = (
+        retest_low >= lower_boundary
         and retest_low <= upper_boundary
-        and retest_low >= lower_boundary
         and retest_close >= resistance
     )
 
-    above_resistance = retest_close > resistance
+    # Both conditions must be satisfied on separate candles.
+    breakout = (
+        pre_breakout_valid
+        and breakout_candle_valid
+        and retest_candle_valid
+    )
+
+    retest = breakout
+
+    above_resistance = (
+        retest_close > resistance
+    )
 
     distance_pct = (
         (retest_close - resistance)

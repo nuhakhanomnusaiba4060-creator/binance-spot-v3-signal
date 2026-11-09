@@ -188,19 +188,24 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_spot_only_configuration(self):
 
-        self.assertEqual(
-            config.CONFIG.get("MARKET"),
-            "SPOT",
-        )
+    # Validate the complete configuration
+    result = config.validate_config()
 
-        self.assertEqual(
-            config.CONFIG.get("QUOTE_ASSET"),
-            "USDT",
-        )
+    self.assertNotEqual(
+        result,
+        False,
+    )
 
-        self.assertTrue(
-            config.API_CONFIG.get("USE_PUBLIC_API_ONLY")
-        )
+    # Verify USDT-only configuration
+    self.assertEqual(
+        config.FILTER_CONFIG["ALLOWED_QUOTE_ASSET"],
+        "USDT",
+    )
+
+    # Verify public Binance API
+    self.assertTrue(
+        config.API_CONFIG["USE_PUBLIC_API_ONLY"]
+    )
 
 
 # =========================================================

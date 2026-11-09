@@ -3,7 +3,7 @@
 Binance Spot V3 Smart Signal Scanner
 Central Configuration Module
 
-Version: 3.0
+Version: 3.0.1
 Python: 3.11
 Market: Binance Spot Only
 Quote Asset: USDT Only
@@ -13,6 +13,7 @@ Backtesting and paper trading are required before optimization.
 """
 
 from copy import deepcopy
+import math
 
 
 # ============================================================
@@ -20,7 +21,7 @@ from copy import deepcopy
 # ============================================================
 
 CONFIG = {
-    "VERSION": "3.0",
+    "VERSION": "3.0.1",
     "EXCHANGE": "BINANCE",
     "MARKET_TYPE": "SPOT",
     "QUOTE_ASSET": "USDT",
@@ -37,6 +38,13 @@ CONFIG = {
 
     "SPOT_ONLY": True,
     "USDT_ONLY": True,
+
+    # DRY_RUN must remain enabled until final validation.
+    "DEFAULT_DRY_RUN": True,
+
+    # Simulation capital is for testing only.
+    # It is not real trading capital.
+    "SIMULATION_CAPITAL_USDT": 100.0,
 
     "ALLOWED_SIGNAL_TYPES": [
         "STRONG BUY",
@@ -120,7 +128,17 @@ STRATEGIES = {
     ],
 
     "PREFER_RETEST": True,
+
+    # Retest and breakout confirmation are mandatory.
+    "REQUIRE_BREAKOUT_CONFIRMATION": True,
+    "REQUIRE_RETEST": True,
+    "REQUIRE_BUYER_CONFIRMATION": True,
+
     "REJECT_LATE_ENTRY": True,
+
+    "MAX_ENTRY_EXTENSION_PERCENT": 3.0,
+    "RETEST_TOLERANCE_PERCENT": 0.5,
+    "BREAKOUT_LOOKBACK_CANDLES": 20,
 }
 
 
@@ -129,13 +147,25 @@ STRATEGIES = {
 # ============================================================
 
 RISK_CONFIG = {
+    # Canonical risk settings.
     "MAX_RISK_PER_TRADE_PERCENT": 1.0,
     "MIN_RISK_REWARD_RATIO": 2.0,
+
+    # Compatibility aliases for existing modules.
+    "MAX_RISK_PERCENT": 1.0,
+    "MIN_RISK_REWARD": 2.0,
 
     "POSITION_SIZING_METHOD": "STOP_LOSS_DISTANCE",
 
     "INCLUDE_TRADING_FEES": True,
     "INCLUDE_ESTIMATED_SLIPPAGE": True,
+
+    "FEE_RATE": 0.001,
+    "SLIPPAGE_RATE": 0.001,
+
+    "ATR_MULTIPLIER": 1.5,
+
+    "MAX_STOP_LOSS_DISTANCE_PERCENT": 8.0,
 
     "STOP_LOSS_METHOD": [
         "TECHNICAL_INVALIDATION",
@@ -163,11 +193,24 @@ FILTER_CONFIG = {
 
     # Initial thresholds: pending backtesting.
     "MIN_24H_QUOTE_VOLUME_USDT": 3_000_000,
+
+    # Compatibility aliases.
+    "MIN_QUOTE_VOLUME_USDT": 3_000_000,
+    "MIN_QUOTE_VOLUME": 3_000_000,
+
     "MIN_RELATIVE_VOLUME": 1.5,
     "PREFERRED_RELATIVE_VOLUME": 2.0,
 
     "MAX_SPREAD_PERCENT": 0.15,
+
     "MIN_24H_TRADE_COUNT": 1000,
+
+    # Compatibility aliases.
+    "MIN_24H_TRADES": 1000,
+    "MIN_TRADES": 1000,
+
+    "REQUIRE_ORDER_BOOK": True,
+    "MIN_ORDER_BOOK_DEPTH": 0,
 
     "RSI": {
         "PERIOD": 14,
@@ -264,6 +307,7 @@ INDICATOR_CONFIG = {
 
     "SUPPORT_RESISTANCE": {
         "METHOD": "RECENT_CONFIRMED_SWING_LEVELS",
+        "PIVOT_LOOKBACK": 5,
     },
 
     "MIN_REQUIRED_CANDLES": 220,
@@ -306,9 +350,12 @@ MARKET_CONFIG = {
 
     "REJECT_NEW_SIGNALS_ON": [
         "HIGH_RISK",
+        "UNKNOWN",
     ],
 
     "ALLOW_SELECTIVE_SIGNALS_ON_BEARISH": True,
+
+    "REQUIRE_COMPLETE_BTC_DATA": True,
 }
 
 
@@ -368,11 +415,13 @@ TRACKING_CONFIG = {
 
     "DUPLICATE_PREVENTION": True,
 
-    # Initial value: pending backtesting.
     "COOLDOWN_HOURS": 6,
 
     "SIGNAL_EXPIRY": True,
     "PERFORMANCE_TRACKING": True,
+
+    "TRACK_PARTIAL_EXITS": True,
+    "TRACK_REALIZED_PNL": True,
 
     "TRACK_FIELDS": [
         "SIGNAL_TIMESTAMP",
@@ -388,6 +437,8 @@ TRACKING_CONFIG = {
         "STOP_LOSS_REACHED",
         "EXPIRED_STATUS",
         "FINAL_RESULT",
+        "REALIZED_PNL",
+        "PARTIAL_EXIT_HISTORY",
     ],
 
     "EXPIRED_BEFORE_ENTRY_COUNTS_AS_TRADE": False,
@@ -408,11 +459,14 @@ API_CONFIG = {
         "ORDER_BOOK": "/api/v3/depth",
     },
 
+    # Maximum permitted age of the latest closed candle.
+    # These are provisional safety limits.
     "DATA_FRESHNESS_SECONDS": {
-        "5m": None,
-        "15m": None,
-        "30m": None,
-        "1h": None,
+        "5m": 600,
+        "15m": 1800,
+        "30m": 3600,
+        "1h": 7200,
+        "4h": 14400,
         "TICKER_24H": 120,
         "ORDER_BOOK": 10,
     },
@@ -440,6 +494,10 @@ TELEGRAM_CONFIG = {
     "REQUIRE_BOTH_CREDENTIALS": True,
 
     "TEST_MESSAGE_SEPARATE_FROM_SIGNALS": True,
+
+    "MAX_MESSAGE_LENGTH": 4000,
+    "REQUEST_TIMEOUT_SECONDS": 15,
+    "MAX_RETRIES": 2,
 
     "REQUIRED_SIGNAL_FIELDS": [
         "SYMBOL",
@@ -470,6 +528,11 @@ WORKFLOW_CONFIG = {
     "MANUAL_TESTING": True,
     "RUN_AUTOMATED_TESTS_BEFORE_SIGNALS": True,
     "CREDENTIAL_STORAGE": "GITHUB_SECRETS",
+
+    "DEFAULT_DRY_RUN": True,
+    "ALLOW_LIVE_WITHOUT_TESTS": False,
+
+    "USE_CONCURRENCY_CONTROL": True,
 }
 
 
@@ -508,26 +571,196 @@ def get_config():
     }
 
 
+# ============================================================
+# 14. CONFIGURATION VALIDATION
+# ============================================================
+
 def validate_config():
     """
     Validate critical configuration relationships.
     Raises ValueError if any mandatory rule is violated.
     """
 
+    # --------------------------------------------------------
+    # Core settings
+    # --------------------------------------------------------
+
     if CONFIG["MARKET_TYPE"] != "SPOT":
         raise ValueError("Only Binance Spot market is allowed.")
+
+    if CONFIG["SPOT_ONLY"] is not True:
+        raise ValueError("SPOT_ONLY must be True.")
 
     if CONFIG["QUOTE_ASSET"] != "USDT":
         raise ValueError("Only USDT quote pairs are allowed.")
 
+    if CONFIG["USDT_ONLY"] is not True:
+        raise ValueError("USDT_ONLY must be True.")
+
     if CONFIG["SCAN_INTERVAL_SECONDS"] != 300:
         raise ValueError("Scan interval must be 5 minutes.")
 
-    if RISK_CONFIG["MAX_RISK_PER_TRADE_PERCENT"] > 1.0:
-        raise ValueError("Risk per trade cannot exceed 1%.")
+    if CONFIG["MAX_TRADE_DURATION_HOURS"] != 48:
+        raise ValueError("Maximum trade duration must be 48 hours.")
 
-    if RISK_CONFIG["MIN_RISK_REWARD_RATIO"] < 2.0:
+    if CONFIG["DEFAULT_DRY_RUN"] is not True:
+        raise ValueError("Default DRY_RUN must remain enabled.")
+
+    if CONFIG["SIMULATION_CAPITAL_USDT"] <= 0:
+        raise ValueError("Simulation capital must be positive.")
+
+    # --------------------------------------------------------
+    # Timeframe consistency
+    # --------------------------------------------------------
+
+    if TIMEFRAMES["SCALP"]["TRIGGER"] != "5m":
+        raise ValueError("Scalp trigger timeframe must be 5m.")
+
+    if TIMEFRAMES["SCALP"]["CONFIRMATION"] != "15m":
+        raise ValueError("Scalp confirmation timeframe must be 15m.")
+
+    if TIMEFRAMES["SCALP"]["ADDITIONAL_CONFIRMATION"] != "30m":
+        raise ValueError("Scalp additional confirmation must be 30m.")
+
+    if TIMEFRAMES["SWING"]["TRIGGER"] != "15m":
+        raise ValueError("Swing trigger timeframe must be 15m.")
+
+    if TIMEFRAMES["SWING"]["CONFIRMATION"] != "30m":
+        raise ValueError("Swing confirmation timeframe must be 30m.")
+
+    if TIMEFRAMES["SWING"]["TREND_CONFIRMATION"] != "1h":
+        raise ValueError("Swing trend confirmation must be 1h.")
+
+    if TIMEFRAMES["REQUIRE_CLOSED_CANDLES"] is not True:
+        raise ValueError("Closed candles must be required.")
+
+    # --------------------------------------------------------
+    # Strategy settings
+    # --------------------------------------------------------
+
+    if STRATEGIES["REQUIRE_BREAKOUT_CONFIRMATION"] is not True:
+        raise ValueError("Breakout confirmation must be mandatory.")
+
+    if STRATEGIES["REQUIRE_RETEST"] is not True:
+        raise ValueError("Retest must be mandatory.")
+
+    if STRATEGIES["REQUIRE_BUYER_CONFIRMATION"] is not True:
+        raise ValueError("Buyer confirmation must be mandatory.")
+
+    if STRATEGIES["REJECT_LATE_ENTRY"] is not True:
+        raise ValueError("Late entry rejection must be enabled.")
+
+    if STRATEGIES["ENTRY_SEQUENCE"] != [
+        "BREAKOUT",
+        "CANDLE_CLOSE",
+        "RETEST",
+        "BUYER_CONFIRMATION",
+        "ENTRY",
+    ]:
+        raise ValueError("Entry sequence configuration mismatch.")
+
+    # --------------------------------------------------------
+    # Risk settings
+    # --------------------------------------------------------
+
+    max_risk = RISK_CONFIG["MAX_RISK_PER_TRADE_PERCENT"]
+    min_rr = RISK_CONFIG["MIN_RISK_REWARD_RATIO"]
+
+    if not 0 < max_risk <= 1.0:
+        raise ValueError("Risk per trade must be above 0 and at most 1%.")
+
+    if min_rr < 2.0:
         raise ValueError("Minimum risk/reward must be at least 1:2.")
+
+    if RISK_CONFIG["MAX_RISK_PERCENT"] != max_risk:
+        raise ValueError("Risk compatibility alias mismatch.")
+
+    if RISK_CONFIG["MIN_RISK_REWARD"] != min_rr:
+        raise ValueError("Risk/reward compatibility alias mismatch.")
+
+    for key in ("FEE_RATE", "SLIPPAGE_RATE"):
+        value = RISK_CONFIG[key]
+
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"{key} must be finite and non-negative.")
+
+    if RISK_CONFIG["ATR_MULTIPLIER"] <= 0:
+        raise ValueError("ATR multiplier must be positive.")
+
+    # --------------------------------------------------------
+    # Filter settings
+    # --------------------------------------------------------
+
+    if FILTER_CONFIG["ALLOWED_QUOTE_ASSET"] != "USDT":
+        raise ValueError("Only USDT quote assets are allowed.")
+
+    if FILTER_CONFIG["MIN_24H_QUOTE_VOLUME_USDT"] <= 0:
+        raise ValueError("Minimum quote volume must be positive.")
+
+    if FILTER_CONFIG["MIN_24H_TRADE_COUNT"] <= 0:
+        raise ValueError("Minimum trade count must be positive.")
+
+    if FILTER_CONFIG["MAX_SPREAD_PERCENT"] <= 0:
+        raise ValueError("Maximum spread must be positive.")
+
+    if FILTER_CONFIG["MIN_RELATIVE_VOLUME"] <= 0:
+        raise ValueError("Minimum relative volume must be positive.")
+
+    if FILTER_CONFIG["MIN_ORDER_BOOK_DEPTH"] < 0:
+        raise ValueError("Minimum order book depth cannot be negative.")
+
+    rsi = FILTER_CONFIG["RSI"]
+
+    if not (
+        0 < rsi["WEAK_BELOW"]
+        <= rsi["PREFERRED_MIN"]
+        < rsi["PREFERRED_MAX"]
+        < rsi["REJECT_ABOVE"]
+        <= 100
+    ):
+        raise ValueError("Invalid RSI threshold ordering.")
+
+    # --------------------------------------------------------
+    # Indicator settings
+    # --------------------------------------------------------
+
+    ema = INDICATOR_CONFIG["EMA"]
+    macd = INDICATOR_CONFIG["MACD"]
+
+    if ema["FAST"] <= 0 or ema["SLOW"] <= ema["FAST"]:
+        raise ValueError("Invalid EMA periods.")
+
+    if macd["FAST"] <= 0 or macd["SLOW"] <= macd["FAST"]:
+        raise ValueError("Invalid MACD periods.")
+
+    if macd["SIGNAL"] <= 0:
+        raise ValueError("Invalid MACD signal period.")
+
+    if INDICATOR_CONFIG["MIN_REQUIRED_CANDLES"] < 220:
+        raise ValueError("Minimum candle history must be at least 220.")
+
+    if INDICATOR_CONFIG["RELATIVE_VOLUME"]["BASELINE_CANDLES"] <= 0:
+        raise ValueError("Relative volume baseline must be positive.")
+
+    # --------------------------------------------------------
+    # Market filter
+    # --------------------------------------------------------
+
+    if MARKET_CONFIG["BTC_SYMBOL"] != "BTCUSDT":
+        raise ValueError("BTC market symbol must be BTCUSDT.")
+
+    if MARKET_CONFIG["UNKNOWN_DATA_POLICY"] != "CONSERVATIVE":
+        raise ValueError("Unknown data policy must be conservative.")
+
+    if "HIGH_RISK" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
+        raise ValueError("HIGH_RISK must reject new signals.")
+
+    if "UNKNOWN" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
+        raise ValueError("UNKNOWN market must reject new signals.")
+
+    # --------------------------------------------------------
+    # Signal scoring
+    # --------------------------------------------------------
 
     if SIGNAL_CONFIG["MAX_SCORE"] != len(
         SIGNAL_CONFIG["SCORE_COMPONENTS"]
@@ -537,16 +770,19 @@ def validate_config():
     if SIGNAL_CONFIG["MIN_SCORE"] != 9:
         raise ValueError("Minimum signal score must be 9.")
 
-    if TRACKING_CONFIG["MAX_TRACKING_HOURS"] != 48:
-        raise ValueError("Signal tracking must be 48 hours.")
+    if not (
+        0 <= SIGNAL_CONFIG["REJECT_MAX_SCORE"]
+        < SIGNAL_CONFIG["MIN_SCORE"]
+        <= SIGNAL_CONFIG["MAX_SCORE"]
+    ):
+        raise ValueError("Invalid signal score boundaries.")
 
-    if INDICATOR_CONFIG["MIN_REQUIRED_CANDLES"] < 220:
-        raise ValueError("Minimum candle history must be at least 220.")
+    if (
+        SIGNAL_CONFIG["STRONG_BUY_MIN_SCORE"]
+        > SIGNAL_CONFIG["STRONG_BUY_MAX_SCORE"]
+    ):
+        raise ValueError("Invalid STRONG BUY score range.")
 
-    if API_CONFIG["USE_PUBLIC_API_ONLY"] is not True:
-        raise ValueError("Public API mode is required.")
-
-    if FILTER_CONFIG["ALLOWED_QUOTE_ASSET"] != "USDT":
-        raise ValueError("Only USDT quote assets are allowed.")
-
-    return True
+    if (
+        SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"]
+        

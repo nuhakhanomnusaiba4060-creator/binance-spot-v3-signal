@@ -217,13 +217,20 @@ class IndicatorTests(unittest.TestCase):
 
         self.df = create_test_dataframe()
 
-    def test_dataframe_validation(self):
+        def test_dataframe_validation(self):
 
         result = indicators.validate_dataframe(
             self.df.copy()
         )
 
-        self.assertTrue(result)
+        self.assertIsInstance(
+            result,
+            pd.DataFrame,
+        )
+
+        self.assertFalse(
+            result.empty,
+        )
 
     def test_indicator_calculation(self):
 

@@ -154,6 +154,7 @@ class ModuleImportTests(unittest.TestCase):
 # 2. CONFIGURATION TESTS
 # =========================================================
 
+
 class ConfigurationTests(unittest.TestCase):
 
     def test_required_config_sections_exist(self):
@@ -204,10 +205,6 @@ class ConfigurationTests(unittest.TestCase):
             config.API_CONFIG["USE_PUBLIC_API_ONLY"]
         )
 
-    
-    self.assertTrue(
-        config.API_CONFIG["USE_PUBLIC_API_ONLY"]
-    )
 
 
 # =========================================================

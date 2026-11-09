@@ -692,6 +692,89 @@ class ScannerTests(unittest.TestCase):
 # TEST RUNNER
 # =========================================================
 
+class EntryEngineBreakoutRetestTests(unittest.TestCase):
+
+    def make_breakout_dataframe(self, retest_low=100.80):
+        rows = []
+
+        # 23টি পূর্ববর্তী স্থিতিশীল ক্যান্ডেল
+        for _ in range(23):
+            rows.append({
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.5,
+                "close": 100.0,
+                "volume": 1000.0,
+            })
+
+        # Breakout candle
+        rows.append({
+            "open": 100.0,
+            "high": 103.0,
+            "low": 100.0,
+            "close": 102.5,
+            "volume": 2500.0,
+        })
+
+        # পরবর্তী আলাদা Retest candle
+        rows.append({
+            "open": 101.0,
+            "high": 102.0,
+            "low": retest_low,
+            "close": 101.5,
+            "volume": 1800.0,
+        })
+
+        return pd.DataFrame(rows)
+
+    def test_separate_candle_breakout_and_retest(self):
+        df = self.make_breakout_dataframe()
+
+        result = entry_engine._get_breakout_data(df)
+
+        self.assertTrue(result.get("breakout"))
+        self.assertTrue(result.get("retest"))
+        self.assertTrue(result.get("above_resistance"))
+
+    def test_failed_retest_is_rejected(self):
+        df = self.make_breakout_dataframe(retest_low=99.0)
+
+        result = entry_engine._get_breakout_data(df)
+
+        self.assertFalse(result.get("retest", False))
+
+    def test_breakout_without_separate_retest_is_rejected(self):
+        df = self.make_breakout_dataframe()
+
+        # শেষ ক্যান্ডেলেও breakout, কিন্তু তার আগে breakout candle নেই
+        df.loc[df.index[-1], "open"] = 100.0
+        df.loc[df.index[-1], "high"] = 103.0
+        df.loc[df.index[-1], "low"] = 100.0
+        df.loc[df.index[-1], "close"] = 102.5
+
+        result = entry_engine._get_breakout_data(df)
+
+        self.assertFalse(result.get("breakout", False))
+        self.assertFalse(result.get("retest", False))
+
+    def test_unknown_market_context_is_rejected(self):
+        result = entry_engine._validate_market_context({
+            "market_status": "UNKNOWN",
+            "btc_trend": "UNKNOWN",
+            "risk_level": "UNKNOWN",
+        })
+
+        self.assertFalse(result[0])
+
+    def test_high_risk_market_is_rejected(self):
+        result = entry_engine._validate_market_context({
+            "market_status": "HIGH_RISK",
+            "btc_trend": "BEARISH",
+            "risk_level": "HIGH",
+        })
+
+        self.assertFalse(result[0])
+        
 if __name__ == "__main__":
 
     print("=" * 60)

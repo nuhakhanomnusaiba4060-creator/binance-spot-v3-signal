@@ -783,6 +783,26 @@ def validate_config():
     ):
         raise ValueError("Invalid STRONG BUY score range.")
 
+        if (
+        SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"]
+        > SIGNAL_CONFIG["EXCELLENT_BUY_MAX_SCORE"]
+    ):
+        raise ValueError("Invalid EXCELLENT BUY score range.")
+
     if (
+        SIGNAL_CONFIG["STRONG_BUY_MIN_SCORE"]
+        < SIGNAL_CONFIG["MIN_SCORE"]
+        or SIGNAL_CONFIG["STRONG_BUY_MAX_SCORE"]
+        > SIGNAL_CONFIG["MAX_SCORE"]
+    ):
+        raise ValueError("STRONG BUY score range is outside valid boundaries.")
+
+    if (
+        SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"]
+        < SIGNAL_CONFIG["MIN_SCORE"]
+        or SIGNAL_CONFIG["EXCELLENT_BUY_MAX_SCORE"]
+        > SIGNAL_CONFIG["MAX_SCORE"]
+    ):
+        raise ValueError("EXCELLENT BUY score range is outside valid boundaries.")
         SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"]
         

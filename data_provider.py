@@ -835,5 +835,161 @@ def get_24h_ticker(symbols=None):
 # ==================================================
 
 def _normalize_order_book_side(levels, side_name):
+    """
+    Validate and normalize Binance order-book levels.
+
+    Each level must contain:
+        [price, quantity]
+    """
+
     if not isinstance(levels, list):
-        ra
+        raise BinanceDataValidationError(
+            f"Invalid {side_name}: expected a list."
+        )
+
+    if not levels:
+        raise BinanceDataValidationError(
+            f"Empty {side_name}."
+        )
+
+    normalized = []
+
+    for index, level in enumerate(levels):
+
+        if not isinstance(level, (list, tuple)):
+            raise BinanceDataValidationError(
+                f"Invalid {side_name} level at index {index}."
+            )
+
+        if len(level) != 2:
+            raise BinanceDataValidationError(
+                f"Malformed {side_name} level at index {index}."
+            )
+
+        price = _safe_float(
+            level[0],
+            f"{side_name}_price",
+        )
+
+        quantity = _safe_float(
+            level[1],
+            f"{side_name}_quantity",
+        )
+
+        if price <= 0 or quantity <= 0:
+            raise BinanceDataValidationError(
+                f"Non-positive {side_name} price or quantity."
+            )
+
+        normalized.append([price, quantity])
+
+    if side_name == "bids":
+        normalized.sort(
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+    elif side_name == "asks":
+        normalized.sort(
+            key=lambda item: item[0],
+        )
+
+    return normalized
+
+
+def get_order_book(symbol, limit=100):
+    """
+    Fetch and validate Binance Spot order-book data.
+
+    Returns:
+        {
+            "last_update_id": int,
+            "bids": [[price, quantity], ...],
+            "asks": [[price, quantity], ...]
+        }
+
+    Public Spot API only. No API key required.
+    """
+
+    symbol = str(symbol).upper().strip()
+
+    if not _is_valid_usdt_symbol(symbol):
+        raise BinanceDataValidationError(
+            f"Invalid order-book symbol: {symbol}"
+        )
+
+    valid_limits = {
+        5, 10, 20, 50, 100,
+        500, 1000, 5000,
+    }
+
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit not in valid_limits
+    ):
+        raise BinanceDataValidationError(
+            "Invalid order-book limit."
+        )
+
+    data = _request_json(
+        ORDER_BOOK_ENDPOINT,
+        params={
+            "symbol": symbol,
+            "limit": limit,
+        },
+    )
+
+    if not isinstance(data, dict):
+        raise BinanceDataValidationError(
+            "Invalid Binance order-book response."
+        )
+
+    if "lastUpdateId" not in data:
+        raise BinanceDataValidationError(
+            "Order book is missing lastUpdateId."
+        )
+
+    last_update_id = _safe_int(
+        data["lastUpdateId"],
+        "lastUpdateId",
+    )
+
+    if last_update_id < 0:
+        raise BinanceDataValidationError(
+            "Invalid order-book update ID."
+        )
+
+    bids = _normalize_order_book_side(
+        data.get("bids"),
+        "bids",
+    )
+
+    asks = _normalize_order_book_side(
+        data.get("asks"),
+        "asks",
+    )
+
+    if len(bids) > limit or len(asks) > limit:
+        raise BinanceDataValidationError(
+            "Order-book response exceeds requested limit."
+        )
+
+    best_bid = bids[0][0]
+    best_ask = asks[0][0]
+
+    if best_bid <= 0 or best_ask <= 0:
+        raise BinanceDataValidationError(
+            "Invalid best bid or ask."
+        )
+
+    if best_ask <= best_bid:
+        raise BinanceDataValidationError(
+            "Crossed or invalid order book."
+        )
+
+    return {
+        "last_update_id": last_update_id,
+        "bids": bids,
+        "asks": asks,
+    }

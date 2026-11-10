@@ -691,16 +691,19 @@ def get_klines(symbol, interval, limit=300):
 # 10. 24-HOUR TICKER
 # ==================================================
 
+
 def get_24h_ticker(symbols=None):
     """
     Return validated 24-hour ticker records.
 
     Ticker freshness is checked using Binance closeTime.
     """
-max_age = _get_freshness_seconds(
-    "TICKER_24H",
-    120,
-)
+
+    max_age = _get_freshness_seconds(
+        "TICKER_24H",
+        120,
+    )
+
     data = _request_json(TICKER_ENDPOINT)
 
     if isinstance(data, dict):
@@ -719,6 +722,113 @@ max_age = _get_freshness_seconds(
             for symbol in symbols
             if _is_valid_usdt_symbol(str(symbol))
         }
+
+    result = {}
+    now_ms = _utc_now_ms()
+
+    for item in data:
+
+        if not isinstance(item, dict):
+            continue
+
+        symbol = str(item.get("symbol", "")).upper()
+
+        if not _is_valid_usdt_symbol(symbol):
+            continue
+
+        if requested is not None and symbol not in requested:
+            continue
+
+        try:
+            record = {
+                "symbol": symbol,
+                "last_price": _safe_float(
+                    item["lastPrice"], "lastPrice"
+                ),
+                "price_change_percent": _safe_float(
+                    item["priceChangePercent"],
+                    "priceChangePercent",
+                ),
+                "quote_volume": _safe_float(
+                    item["quoteVolume"], "quoteVolume"
+                ),
+                "volume": _safe_float(
+                    item["volume"], "volume"
+                ),
+                "trade_count": _safe_int(
+                    item["count"], "count"
+                ),
+                "high_price": _safe_float(
+                    item["highPrice"], "highPrice"
+                ),
+                "low_price": _safe_float(
+                    item["lowPrice"], "lowPrice"
+                ),
+                "weighted_avg_price": _safe_float(
+                    item["weightedAvgPrice"],
+                    "weightedAvgPrice",
+                ),
+                "open_price": _safe_float(
+                    item["openPrice"], "openPrice"
+                ),
+                "open_time": _safe_int(
+                    item["openTime"], "openTime"
+                ),
+                "close_time": _safe_int(
+                    item["closeTime"], "closeTime"
+                ),
+            }
+
+            if record["last_price"] <= 0:
+                continue
+
+            if record["open_price"] <= 0:
+                continue
+
+            if record["weighted_avg_price"] <= 0:
+                continue
+
+            if record["low_price"] <= 0:
+                continue
+
+            if record["high_price"] < record["low_price"]:
+                continue
+
+            if record["volume"] < 0:
+                continue
+
+            if record["quote_volume"] < 0:
+                continue
+
+            if record["trade_count"] < 0:
+                continue
+
+            age_seconds = (
+                now_ms - record["close_time"]
+            ) / 1000
+
+            if age_seconds < 0 or age_seconds > max_age:
+                logger.warning(
+                    "Skipping stale ticker for %s",
+                    symbol,
+                )
+                continue
+
+            result[symbol] = record
+
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            BinanceDataValidationError,
+        ):
+            logger.warning(
+                "Skipping invalid ticker data for %s",
+                symbol,
+            )
+
+    return result
+
 
     result = {}
 

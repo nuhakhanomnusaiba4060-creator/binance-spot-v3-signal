@@ -1030,30 +1030,19 @@ def run_scanner() -> dict:
         # 1. MARKET FILTER
         # -------------------------------------------------
 
-        market_context = fetch_market_context()
+    market_status = market_context.get("market_status")
 
-        report["market_status"] = market_context.get(
-            "market_status",
-            "UNKNOWN",
-        )
+if market_status == "UNKNOWN":
+    logger.warning(
+        "Market filter rejected scanning: UNKNOWN"
+    )
+    return report
 
-        report["btc_trend"] = market_context.get(
-            "btc_trend",
-            "UNKNOWN",
-        )
-
-        if report["market_status"] in (
-            "HIGH_RISK",
-            "UNKNOWN",
-        ):
-
-            logger.warning(
-                "Market filter rejected scanning: %s",
-                report["market_status"],
-            )
-
-            return report
-
+if market_status == "HIGH_RISK":
+    logger.warning(
+        "BTC HIGH_RISK: Continuing candidate scan "
+        "with strict entry and risk validation."
+    )
         # -------------------------------------------------
         # 2. COIN SELECTION
         # -------------------------------------------------

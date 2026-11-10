@@ -1002,6 +1002,7 @@ def evaluate_candidate(
 # MAIN SCANNER
 # =========================================================
 
+
 def run_scanner() -> dict:
 
     started_at = datetime.now(timezone.utc)
@@ -1025,6 +1026,137 @@ def run_scanner() -> dict:
     try:
 
         validate_scanner_configuration()
+
+        # 1. BTC MARKET ANALYSIS
+
+        market_context = fetch_market_context()
+
+        report["market_status"] = market_context.get(
+            "market_status",
+            "UNKNOWN",
+        )
+
+        report["btc_trend"] = market_context.get(
+            "btc_trend",
+            "UNKNOWN",
+        )
+
+        market_status = report["market_status"]
+
+        if market_status == "UNKNOWN":
+
+            logger.warning(
+                "Market filter rejected scanning: UNKNOWN"
+            )
+
+            return report
+
+        if market_status == "HIGH_RISK":
+
+            logger.warning(
+                "BTC HIGH_RISK: Continuing candidate scan "
+                "with strict entry and risk validation."
+            )
+
+        # 2. COIN SELECTION
+
+        candidates = collect_candidates()
+
+        report["candidates_selected"] = len(candidates)
+
+        if not candidates:
+
+            logger.info(
+                "No eligible candidates found."
+            )
+
+            return report
+
+        # 3. TRACK EXISTING SIGNALS
+
+        ticker_data = get_24h_ticker()
+
+        if not isinstance(ticker_data, dict):
+            ticker_data = {}
+
+        if not DRY_RUN:
+
+            update_existing_signals(
+                ticker_data
+            )
+
+        history = load_history()
+
+        if not isinstance(history, dict):
+            history = {}
+
+        # 4. ENTRY + RISK VALIDATION
+
+        signals = []
+
+        for candidate in candidates:
+
+            if len(signals) >= MAX_SIGNALS_PER_RUN:
+                break
+
+            report["symbols_scanned"] += 1
+
+            candidate_signals = evaluate_candidate(
+                candidate,
+                market_context,
+            )
+
+            for signal in candidate_signals:
+
+                if len(signals) >= MAX_SIGNALS_PER_RUN:
+                    break
+
+                signals.append(signal)
+
+        report["signals_generated"] = len(signals)
+
+        # 5. TELEGRAM DELIVERY
+
+        for signal in signals:
+
+            sent = deliver_signal(
+                signal,
+                history,
+            )
+
+            if sent:
+                report["signals_sent"] += 1
+
+        return report
+
+    except Exception as exc:
+
+        logger.exception(
+            "Scanner execution failed."
+        )
+
+        report["errors"].append(
+            str(exc)
+        )
+
+        return report
+
+    finally:
+
+        finished_at = datetime.now(timezone.utc)
+
+        report["finished_at"] = (
+            finished_at.isoformat()
+        )
+
+        logger.info(
+            "Scanner finished | Candidates: %s | "
+            "Signals: %s | Sent: %s | Errors: %s",
+            report["candidates_selected"],
+            report["signals_generated"],
+            report["signals_sent"],
+            len(report["errors"]),
+        )
 
         # -------------------------------------------------
         # 1. MARKET FILTER

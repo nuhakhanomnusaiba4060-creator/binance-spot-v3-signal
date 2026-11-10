@@ -317,6 +317,7 @@ TRACKING_CONFIG = {
 # 10. API CONFIGURATION
 # ============================================================
 
+
 API_CONFIG = {
     "BASE_URL": "https://data-api.binance.vision",
 
@@ -327,15 +328,13 @@ API_CONFIG = {
         "ORDER_BOOK": "/api/v3/depth",
     },
 
-"DATA_FRESHNESS_SECONDS": {
-    "5m": 600,
-    "15m": 1800,
-    "30m": 3600,
-    "1h": 7200,
-    "4h": 14400,
-    "TICKER_24H": 120,
-    "ORDER_BOOK": 10,
-},
+    "DATA_FRESHNESS_SECONDS": {
+        "5m": 600,
+        "15m": 1800,
+        "30m": 3600,
+        "1h": 7200,
+        "4h": 14400,
+        "TICKER_24H": 120,
         "ORDER_BOOK": 10,
     },
 
@@ -346,7 +345,6 @@ API_CONFIG = {
     "USE_PUBLIC_API_ONLY": True,
     "MISSING_DATA_POLICY": "REJECT_OR_MARK_UNKNOWN",
 }
-
 
 # ============================================================
 # 11. TELEGRAM CONFIGURATION

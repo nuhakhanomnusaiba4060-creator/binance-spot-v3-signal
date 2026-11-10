@@ -1025,9 +1025,11 @@ def run_scanner() -> dict:
 
     try:
 
+        # 1. CONFIGURATION VALIDATION
+
         validate_scanner_configuration()
 
-        # 1. BTC MARKET ANALYSIS
+        # 2. BTC MARKET ANALYSIS
 
         market_context = fetch_market_context()
 
@@ -1058,7 +1060,7 @@ def run_scanner() -> dict:
                 "with strict entry and risk validation."
             )
 
-        # 2. COIN SELECTION
+        # 3. COIN SELECTION
 
         candidates = collect_candidates()
 
@@ -1072,7 +1074,7 @@ def run_scanner() -> dict:
 
             return report
 
-        # 3. TRACK EXISTING SIGNALS
+        # 4. TRACK EXISTING SIGNALS
 
         ticker_data = get_24h_ticker()
 
@@ -1090,7 +1092,7 @@ def run_scanner() -> dict:
         if not isinstance(history, dict):
             history = {}
 
-        # 4. ENTRY + RISK VALIDATION
+        # 5. ENTRY + RISK VALIDATION
 
         signals = []
 
@@ -1115,7 +1117,7 @@ def run_scanner() -> dict:
 
         report["signals_generated"] = len(signals)
 
-        # 5. TELEGRAM DELIVERY
+        # 6. TELEGRAM DELIVERY
 
         for signal in signals:
 
@@ -1157,6 +1159,8 @@ def run_scanner() -> dict:
             report["signals_sent"],
             len(report["errors"]),
         )
+
+  
 
         # -------------------------------------------------
         # 1. MARKET FILTER

@@ -539,8 +539,8 @@ def _buyer_confirmation(snapshot):
 # MARKET CONTEXT
 # =========================================================
 
-def _validate_market_context(market_context):
 
+def _validate_market_context(market_context):
     if not isinstance(market_context, dict):
         return False, "MISSING_MARKET_CONTEXT"
 
@@ -556,18 +556,10 @@ def _validate_market_context(market_context):
         market_context.get("btc_trend", "UNKNOWN")
     ).upper()
 
-    if market_status not in (
-        "BULLISH",
-        "NEUTRAL",
-        "BEARISH",
-    ):
+    if market_status not in ("BULLISH", "NEUTRAL", "BEARISH"):
         return False, "INVALID_MARKET_STATUS"
 
-    if btc_trend not in (
-        "BULLISH",
-        "NEUTRAL",
-        "BEARISH",
-    ):
+    if btc_trend not in ("BULLISH", "NEUTRAL", "BEARISH"):
         return False, "INVALID_BTC_TREND"
 
     if market_context.get("data_quality") != "VALID":
@@ -577,10 +569,7 @@ def _validate_market_context(market_context):
         return False, "MARKET_RISK_" + risk_level
 
     if risk_level == "HIGH":
-        if market_status != "BEARISH":
-            return False, "MARKET_RISK_HIGH"
-
-        if btc_trend != "BEARISH":
+        if market_status != "BEARISH" or btc_trend != "BEARISH":
             return False, "MARKET_RISK_HIGH"
 
     signal_policy = market_context.get("signal_policy")
@@ -593,22 +582,23 @@ def _validate_market_context(market_context):
 
     expected_caution = market_status in ("BEARISH", "NEUTRAL")
 
-    if market_context.get("market_caution") is not expected_caution:
+    if signal_policy.get("market_caution") is not expected_caution:
         return False, "MARKET_CAUTION_MISMATCH"
 
     return True, None
-
+    
 
 # =========================================================
 # SCORING ENGINE
 # =========================================================
 
-def score_setup(setup_data):
 
+def score_setup(setup_data):
     if not isinstance(setup_data, dict):
         return {
             "score": 0,
             "max_score": MAX_SCORE,
+            "required_score": MIN_SCORE,
             "classification": "REJECT",
             "components": {},
         }
@@ -619,11 +609,9 @@ def score_setup(setup_data):
         components = {}
 
     score = sum(
-        1
-        for value in components.values()
+        1 for value in components.values()
         if value is True
     )
-
     score = min(score, MAX_SCORE)
 
     btc_trend = str(
@@ -636,10 +624,8 @@ def score_setup(setup_data):
 
     required_score = MIN_SCORE
 
-    if btc_trend == "BEARISH":
-        required_score += 1
-
-    if market_status == "BEARISH":
+    # BTC এবং Market দুটো Bearish হলেও অতিরিক্ত ১ পয়েন্টই যোগ হবে।
+    if btc_trend == "BEARISH" or market_status == "BEARISH":
         required_score += 1
 
     if (
@@ -647,10 +633,8 @@ def score_setup(setup_data):
         and score >= required_score
     ):
         classification = "EXCELLENT BUY"
-
     elif score >= max(STRONG_MIN_SCORE, required_score):
         classification = "STRONG BUY"
-
     else:
         classification = "REJECT"
 
@@ -661,8 +645,7 @@ def score_setup(setup_data):
         "classification": classification,
         "components": components,
     }
-
-
+    
 # =========================================================
 # ENTRY VALIDATION
 # =========================================================

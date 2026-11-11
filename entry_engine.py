@@ -175,7 +175,9 @@ def _prepare_dataframe(df):
         "volume",
     )
 
-    if len(df) < max(30, BREAKOUT_LOOKBACK + 2):
+    minimum = max(30, BREAKOUT_LOOKBACK + 2)
+
+    if len(df) < minimum:
         return None
 
     if any(column not in df.columns for column in required):
@@ -189,20 +191,14 @@ def _prepare_dataframe(df):
             errors="coerce",
         )
 
-    result = result.dropna(
-        subset=list(required)
-    )
+    result = result.dropna(subset=list(required))
 
-    if len(result) < max(30, BREAKOUT_LOOKBACK + 2):
+    if len(result) < minimum:
         return None
 
-    numeric_values = result[list(required)].to_numpy(
-        dtype=float
-    )
+    numeric_values = result[list(required)].to_numpy(dtype=float)
 
-    if not pd.Series(numeric_values.ravel()).map(
-        math.isfinite
-    ).all():
+    if not all(math.isfinite(float(value)) for value in numeric_values.ravel()):
         return None
 
     if (
@@ -240,23 +236,40 @@ def _prepare_dataframe(df):
 
 
 def _valid_symbol(symbol):
+    """
+    Accept only syntactically valid Binance Spot USDT symbols.
+
+    Actual exchange listing eligibility must also be checked
+    by the market-data provider / coin selector.
+    """
+
     if not isinstance(symbol, str):
         return False
 
-    symbol = symbol.upper().strip()
+    symbol = symbol.strip().upper()
 
-    return (
-        symbol.endswith("USDT")
-        and len(symbol) > 4
-        and not symbol.endswith(
-            (
-                "UPUSDT",
-                "DOWNUSDT",
-                "BULLUSDT",
-                "BEARUSDT",
-            )
+    if not symbol.endswith("USDT"):
+        return False
+
+    base_asset = symbol[:-4]
+
+    if not base_asset:
+        return False
+
+    if not base_asset.isascii() or not base_asset.isalnum():
+        return False
+
+    if symbol.endswith(
+        (
+            "UPUSDT",
+            "DOWNUSDT",
+            "BULLUSDT",
+            "BEARUSDT",
         )
-    )
+    ):
+        return False
+
+    return True
 
 
 # =========================================================
@@ -276,24 +289,14 @@ def _indicator_snapshot(df):
         "volume": _latest(df, "volume"),
         "previous_volume": _previous(df, "volume"),
 
-        "ema_9": _value_from_columns(
-            df, ["ema_9", "ema9"]
-        ),
-        "ema_20": _value_from_columns(
-            df, ["ema_20", "ema20"]
-        ),
-        "sma_20": _value_from_columns(
-            df, ["sma_20", "sma20"]
-        ),
-        "sma_50": _value_from_columns(
-            df, ["sma_50", "sma50"]
-        ),
-        "sma_200": _value_from_columns(
-            df, ["sma_200", "sma200"]
-        ),
-        "rsi": _value_from_columns(
-            df, ["rsi", "rsi_14", "rsi14"]
-        ),
+        "ema_9": _value_from_columns(df, ["ema_9", "ema9"]),
+        "ema_20": _value_from_columns(df, ["ema_20", "ema20"]),
+        "sma_20": _value_from_columns(df, ["sma_20", "sma20"]),
+        "sma_50": _value_from_columns(df, ["sma_50", "sma50"]),
+        "sma_200": _value_from_columns(df, ["sma_200", "sma200"]),
+
+        "rsi": _value_from_columns(df, ["rsi", "rsi_14", "rsi14"]),
+
         "macd_histogram": _value_from_columns(
             df,
             [
@@ -302,15 +305,11 @@ def _indicator_snapshot(df):
                 "macd_hist_12_26_9",
             ],
         ),
-        "adx": _value_from_columns(
-            df, ["adx", "adx_14", "adx14"]
-        ),
-        "atr": _value_from_columns(
-            df, ["atr", "atr_14", "atr14"]
-        ),
-        "vwap": _value_from_columns(
-            df, ["vwap", "session_vwap"]
-        ),
+
+        "adx": _value_from_columns(df, ["adx", "adx_14", "adx14"]),
+        "atr": _value_from_columns(df, ["atr", "atr_14", "atr14"]),
+        "vwap": _value_from_columns(df, ["vwap", "session_vwap"]),
+
         "rvol": _value_from_columns(
             df,
             [
@@ -319,12 +318,9 @@ def _indicator_snapshot(df):
                 "relative_volume_20",
             ],
         ),
-        "obv": _value_from_columns(
-            df, ["obv"]
-        ),
-        "cmf": _value_from_columns(
-            df, ["cmf", "cmf_20", "cmf20"]
-        ),
+
+        "obv": _value_from_columns(df, ["obv"]),
+        "cmf": _value_from_columns(df, ["cmf", "cmf_20", "cmf20"]),
     }
 
 
@@ -341,10 +337,7 @@ def _trend_is_bullish(snapshot):
     if None in (close, ema_9, ema_20):
         return False
 
-    return (
-        close > ema_20
-        and ema_9 > ema_20
-    )
+    return close > ema_20 and ema_9 > ema_20
 
 
 def _moving_average_is_bullish(snapshot):
@@ -356,10 +349,7 @@ def _moving_average_is_bullish(snapshot):
     if None in (close, sma_20, sma_50):
         return False
 
-    return (
-        close > sma_20
-        and sma_20 > sma_50
-    )
+    return close > sma_20 and sma_20 > sma_50
 
 
 def _check_confirmation_trend(snapshots):
@@ -384,17 +374,10 @@ def _check_confirmation_trend(snapshots):
 
 def _get_breakout_data(df):
     """
-    Required sequence:
-
-    1. Previous pre-breakout candle closes at/below resistance.
-    2. Breakout candle closes above resistance.
-    3. NEXT separate candle retests resistance.
-    4. Retest candle closes back above resistance.
-
     Latest candle = retest candle.
     Previous candle = breakout candle.
 
-    Breakout is valid only when the separate retest succeeds.
+    Both must be separate candles.
     """
 
     if not isinstance(df, pd.DataFrame):
@@ -405,12 +388,15 @@ def _get_breakout_data(df):
     if len(df) < minimum:
         return {}
 
+    required_columns = {"high", "low", "close"}
+
+    if not required_columns.issubset(df.columns):
+        return {}
+
     breakout_index = len(df) - 2
     retest_index = len(df) - 1
 
-    resistance_start = (
-        breakout_index - BREAKOUT_LOOKBACK
-    )
+    resistance_start = breakout_index - BREAKOUT_LOOKBACK
 
     if resistance_start < 0:
         return {}
@@ -422,34 +408,16 @@ def _get_breakout_data(df):
     if len(resistance_data) != BREAKOUT_LOOKBACK:
         return {}
 
-    required_columns = {"high", "low", "close"}
-
-    if not required_columns.issubset(df.columns):
-        return {}
-
-    resistance = _number(
-        resistance_data["high"].max()
-    )
+    resistance = _number(resistance_data["high"].max())
 
     pre_breakout = df.iloc[breakout_index - 1]
     breakout_candle = df.iloc[breakout_index]
     retest_candle = df.iloc[retest_index]
 
-    pre_breakout_close = _number(
-        pre_breakout["close"]
-    )
-
-    breakout_close = _number(
-        breakout_candle["close"]
-    )
-
-    retest_close = _number(
-        retest_candle["close"]
-    )
-
-    retest_low = _number(
-        retest_candle["low"]
-    )
+    pre_breakout_close = _number(pre_breakout["close"])
+    breakout_close = _number(breakout_candle["close"])
+    retest_close = _number(retest_candle["close"])
+    retest_low = _number(retest_candle["low"])
 
     if None in (
         resistance,
@@ -460,31 +428,18 @@ def _get_breakout_data(df):
     ):
         return {}
 
-    if resistance <= 0:
+    if resistance <= 0 or RETEST_TOLERANCE_PCT < 0:
         return {}
 
-    if RETEST_TOLERANCE_PCT < 0:
-        return {}
+    pre_breakout_valid = pre_breakout_close <= resistance
+    breakout_candle_valid = breakout_close > resistance
 
-    # Step 1: Previous candle must not already have broken resistance.
-    pre_breakout_valid = (
-        pre_breakout_close <= resistance
+    lower_boundary = resistance * (
+        1 - RETEST_TOLERANCE_PCT / 100
     )
 
-    # Step 2: Separate breakout candle must close above resistance.
-    breakout_candle_valid = (
-        breakout_close > resistance
-    )
-
-    # Step 3: Latest separate candle must retest the resistance zone.
-    lower_boundary = (
-        resistance
-        * (1 - RETEST_TOLERANCE_PCT / 100)
-    )
-
-    upper_boundary = (
-        resistance
-        * (1 + RETEST_TOLERANCE_PCT / 100)
+    upper_boundary = resistance * (
+        1 + RETEST_TOLERANCE_PCT / 100
     )
 
     retest_candle_valid = (
@@ -493,30 +448,21 @@ def _get_breakout_data(df):
         and retest_close >= resistance
     )
 
-    # Both conditions must be satisfied on separate candles.
     breakout = (
         pre_breakout_valid
         and breakout_candle_valid
         and retest_candle_valid
     )
 
-    retest = breakout
-
-    above_resistance = (
-        retest_close > resistance
-    )
-
     distance_pct = (
-        (retest_close - resistance)
-        / resistance
-        * 100
+        (retest_close - resistance) / resistance * 100
     )
 
     return {
         "resistance": resistance,
         "breakout": breakout,
-        "retest": retest,
-        "above_resistance": above_resistance,
+        "retest": breakout,
+        "above_resistance": retest_close >= resistance,
         "breakout_close": breakout_close,
         "retest_close": retest_close,
         "retest_low": retest_low,
@@ -532,17 +478,11 @@ def _get_breakout_data(df):
 
 def _find_support(df, lookback=30):
 
-    if not isinstance(df, pd.DataFrame):
-        return None
-
-    if len(df) < 5:
+    if not isinstance(df, pd.DataFrame) or len(df) < 5:
         return None
 
     recent = df.iloc[-lookback:]
-
-    support = _number(
-        recent["low"].min()
-    )
+    support = _number(recent["low"].min())
 
     if support is None or support <= 0:
         return None
@@ -552,14 +492,10 @@ def _find_support(df, lookback=30):
 
 def _find_resistance_levels(df, lookback=100):
 
-    if not isinstance(df, pd.DataFrame):
-        return []
-
-    if len(df) < 10:
+    if not isinstance(df, pd.DataFrame) or len(df) < 10:
         return []
 
     recent = df.iloc[-(lookback + 1):-1]
-
     highs = recent["high"].tolist()
 
     levels = []
@@ -576,12 +512,7 @@ def _find_resistance_levels(df, lookback=100):
         if current >= left and current >= right:
             levels.append(current)
 
-    return sorted(
-        set(
-            level for level in levels
-            if level > 0
-        )
-    )
+    return sorted(set(level for level in levels if level > 0))
 
 
 # =========================================================
@@ -595,23 +526,12 @@ def _buyer_confirmation(snapshot):
     volume = snapshot.get("volume")
     previous_volume = snapshot.get("previous_volume")
 
-    if None in (
-        close,
-        open_price,
-        volume,
-        previous_volume,
-    ):
+    if None in (close, open_price, volume, previous_volume):
         return False
 
-    green_candle = close > open_price
-
-    volume_confirmation = (
-        volume >= previous_volume
-    )
-
     return (
-        green_candle
-        and volume_confirmation
+        close > open_price
+        and volume >= previous_volume
     )
 
 
@@ -625,43 +545,56 @@ def _validate_market_context(market_context):
         return False, "MISSING_MARKET_CONTEXT"
 
     market_status = str(
-        market_context.get(
-            "market_status",
-            "UNKNOWN",
-        )
+        market_context.get("market_status", "UNKNOWN")
     ).upper()
 
     risk_level = str(
-        market_context.get(
-            "risk_level",
-            "UNKNOWN",
-        )
+        market_context.get("risk_level", "UNKNOWN")
     ).upper()
 
     btc_trend = str(
-        market_context.get(
-            "btc_trend",
-            "UNKNOWN",
-        )
+        market_context.get("btc_trend", "UNKNOWN")
     ).upper()
 
-    if market_status in ("UNKNOWN", "HIGH_RISK"):
-        return False, "MARKET_STATUS_" + market_status
+    if market_status not in (
+        "BULLISH",
+        "NEUTRAL",
+        "BEARISH",
+    ):
+        return False, "INVALID_MARKET_STATUS"
 
-    if btc_trend == "UNKNOWN":
-        return False, "BTC_TREND_UNKNOWN"
+    if btc_trend not in (
+        "BULLISH",
+        "NEUTRAL",
+        "BEARISH",
+    ):
+        return False, "INVALID_BTC_TREND"
 
-    if risk_level in ("EXTREME", "UNKNOWN"):
+    if market_context.get("data_quality") != "VALID":
+        return False, "INVALID_MARKET_DATA_QUALITY"
+
+    if risk_level in ("UNKNOWN", "EXTREME", "VERY_HIGH"):
         return False, "MARKET_RISK_" + risk_level
 
-    # Market Filter maps BEARISH market conditions
-    # to HIGH risk. Permit this condition with
-    # an increased setup score requirement.
-    if risk_level == "HIGH" and market_status != "BEARISH":
-        return False, "MARKET_RISK_HIGH"
+    if risk_level == "HIGH":
+        if market_status != "BEARISH":
+            return False, "MARKET_RISK_HIGH"
 
-    if risk_level == "HIGH" and btc_trend != "BEARISH":
-        return False, "MARKET_RISK_HIGH"
+        if btc_trend != "BEARISH":
+            return False, "MARKET_RISK_HIGH"
+
+    signal_policy = market_context.get("signal_policy")
+
+    if not isinstance(signal_policy, dict):
+        return False, "MISSING_SIGNAL_POLICY"
+
+    if signal_policy.get("allow_new_signals") is not True:
+        return False, "NEW_SIGNALS_NOT_ALLOWED"
+
+    expected_caution = market_status in ("BEARISH", "NEUTRAL")
+
+    if market_context.get("market_caution") is not expected_caution:
+        return False, "MARKET_CAUTION_MISMATCH"
 
     return True, None
 
@@ -680,10 +613,7 @@ def score_setup(setup_data):
             "components": {},
         }
 
-    components = setup_data.get(
-        "components",
-        {},
-    )
+    components = setup_data.get("components", {})
 
     if not isinstance(components, dict):
         components = {}
@@ -697,17 +627,11 @@ def score_setup(setup_data):
     score = min(score, MAX_SCORE)
 
     btc_trend = str(
-        setup_data.get(
-            "btc_trend",
-            "UNKNOWN",
-        )
+        setup_data.get("btc_trend", "UNKNOWN")
     ).upper()
 
     market_status = str(
-        setup_data.get(
-            "market_status",
-            "UNKNOWN",
-        )
+        setup_data.get("market_status", "UNKNOWN")
     ).upper()
 
     required_score = MIN_SCORE
@@ -724,10 +648,7 @@ def score_setup(setup_data):
     ):
         classification = "EXCELLENT BUY"
 
-    elif score >= max(
-        STRONG_MIN_SCORE,
-        required_score,
-    ):
+    elif score >= max(STRONG_MIN_SCORE, required_score):
         classification = "STRONG BUY"
 
     else:
@@ -774,8 +695,8 @@ def validate_entry(
             "reason": "INVALID_TRIGGER_DATA",
         }
 
-    market_valid, market_reason = (
-        _validate_market_context(market_context)
+    market_valid, market_reason = _validate_market_context(
+        market_context
     )
 
     if not market_valid:
@@ -795,10 +716,7 @@ def validate_entry(
         "rvol",
     )
 
-    if any(
-        snapshot.get(key) is None
-        for key in required
-    ):
+    if any(snapshot.get(key) is None for key in required):
         return {
             "valid": False,
             "reason": "MISSING_REQUIRED_INDICATORS",
@@ -834,9 +752,7 @@ def validate_entry(
             "reason": "LOW_RELATIVE_VOLUME",
         }
 
-    extension_pct = (
-        (close - ema_20) / ema_20 * 100
-    )
+    extension_pct = (close - ema_20) / ema_20 * 100
 
     if extension_pct > MAX_EMA_EXTENSION_PCT:
         return {
@@ -889,25 +805,16 @@ def validate_entry(
         "valid": True,
         "reason": None,
         "strategy": strategy,
-
         "entry_price": close,
         "current_price": close,
-
         "support": _find_support(prepared),
         "resistance": breakout_data["resistance"],
-
         "breakout": True,
         "retest": True,
         "buyer_confirmation": True,
-
         "breakout_close": breakout_data["breakout_close"],
         "retest_close": breakout_data["retest_close"],
-
-        "extension_pct": round(
-            extension_pct,
-            4,
-        ),
-
+        "extension_pct": round(extension_pct, 4),
         "atr": atr,
         "rsi": rsi,
         "rvol": rvol,
@@ -948,8 +855,8 @@ def _evaluate(
             "reason": "INVALID_MARKET_DATA",
         }
 
-    market_valid, market_reason = (
-        _validate_market_context(market_context)
+    market_valid, market_reason = _validate_market_context(
+        market_context
     )
 
     if not market_valid:
@@ -963,14 +870,11 @@ def _evaluate(
     if strategy == "SCALP":
         trigger_tf = "5m"
         confirmation_tfs = ("15m", "30m")
-
     else:
         trigger_tf = "15m"
         confirmation_tfs = ("30m", "1h")
 
-    required_tfs = (
-        trigger_tf,
-    ) + confirmation_tfs
+    required_tfs = (trigger_tf,) + confirmation_tfs
 
     snapshots = {}
     prepared_data = {}
@@ -978,7 +882,6 @@ def _evaluate(
     for timeframe in required_tfs:
 
         df = market_data.get(timeframe)
-
         prepared = _prepare_dataframe(df)
 
         if prepared is None:
@@ -990,10 +893,7 @@ def _evaluate(
             }
 
         prepared_data[timeframe] = prepared
-
-        snapshots[timeframe] = (
-            _indicator_snapshot(prepared)
-        )
+        snapshots[timeframe] = _indicator_snapshot(prepared)
 
     trigger = snapshots[trigger_tf]
 
@@ -1026,33 +926,19 @@ def _evaluate(
     )
 
     market_status = str(
-        market_context.get(
-            "market_status",
-            "UNKNOWN",
-        )
+        market_context.get("market_status", "UNKNOWN")
     ).upper()
 
     btc_trend = str(
-        market_context.get(
-            "btc_trend",
-            "UNKNOWN",
-        )
+        market_context.get("btc_trend", "UNKNOWN")
     ).upper()
 
     components = {
-        "market_condition": (
-            market_status == "BULLISH"
-        ),
-        "btc_context": (
-            btc_trend == "BULLISH"
-        ),
+        "market_condition": market_status == "BULLISH",
+        "btc_context": btc_trend == "BULLISH",
         "multi_timeframe_trend": trend_ok,
-        "ema_trend": (
-            _trend_is_bullish(trigger)
-        ),
-        "moving_average_trend": (
-            _moving_average_is_bullish(trigger)
-        ),
+        "ema_trend": _trend_is_bullish(trigger),
+        "moving_average_trend": _moving_average_is_bullish(trigger),
         "rsi_momentum": (
             trigger.get("rsi") is not None
             and 50 <= trigger["rsi"] <= 68
@@ -1126,9 +1012,7 @@ def _evaluate(
     support = entry_validation.get("support")
     resistance = entry_validation.get("resistance")
 
-    resistance_levels = _find_resistance_levels(
-        trigger_df
-    )
+    resistance_levels = _find_resistance_levels(trigger_df)
 
     if resistance is not None:
         resistance_levels.append(resistance)
@@ -1144,43 +1028,32 @@ def _evaluate(
     signal = {
         "symbol": symbol,
         "strategy": strategy,
-
         "classification": classification,
         "signal": classification,
-
         "score": scoring["score"],
         "max_score": scoring["max_score"],
         "required_score": scoring["required_score"],
         "components": components,
-
         "entry_price": entry_validation["entry_price"],
         "current_price": entry_validation["current_price"],
         "last_price": entry_validation["current_price"],
-
         "support": support,
         "support_level": support,
         "nearest_support": support,
-
         "resistance": resistance,
         "resistance_levels": resistance_levels,
-
         "atr": entry_validation["atr"],
         "atr_value": entry_validation["atr"],
-
         "rsi": entry_validation["rsi"],
         "rvol": entry_validation["rvol"],
-
         "market_status": market_status,
         "btc_trend": btc_trend,
-
         "breakout_confirmed": True,
         "retest_confirmed": True,
         "buyer_confirmation": True,
-
         "entry_status": "CANDIDATE",
         "risk_status": "PENDING_RISK_VALIDATION",
         "risk_plan": None,
-
         "warnings": [],
     }
 

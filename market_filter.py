@@ -804,7 +804,19 @@ def analyze_market(btc_data, external_data=None):
 # 11. MARKET FILTER VALIDATION
 # ==================================================
 
+
 def validate_market_context(market_context):
+    """
+    Validate BTC market context before allowing new signals.
+
+    Rejects:
+    - Missing or malformed market context
+    - HIGH_RISK and UNKNOWN market conditions
+    - Incomplete or partial market data
+    - Inconsistent risk levels
+    - Missing or contradictory signal policies
+    """
+
     if not isinstance(market_context, dict):
         return False
 
@@ -816,10 +828,37 @@ def validate_market_context(market_context):
     if status in ("HIGH_RISK", "UNKNOWN"):
         return False
 
-    if market_context.get("data_quality") not in (
-        "VALID",
-        "PARTIAL",
-    ):
+    # All required BTC timeframes must be valid.
+    if market_context.get("data_quality") != "VALID":
+        return False
+
+    # Verify the risk level against the actual market status.
+    expected_risk_levels = {
+        "BULLISH": "LOW_TO_MODERATE",
+        "NEUTRAL": "MODERATE",
+        "BEARISH": "HIGH",
+        "HIGH_RISK": "VERY_HIGH",
+        "UNKNOWN": "UNKNOWN",
+    }
+
+    expected_risk = expected_risk_levels.get(status)
+
+    if market_context.get("risk_level") != expected_risk:
+        return False
+
+    # Signal policy must exist and explicitly allow new signals.
+    signal_policy = market_context.get("signal_policy")
+
+    if not isinstance(signal_policy, dict):
+        return False
+
+    if signal_policy.get("allow_new_signals") is not True:
+        return False
+
+    # Market caution must match the market classification.
+    expected_caution = status in ("BEARISH", "NEUTRAL")
+
+    if signal_policy.get("market_caution") is not expected_caution:
         return False
 
     return True

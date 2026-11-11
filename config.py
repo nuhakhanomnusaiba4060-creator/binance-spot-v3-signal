@@ -110,11 +110,8 @@ STRATEGIES = {
 RISK_CONFIG = {
     "MAX_RISK_PER_TRADE_PERCENT": 1.0,
     "MIN_RISK_REWARD_RATIO": 2.0,
-
-    # Compatibility aliases
     "MAX_RISK_PERCENT": 1.0,
     "MIN_RISK_REWARD": 2.0,
-
     "POSITION_SIZING_METHOD": "STOP_LOSS_DISTANCE",
     "INCLUDE_TRADING_FEES": True,
     "INCLUDE_ESTIMATED_SLIPPAGE": True,
@@ -144,20 +141,14 @@ RISK_CONFIG = {
 FILTER_CONFIG = {
     "ALLOWED_QUOTE_ASSET": "USDT",
     "MIN_24H_QUOTE_VOLUME_USDT": 3_000_000,
-
-    # Compatibility aliases
     "MIN_QUOTE_VOLUME_USDT": 3_000_000,
     "MIN_QUOTE_VOLUME": 3_000_000,
-
     "MIN_RELATIVE_VOLUME": 1.5,
     "PREFERRED_RELATIVE_VOLUME": 2.0,
     "MAX_SPREAD_PERCENT": 0.15,
     "MIN_24H_TRADE_COUNT": 1000,
-
-    # Compatibility aliases
     "MIN_24H_TRADES": 1000,
     "MIN_TRADES": 1000,
-
     "REQUIRE_ORDER_BOOK": True,
     "MIN_ORDER_BOOK_DEPTH": 0,
 
@@ -242,40 +233,34 @@ MARKET_CONFIG = {
 # 8. SIGNAL SCORING CONFIGURATION
 # ============================================================
 
-
-def _valid_symbol(symbol):
-    if not isinstance(symbol, str):
-        return False
-
-    symbol = symbol.upper().strip()
-
-    if not symbol.endswith("USDT"):
-        return False
-
-    base_asset = symbol[:-4]
-
-    if not base_asset:
-        return False
-
-    # Only ASCII letters and digits are allowed.
-    if not base_asset.isascii() or not base_asset.isalnum():
-        return False
-
-    # Exclude leveraged tokens.
-    if symbol.endswith(
-        (
-            "UPUSDT",
-            "DOWNUSDT",
-            "BULLUSDT",
-            "BEARUSDT",
-        )
-    ):
-        return False
-
-    return True
-
-
+SIGNAL_CONFIG = {
+    "SCORE_COMPONENTS": [
+        "market_condition",
+        "btc_context",
+        "multi_timeframe_trend",
+        "ema_trend",
+        "moving_average_trend",
+        "rsi_momentum",
+        "macd_momentum",
+        "adx_strength",
+        "relative_volume",
+        "vwap_confirmation",
+        "buyer_flow",
+        "breakout_retest",
+    ],
     "POINTS_PER_COMPONENT": 1,
+    "MAX_SCORE": 12,
+    "MIN_SCORE": 9,
+    "REJECT_MAX_SCORE": 8,
+    "STRONG_MIN_SCORE": 9,
+    "EXCELLENT_MIN_SCORE": 11,
+
+    # Compatibility aliases used by configuration validation.
+    "STRONG_BUY_MIN_SCORE": 9,
+    "STRONG_BUY_MAX_SCORE": 10,
+    "EXCELLENT_BUY_MIN_SCORE": 11,
+    "EXCELLENT_BUY_MAX_SCORE": 12,
+
     "MISSING_DATA_POLICY": "DO_NOT_AWARD_POINTS",
     "MANDATORY_REJECTION_OVERRIDES_SCORE": True,
     "ALLOWED_SIGNAL_TYPES": ["STRONG BUY", "EXCELLENT BUY"],
@@ -296,7 +281,6 @@ TRACKING_CONFIG = {
     "PERFORMANCE_TRACKING": True,
     "TRACK_PARTIAL_EXITS": True,
     "TRACK_REALIZED_PNL": True,
-
     "TRACK_FIELDS": [
         "SIGNAL_TIMESTAMP",
         "ENTRY_PRICE",
@@ -314,7 +298,6 @@ TRACKING_CONFIG = {
         "REALIZED_PNL",
         "PARTIAL_EXIT_HISTORY",
     ],
-
     "EXPIRED_BEFORE_ENTRY_COUNTS_AS_TRADE": False,
 }
 
@@ -323,17 +306,14 @@ TRACKING_CONFIG = {
 # 10. API CONFIGURATION
 # ============================================================
 
-
 API_CONFIG = {
     "BASE_URL": "https://data-api.binance.vision",
-
     "ENDPOINTS": {
         "EXCHANGE_INFO": "/api/v3/exchangeInfo",
         "KLINES": "/api/v3/klines",
         "TICKER_24H": "/api/v3/ticker/24hr",
         "ORDER_BOOK": "/api/v3/depth",
     },
-
     "DATA_FRESHNESS_SECONDS": {
         "5m": 600,
         "15m": 1800,
@@ -343,7 +323,6 @@ API_CONFIG = {
         "TICKER_24H": 120,
         "ORDER_BOOK": 10,
     },
-
     "REQUIRE_CLOSED_CANDLES": True,
     "MAX_RETRIES": 3,
     "REQUEST_TIMEOUT_SECONDS": 10,
@@ -351,6 +330,7 @@ API_CONFIG = {
     "USE_PUBLIC_API_ONLY": True,
     "MISSING_DATA_POLICY": "REJECT_OR_MARK_UNKNOWN",
 }
+
 
 # ============================================================
 # 11. TELEGRAM CONFIGURATION
@@ -364,7 +344,6 @@ TELEGRAM_CONFIG = {
     "MAX_MESSAGE_LENGTH": 4000,
     "REQUEST_TIMEOUT_SECONDS": 15,
     "MAX_RETRIES": 2,
-
     "REQUIRED_SIGNAL_FIELDS": [
         "SYMBOL",
         "SIGNAL_CLASSIFICATION",
@@ -440,7 +419,6 @@ def get_config():
 def validate_config():
     """Validate critical configuration relationships."""
 
-    # Core settings
     if CONFIG["MARKET_TYPE"] != "SPOT":
         raise ValueError("Only Binance Spot market is allowed.")
 
@@ -459,13 +437,14 @@ def validate_config():
     if CONFIG["DEFAULT_DRY_RUN"] is not True:
         raise ValueError("Default DRY_RUN must remain enabled.")
 
-    if not math.isfinite(CONFIG["SIMULATION_CAPITAL_USDT"]):
+    capital = CONFIG["SIMULATION_CAPITAL_USDT"]
+
+    if not isinstance(capital, (int, float)) or not math.isfinite(capital):
         raise ValueError("Simulation capital must be finite.")
 
-    if CONFIG["SIMULATION_CAPITAL_USDT"] <= 0:
+    if capital <= 0:
         raise ValueError("Simulation capital must be positive.")
 
-    # Timeframes
     if TIMEFRAMES["SCALP"]["TRIGGER"] != "5m":
         raise ValueError("Scalp trigger timeframe must be 5m.")
 
@@ -487,7 +466,6 @@ def validate_config():
     if TIMEFRAMES["REQUIRE_CLOSED_CANDLES"] is not True:
         raise ValueError("Closed candles must be required.")
 
-    # Strategy
     for key in (
         "REQUIRE_BREAKOUT_CONFIRMATION",
         "REQUIRE_RETEST",
@@ -508,7 +486,6 @@ def validate_config():
     if STRATEGIES["ENTRY_SEQUENCE"] != expected_sequence:
         raise ValueError("Entry sequence configuration mismatch.")
 
-    # Risk
     max_risk = RISK_CONFIG["MAX_RISK_PER_TRADE_PERCENT"]
     min_rr = RISK_CONFIG["MIN_RISK_REWARD_RATIO"]
 
@@ -526,13 +503,13 @@ def validate_config():
 
     for key in ("FEE_RATE", "SLIPPAGE_RATE", "ATR_MULTIPLIER"):
         value = RISK_CONFIG[key]
+
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"{key} must be finite and non-negative.")
 
     if RISK_CONFIG["ATR_MULTIPLIER"] <= 0:
         raise ValueError("ATR multiplier must be positive.")
 
-    # Filters
     if FILTER_CONFIG["ALLOWED_QUOTE_ASSET"] != "USDT":
         raise ValueError("Only USDT quote assets are allowed.")
 
@@ -543,6 +520,7 @@ def validate_config():
         "MIN_RELATIVE_VOLUME",
     ):
         value = FILTER_CONFIG[key]
+
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{key} must be positive and finite.")
 
@@ -560,7 +538,6 @@ def validate_config():
     ):
         raise ValueError("Invalid RSI threshold ordering.")
 
-    # Indicators
     ema = INDICATOR_CONFIG["EMA"]
     macd = INDICATOR_CONFIG["MACD"]
 
@@ -579,7 +556,6 @@ def validate_config():
     if INDICATOR_CONFIG["RELATIVE_VOLUME"]["BASELINE_CANDLES"] <= 0:
         raise ValueError("Relative volume baseline must be positive.")
 
-    # BTC market filter
     if MARKET_CONFIG["BTC_SYMBOL"] != "BTCUSDT":
         raise ValueError("BTC market symbol must be BTCUSDT.")
 
@@ -592,10 +568,7 @@ def validate_config():
     if "UNKNOWN" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
         raise ValueError("UNKNOWN market must reject new signals.")
 
-    # Signal scoring
-    if SIGNAL_CONFIG["MAX_SCORE"] != len(
-        SIGNAL_CONFIG["SCORE_COMPONENTS"]
-    ):
+    if SIGNAL_CONFIG["MAX_SCORE"] != len(SIGNAL_CONFIG["SCORE_COMPONENTS"]):
         raise ValueError("Signal scoring configuration mismatch.")
 
     if SIGNAL_CONFIG["MIN_SCORE"] != 9:
@@ -608,16 +581,10 @@ def validate_config():
     ):
         raise ValueError("Invalid signal score boundaries.")
 
-    if (
-        SIGNAL_CONFIG["STRONG_BUY_MIN_SCORE"]
-        > SIGNAL_CONFIG["STRONG_BUY_MAX_SCORE"]
-    ):
+    if SIGNAL_CONFIG["STRONG_BUY_MIN_SCORE"] > SIGNAL_CONFIG["STRONG_BUY_MAX_SCORE"]:
         raise ValueError("Invalid STRONG BUY score range.")
 
-    if (
-        SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"]
-        > SIGNAL_CONFIG["EXCELLENT_BUY_MAX_SCORE"]
-    ):
+    if SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"] > SIGNAL_CONFIG["EXCELLENT_BUY_MAX_SCORE"]:
         raise ValueError("Invalid EXCELLENT BUY score range.")
 
     if (
@@ -626,87 +593,24 @@ def validate_config():
     ):
         raise ValueError("STRONG BUY score range is outside valid boundaries.")
 
-    
-def _validate_market_context(market_context):
-
-    if not isinstance(market_context, dict):
-        return False, "MISSING_MARKET_CONTEXT"
-
-    market_status = str(
-        market_context.get("market_status", "UNKNOWN")
-    ).upper()
-
-    risk_level = str(
-        market_context.get("risk_level", "UNKNOWN")
-    ).upper()
-
-    btc_trend = str(
-        market_context.get("btc_trend", "UNKNOWN")
-    ).upper()
-
-    # Reject unsupported market conditions.
-    if market_status not in (
-        "BULLISH",
-        "NEUTRAL",
-        "BEARISH",
+    if (
+        SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"] < SIGNAL_CONFIG["MIN_SCORE"]
+        or SIGNAL_CONFIG["EXCELLENT_BUY_MAX_SCORE"] > SIGNAL_CONFIG["MAX_SCORE"]
     ):
-        return False, "INVALID_MARKET_STATUS"
+        raise ValueError("EXCELLENT BUY score range is outside valid boundaries.")
 
-    # BTC trend must be explicitly recognized.
-    if btc_trend not in (
-        "BULLISH",
-        "NEUTRAL",
-        "BEARISH",
-    ):
-        return False, "INVALID_BTC_TREND"
+    if SIGNAL_CONFIG["STRONG_MIN_SCORE"] != SIGNAL_CONFIG["STRONG_BUY_MIN_SCORE"]:
+        raise ValueError("STRONG score compatibility mismatch.")
 
-    # Require complete BTC timeframe data.
-    if market_context.get("data_quality") != "VALID":
-        return False, "INVALID_MARKET_DATA_QUALITY"
+    if SIGNAL_CONFIG["EXCELLENT_MIN_SCORE"] != SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"]:
+        raise ValueError("EXCELLENT score compatibility mismatch.")
 
-    # Verify risk level against market classification.
-    expected_risk_levels = {
-        "BULLISH": "LOW_TO_MODERATE",
-        "NEUTRAL": "MODERATE",
-        "BEARISH": "HIGH",
-    }
-
-    expected_risk = expected_risk_levels.get(
-        market_status
-    )
-
-    if risk_level != expected_risk:
-        return False, "MARKET_RISK_MISMATCH"
-
-    # Signal policy must explicitly permit new signals.
-    signal_policy = market_context.get("signal_policy")
-
-    if not isinstance(signal_policy, dict):
-        return False, "MISSING_SIGNAL_POLICY"
-
-    if signal_policy.get("allow_new_signals") is not True:
-        return False, "NEW_SIGNALS_NOT_ALLOWED"
-
-    # Verify market caution policy.
-    expected_caution = market_status in (
-        "BEARISH",
-        "NEUTRAL",
-    )
-
-    if signal_policy.get("market_caution") is not expected_caution:
-        return False, "MARKET_CAUTION_MISMATCH"
-
-    return True, None
-
-
-    # Telegram
     if TELEGRAM_CONFIG["MAX_MESSAGE_LENGTH"] <= 0:
         raise ValueError("Telegram message length must be positive.")
 
     if TELEGRAM_CONFIG["REQUEST_TIMEOUT_SECONDS"] <= 0:
         raise ValueError("Telegram timeout must be positive.")
 
-    # Workflow
     if WORKFLOW_CONFIG["DEFAULT_DRY_RUN"] is not True:
         raise ValueError("Workflow default DRY_RUN must remain enabled.")
 

@@ -242,32 +242,38 @@ MARKET_CONFIG = {
 # 8. SIGNAL SCORING CONFIGURATION
 # ============================================================
 
-SIGNAL_CONFIG = {
-    "MAX_SCORE": 12,
-    "MIN_SCORE": 9,
 
-    "STRONG_BUY_MIN_SCORE": 9,
-    "STRONG_BUY_MAX_SCORE": 10,
+def _valid_symbol(symbol):
+    if not isinstance(symbol, str):
+        return False
 
-    "EXCELLENT_BUY_MIN_SCORE": 11,
-    "EXCELLENT_BUY_MAX_SCORE": 12,
+    symbol = symbol.upper().strip()
 
-    "REJECT_MAX_SCORE": 8,
+    if not symbol.endswith("USDT"):
+        return False
 
-    "SCORE_COMPONENTS": [
-        "MARKET_CONDITION",
-        "BTC_CONTEXT",
-        "TREND_STRUCTURE",
-        "EMA_CONFIRMATION",
-        "MA_CONFIRMATION",
-        "RSI_MOMENTUM",
-        "MACD_CONFIRMATION",
-        "ADX_STRENGTH",
-        "RELATIVE_VOLUME",
-        "VWAP_CONFIRMATION",
-        "OBV_CMF_CONFIRMATION",
-        "BREAKOUT_RETEST_QUALITY",
-    ],
+    base_asset = symbol[:-4]
+
+    if not base_asset:
+        return False
+
+    # Only ASCII letters and digits are allowed.
+    if not base_asset.isascii() or not base_asset.isalnum():
+        return False
+
+    # Exclude leveraged tokens.
+    if symbol.endswith(
+        (
+            "UPUSDT",
+            "DOWNUSDT",
+            "BULLUSDT",
+            "BEARUSDT",
+        )
+    ):
+        return False
+
+    return True
+
 
     "POINTS_PER_COMPONENT": 1,
     "MISSING_DATA_POLICY": "DO_NOT_AWARD_POINTS",

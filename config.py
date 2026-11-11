@@ -620,47 +620,78 @@ def validate_config():
     ):
         raise ValueError("STRONG BUY score range is outside valid boundaries.")
 
-    if (
-        SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"] < SIGNAL_CONFIG["MIN_SCORE"]
-        or SIGNAL_CONFIG["EXCELLENT_BUY_MAX_SCORE"] > SIGNAL_CONFIG["MAX_SCORE"]
+    
+def _validate_market_context(market_context):
+
+    if not isinstance(market_context, dict):
+        return False, "MISSING_MARKET_CONTEXT"
+
+    market_status = str(
+        market_context.get("market_status", "UNKNOWN")
+    ).upper()
+
+    risk_level = str(
+        market_context.get("risk_level", "UNKNOWN")
+    ).upper()
+
+    btc_trend = str(
+        market_context.get("btc_trend", "UNKNOWN")
+    ).upper()
+
+    # Reject unsupported market conditions.
+    if market_status not in (
+        "BULLISH",
+        "NEUTRAL",
+        "BEARISH",
     ):
-        raise ValueError("EXCELLENT BUY score range is outside valid boundaries.")
+        return False, "INVALID_MARKET_STATUS"
 
-    if (
-        SIGNAL_CONFIG["STRONG_BUY_MAX_SCORE"]
-        >= SIGNAL_CONFIG["EXCELLENT_BUY_MIN_SCORE"]
+    # BTC trend must be explicitly recognized.
+    if btc_trend not in (
+        "BULLISH",
+        "NEUTRAL",
+        "BEARISH",
     ):
-        raise ValueError("Signal classification score ranges overlap.")
+        return False, "INVALID_BTC_TREND"
 
-    if SIGNAL_CONFIG["ALLOWED_SIGNAL_TYPES"] != [
-        "STRONG BUY",
-        "EXCELLENT BUY",
-    ]:
-        raise ValueError("Only STRONG BUY and EXCELLENT BUY are allowed.")
+    # Require complete BTC timeframe data.
+    if market_context.get("data_quality") != "VALID":
+        return False, "INVALID_MARKET_DATA_QUALITY"
 
-    # Tracking
-    if TRACKING_CONFIG["MAX_TRACKING_HOURS"] != 48:
-        raise ValueError("Signal tracking duration must be 48 hours.")
+    # Verify risk level against market classification.
+    expected_risk_levels = {
+        "BULLISH": "LOW_TO_MODERATE",
+        "NEUTRAL": "MODERATE",
+        "BEARISH": "HIGH",
+    }
 
-    if TRACKING_CONFIG["COOLDOWN_HOURS"] < 0:
-        raise ValueError("Cooldown hours cannot be negative.")
+    expected_risk = expected_risk_levels.get(
+        market_status
+    )
 
-    # API
-    if API_CONFIG["USE_PUBLIC_API_ONLY"] is not True:
-        raise ValueError("Public API only mode must be enabled.")
+    if risk_level != expected_risk:
+        return False, "MARKET_RISK_MISMATCH"
 
-    if API_CONFIG["REQUIRE_CLOSED_CANDLES"] is not True:
-        raise ValueError("API must require closed candles.")
+    # Signal policy must explicitly permit new signals.
+    signal_policy = market_context.get("signal_policy")
 
-    if API_CONFIG["MAX_RETRIES"] < 0:
-        raise ValueError("API retries cannot be negative.")
+    if not isinstance(signal_policy, dict):
+        return False, "MISSING_SIGNAL_POLICY"
 
-    if API_CONFIG["REQUEST_TIMEOUT_SECONDS"] <= 0:
-        raise ValueError("API timeout must be positive.")
+    if signal_policy.get("allow_new_signals") is not True:
+        return False, "NEW_SIGNALS_NOT_ALLOWED"
 
-    for timeframe in ("5m", "15m", "30m", "1h", "4h"):
-        if API_CONFIG["DATA_FRESHNESS_SECONDS"].get(timeframe, 0) <= 0:
-            raise ValueError(f"Missing freshness limit for {timeframe}.")
+    # Verify market caution policy.
+    expected_caution = market_status in (
+        "BEARISH",
+        "NEUTRAL",
+    )
+
+    if signal_policy.get("market_caution") is not expected_caution:
+        return False, "MARKET_CAUTION_MISMATCH"
+
+    return True, None
+
 
     # Telegram
     if TELEGRAM_CONFIG["MAX_MESSAGE_LENGTH"] <= 0:

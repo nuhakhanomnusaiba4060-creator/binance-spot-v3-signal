@@ -15,6 +15,7 @@ Spot only. No Futures. No Margin.
 """
 
 import os
+import math
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -79,32 +80,82 @@ logger = logging.getLogger(__name__)
 # =========================================================
 
 def _env_bool(name: str, default: bool) -> bool:
+    """
+    Parse environment boolean safely.
+    Invalid values raise an error instead of silently
+    changing the scanner mode.
+    """
 
     value = os.getenv(name)
 
     if value is None:
         return default
 
-    return value.strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
+    normalized = value.strip().lower()
+
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+
+    if normalized in ("0", "false", "no", "off"):
+        return False
+
+    raise ValueError(
+        f"Invalid {name} value: {value!r}. "
+        "Use true/false, 1/0, yes/no, or on/off."
     )
 
 
-DRY_RUN = _env_bool("DRY_RUN", True)
+def _parse_capital() -> float:
+    """
+    DRY RUN:
+        Use SCANNER_CAPITAL_USDT if supplied.
+        Otherwise use CONFIG simulation capital.
 
-CAPITAL_USDT_RAW = os.getenv(
-    "SCANNER_CAPITAL_USDT",
-    "0",
-).strip()
+    LIVE:
+        SCANNER_CAPITAL_USDT must be supplied explicitly.
+    """
 
-CAPITAL_USDT = (
-    float(CAPITAL_USDT_RAW)
-    if CAPITAL_USDT_RAW
-    else 0.0
+    raw = os.getenv("SCANNER_CAPITAL_USDT")
+
+    if raw is None or not raw.strip():
+
+        if DRY_RUN:
+            capital = CONFIG.get(
+                "SIMULATION_CAPITAL_USDT",
+                100.0,
+            )
+        else:
+            capital = 0.0
+
+    else:
+        try:
+            capital = float(raw.strip())
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "SCANNER_CAPITAL_USDT must be a valid number."
+            ) from exc
+
+    try:
+        capital = float(capital)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "Configured capital is invalid."
+        ) from exc
+
+    if not math.isfinite(capital) or capital < 0:
+        raise ValueError(
+            "Capital must be finite and non-negative."
+        )
+
+    return capital
+
+
+DRY_RUN = _env_bool(
+    "DRY_RUN",
+    CONFIG.get("DEFAULT_DRY_RUN", True),
 )
+
+CAPITAL_USDT = _parse_capital()
 
 MAX_ORDERBOOK_CANDIDATES = 30
 
@@ -125,7 +176,6 @@ STRATEGIES_ENABLED = {
 # =========================================================
 
 def _normalize_key(value: str) -> str:
-
     return (
         str(value)
         .lower()
@@ -176,16 +226,9 @@ def _safe_float(
 ) -> float:
 
     try:
-
         result = float(value)
 
-        if result != result:
-            return default
-
-        if result in (
-            float("inf"),
-            float("-inf"),
-        ):
+        if not math.isfinite(result):
             return default
 
         return result
@@ -228,34 +271,35 @@ def _get_field(
 
 def validate_scanner_configuration() -> None:
 
-    if CAPITAL_USDT < 0:
+    if not math.isfinite(CAPITAL_USDT):
+        raise ValueError(
+            "Capital must be finite."
+        )
 
+    if CAPITAL_USDT < 0:
         raise ValueError(
             "SCANNER_CAPITAL_USDT cannot be negative."
         )
 
+    if not DRY_RUN and CAPITAL_USDT <= 0:
+        raise ValueError(
+            "Live mode requires a positive "
+            "SCANNER_CAPITAL_USDT value."
+        )
+
     if not DRY_RUN:
 
-        if CAPITAL_USDT <= 0:
-
-            raise ValueError(
-                "Live mode requires SCANNER_CAPITAL_USDT."
-            )
-
         if not credentials_available():
-
             raise ValueError(
                 "Telegram credentials are missing."
             )
 
     if MAX_ORDERBOOK_CANDIDATES < 1:
-
         raise ValueError(
             "MAX_ORDERBOOK_CANDIDATES must be positive."
         )
 
     if KLINE_LIMIT < 220:
-
         raise ValueError(
             "KLINE_LIMIT must be at least 220."
         )
@@ -267,6 +311,11 @@ def validate_scanner_configuration() -> None:
     logger.info(
         "Mode: %s",
         "DRY RUN" if DRY_RUN else "LIVE",
+    )
+
+    logger.info(
+        "Capital: %.2f USDT",
+        CAPITAL_USDT,
     )
 
 
@@ -289,7 +338,6 @@ def fetch_btc_market_data() -> dict:
     ):
 
         try:
-
             btc_data[timeframe] = get_klines(
                 "BTCUSDT",
                 timeframe,
@@ -333,7 +381,6 @@ def fetch_market_context() -> dict:
     )
 
     if not isinstance(market_context, dict):
-
         raise RuntimeError(
             "Market filter returned invalid data."
         )
@@ -462,7 +509,6 @@ def fetch_order_books(
     for symbol in symbols:
 
         try:
-
             order_books[symbol] = get_order_book(
                 symbol,
                 limit=ORDER_BOOK_LIMIT,
@@ -492,7 +538,6 @@ def collect_candidates() -> list:
     symbols = get_usdt_symbols()
 
     if not symbols:
-
         raise RuntimeError(
             "No eligible USDT Spot symbols returned."
         )
@@ -505,7 +550,6 @@ def collect_candidates() -> list:
     ticker_data = get_24h_ticker()
 
     if not isinstance(ticker_data, dict):
-
         raise RuntimeError(
             "Invalid 24h ticker response."
         )
@@ -673,7 +717,6 @@ def attach_risk_plan(
     )
 
     if entry_price <= 0:
-
         raise ValueError(
             "Invalid signal entry price."
         )
@@ -720,7 +763,6 @@ def attach_risk_plan(
     )
 
     if not isinstance(risk_plan, dict):
-
         raise ValueError(
             "Invalid risk plan response."
         )
@@ -738,7 +780,6 @@ def attach_risk_plan(
     )
 
     if risk_plan.get("status") != "VALID":
-
         raise ValueError(
             "Risk manager rejected the setup."
         )
@@ -749,13 +790,11 @@ def attach_risk_plan(
     )
 
     if not isinstance(validation, dict):
-
         raise ValueError(
             "Missing risk validation."
         )
 
     if validation.get("valid") is not True:
-
         raise ValueError(
             "Risk validation failed."
         )
@@ -774,7 +813,6 @@ def is_duplicate_signal(
 ) -> bool:
 
     try:
-
         return bool(
             check_duplicate(
                 symbol,
@@ -1153,6 +1191,8 @@ def run_scanner() -> dict:
             )
 
         # 3. COIN SELECTION
+        # collect_candidates() fetches the 24h ticker
+        # internally. Do not fetch it again here.
 
         candidates = collect_candidates()
 
@@ -1169,13 +1209,15 @@ def run_scanner() -> dict:
             return report
 
         # 4. TRACK EXISTING SIGNALS
-
-        ticker_data = get_24h_ticker()
-
-        if not isinstance(ticker_data, dict):
-            ticker_data = {}
+        # Ticker data is needed here only in LIVE mode.
+        # DRY RUN does not update or register signals.
 
         if not DRY_RUN:
+
+            ticker_data = get_24h_ticker()
+
+            if not isinstance(ticker_data, dict):
+                ticker_data = {}
 
             update_existing_signals(
                 ticker_data

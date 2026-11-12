@@ -1,4 +1,3 @@
-
 """
 Binance Spot V3 Smart Signal Scanner
 Entry Signal Generation Engine
@@ -373,10 +372,14 @@ def _check_confirmation_trend(snapshots):
 # =========================================================
 
 def _get_breakout_data(df):
+    """
+    Latest candle = retest candle.
+    Previous candles (up to 5) = look for breakout.
+    """
     if not isinstance(df, pd.DataFrame):
         return {}
 
-    minimum = BREAKOUT_LOOKBACK + 5 # Lookback a bit more
+    minimum = BREAKOUT_LOOKBACK + 5
     if len(df) < minimum:
         return {}
 
@@ -387,12 +390,12 @@ def _get_breakout_data(df):
     retest_index = len(df) - 1
     retest_candle = df.iloc[retest_index]
     
-    # Look back up to 4 candles to find a valid breakout
     breakout_found = False
     breakout_index = -1
     resistance = None
     
-    for i in range(2, 6): # Check last 2 to 5 candles for breakout
+    # Look back up to 5 candles to find a valid breakout
+    for i in range(2, 6):
         b_idx = len(df) - i
         resistance_start = b_idx - BREAKOUT_LOOKBACK
         if resistance_start < 0:
@@ -430,7 +433,7 @@ def _get_breakout_data(df):
         and retest_close >= resistance
     )
 
-    breakout = retest_candle_valid # Since we already confirmed breakout
+    breakout = retest_candle_valid
 
     distance_pct = ((retest_close - resistance) / resistance) * 100
 
@@ -515,7 +518,6 @@ def _buyer_confirmation(snapshot):
 # MARKET CONTEXT
 # =========================================================
 
-
 def _validate_market_context(market_context):
     if not isinstance(market_context, dict):
         return False, "MISSING_MARKET_CONTEXT"
@@ -568,7 +570,6 @@ def _validate_market_context(market_context):
 # SCORING ENGINE
 # =========================================================
 
-
 def score_setup(setup_data):
     if not isinstance(setup_data, dict):
         return {
@@ -600,15 +601,13 @@ def score_setup(setup_data):
 
     required_score = MIN_SCORE
 
-    required_score = MIN_SCORE
+    # NEUTRAL মার্কেটে ২টি কন্ডিশন (market_condition, btc_context) অটোমেটিক ফেল করে।
+    # তাই কমপক্ষে ২ পয়েন্ট কমিয়ে দেওয়া হচ্ছে, যাতে সিগন্যাল ব্লক না হয়।
+    if market_status == "NEUTRAL" or btc_trend == "NEUTRAL":
+        required_score -= 2
 
-# NEUTRAL মার্কেটে ২টি কন্ডিশন (market_condition, btc_context) অটোমেটিক ফেল করে।
-# তাই কমপক্ষে ২ পয়েন্ট কমিয়ে দেওয়া হচ্ছে, যাতে সিগন্যাল ব্লক না হয়।
-if market_status == "NEUTRAL" or btc_trend == "NEUTRAL":
-    required_score -= 2
-
-if btc_trend == "BEARISH" or market_status == "BEARISH":
-    required_score += 1
+    if btc_trend == "BEARISH" or market_status == "BEARISH":
+        required_score += 1
 
     if (
         score >= EXCELLENT_MIN_SCORE
@@ -628,6 +627,7 @@ if btc_trend == "BEARISH" or market_status == "BEARISH":
         "components": components,
     }
     
+
 # =========================================================
 # ENTRY VALIDATION
 # =========================================================

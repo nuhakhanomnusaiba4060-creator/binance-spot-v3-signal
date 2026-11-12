@@ -307,7 +307,7 @@ No weak or moderate signals.
 **Module tests (1):**
 1. All modules import successfully
 
-**Configuration tests (4):**
+**Configuration tests (7):**
 2. Required config sections exist
 3. Config validation passes
 4. Spot-only configuration enforced
@@ -323,7 +323,7 @@ No weak or moderate signals.
 12. Indicator values are numeric
 13. New early-pump indicators present
 
-**Coin selector tests (10):**
+**Coin selector tests (9):**
 14. Snake_case ticker support
 15. Camel_case ticker support
 16. Low volume rejected
@@ -338,7 +338,7 @@ No weak or moderate signals.
 23. Market filter function exists
 24. Market context validator exists
 
-**Entry engine tests (6):**
+**Entry engine tests (9):**
 25. Required functions exist
 26. Only approved signal classes
 27. SCALP/SWING configs differ
@@ -349,7 +349,7 @@ No weak or moderate signals.
 32. Unknown market context rejected
 33. High risk market rejected
 
-**Risk manager tests (5):**
+**Risk manager tests (4):**
 34. Required functions exist
 35. Position size calculation
 36. Stop loss rejects too wide
@@ -415,7 +415,7 @@ No weak or moderate signals.
 ## 16. Development Rules
 
 - Keep one authoritative Master Specification
-- Maintain a file dependency map (see below)
+- Maintain a file dependency map
 - Build one complete file at a time
 - Test every file after changes
 - Test cross-file compatibility
@@ -425,3 +425,28 @@ No weak or moderate signals.
 - **Do not deploy live before testing is complete**
 
 ### File Dependency Map:
+
+
+---
+
+## 17. Final Success Criteria
+
+The project is ready for live evaluation only when:
+
+- ✅ All 45 automated tests pass
+- ✅ Signals contain valid entry, Stop Loss and targets
+- ✅ Telegram delivery is verified
+- ✅ Historical and paper-trading results reviewed
+- ✅ False signals and risk are measured
+- ✅ No critical unresolved integration or security issues remain
+- ✅ Entry windows (15m/60m) working as expected
+- ✅ Pump protection rejecting false setups
+- ✅ SCALP/SWING separate performance tracking available
+
+---
+
+**Core Principle:** Accuracy, risk control and consistency are more important than signal frequency.
+
+A high score cannot compensate for a failed mandatory condition.
+
+**Every signal must pass:**

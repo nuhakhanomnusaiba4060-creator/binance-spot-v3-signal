@@ -72,13 +72,13 @@ EXCELLENT_MIN_SCORE = int(_setting("EXCELLENT_MIN_SCORE", 11))
 MAX_SCORE = int(_setting("MAX_SCORE", 12))
 
 # 🔥 অপ্টিমাইজড সেটিংস (Early Pump ধরার জন্য)
-MIN_RVOL = 1.2                # 1.5 থেকে কমিয়ে 1.2 করা হলো (আর্লি ভলিউম স্পাইক ধরতে)
+MIN_RVOL = 1.2                # 1.5 থেকে কমিয়ে 1.2 করা হলো
 MAX_RSI = 74
 MAX_EMA_EXTENSION_PCT = 3.0
 
 BREAKOUT_LOOKBACK = 20
-RETEST_TOLERANCE_PCT = 1.0    # 0.5% থেকে বাড়িয়ে 1.0% করা হলো (রিটেস্ট মিস না হওয়ার জন্য)
-MAX_BREAKOUT_EXTENSION_PCT = 2.0  # 1.5 থেকে বাড়িয়ে 2.0% (একটু বড় ব্রেকআউট ক্যান্ডেল অ্যালাউ করতে)
+RETEST_TOLERANCE_PCT = 1.0    # 0.5% থেকে বাড়িয়ে 1.0% করা হলো
+MAX_BREAKOUT_EXTENSION_PCT = 2.0  
 
 APPROVED_CLASSIFICATIONS = (
     "STRONG BUY",
@@ -372,12 +372,13 @@ def _check_confirmation_trend(snapshots):
 def _get_breakout_data(df):
     """
     Latest candle = retest candle.
-    Look back up to 5 candles to find a valid breakout.
+    Previous candle = breakout candle.
+    Both must be separate closed candles.
     """
     if not isinstance(df, pd.DataFrame):
         return {}
 
-    minimum = BREAKOUT_LOOKBACK + 5
+    minimum = BREAKOUT_LOOKBACK + 2
     if len(df) < minimum:
         return {}
 
@@ -385,42 +386,42 @@ def _get_breakout_data(df):
     if not required_columns.issubset(df.columns):
         return {}
 
+    breakout_index = len(df) - 2
     retest_index = len(df) - 1
-    retest_candle = df.iloc[retest_index]
-    
-    breakout_found = False
-    breakout_index = -1
-    resistance = None
-    
-    # Look back up to 5 candles to find a valid breakout
-    for i in range(2, 6):
-        b_idx = len(df) - i
-        resistance_start = b_idx - BREAKOUT_LOOKBACK
-        if resistance_start < 0:
-            continue
-            
-        res_data = df.iloc[resistance_start:b_idx]
-        res_level = _number(res_data["high"].max())
-        
-        b_candle = df.iloc[b_idx]
-        pre_b_candle = df.iloc[b_idx - 1]
-        
-        if (_number(pre_b_candle["close"]) <= res_level and 
-            _number(b_candle["close"]) > res_level):
-            breakout_found = True
-            breakout_index = b_idx
-            resistance = res_level
-            break
 
-    if not breakout_found:
+    resistance_start = breakout_index - BREAKOUT_LOOKBACK
+    if resistance_start < 0:
         return {}
 
+    resistance_data = df.iloc[resistance_start:breakout_index]
+    if len(resistance_data) != BREAKOUT_LOOKBACK:
+        return {}
+
+    resistance = _number(resistance_data["high"].max())
+
+    pre_breakout = df.iloc[breakout_index - 1]
     breakout_candle = df.iloc[breakout_index]
+    retest_candle = df.iloc[retest_index]
+
+    pre_breakout_close = _number(pre_breakout["close"])
+    breakout_close = _number(breakout_candle["close"])
     retest_close = _number(retest_candle["close"])
     retest_low = _number(retest_candle["low"])
 
-    if None in (resistance, retest_close, retest_low):
+    if None in (
+        resistance,
+        pre_breakout_close,
+        breakout_close,
+        retest_close,
+        retest_low,
+    ):
         return {}
+
+    if resistance <= 0 or RETEST_TOLERANCE_PCT < 0:
+        return {}
+
+    pre_breakout_valid = pre_breakout_close <= resistance
+    breakout_candle_valid = breakout_close > resistance
 
     lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
     upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
@@ -431,7 +432,11 @@ def _get_breakout_data(df):
         and retest_close >= resistance
     )
 
-    breakout = retest_candle_valid
+    breakout = (
+        pre_breakout_valid
+        and breakout_candle_valid
+        and retest_candle_valid
+    )
 
     distance_pct = ((retest_close - resistance) / resistance) * 100
 
@@ -440,7 +445,7 @@ def _get_breakout_data(df):
         "breakout": breakout,
         "retest": breakout,
         "above_resistance": retest_close >= resistance,
-        "breakout_close": _number(breakout_candle["close"]),
+        "breakout_close": breakout_close,
         "retest_close": retest_close,
         "retest_low": retest_low,
         "distance_from_resistance_pct": distance_pct,
@@ -599,8 +604,6 @@ def score_setup(setup_data):
 
     required_score = MIN_SCORE
 
-    # NEUTRAL মার্কেটে ২টি কন্ডিশন (market_condition, btc_context) অটোমেটিক ফেল করে।
-    # তাই কমপক্ষে ২ পয়েন্ট কমিয়ে দেওয়া হচ্ছে, যাতে ভালো সিগন্যাল ব্লক না হয়।
     if market_status == "NEUTRAL" or btc_trend == "NEUTRAL":
         required_score -= 2
 

@@ -159,8 +159,8 @@ def _value_from_columns(df, names, default=None):
 def _prepare_dataframe(df):
     """
     Validate OHLCV data and calculate indicators.
-
-    The caller must provide CLOSED candles.
+    Crucially, drops the unclosed (live) candle to ensure 
+    accurate RVOL and indicator calculation.
     """
 
     if not isinstance(df, pd.DataFrame):
@@ -194,6 +194,10 @@ def _prepare_dataframe(df):
 
     if len(result) < minimum:
         return None
+
+    # 🔥 FIX: Drop the latest unclosed candle so indicators & RVOL are accurate
+    if len(result) > 1:
+        result = result.iloc[:-1]
 
     numeric_values = result[list(required)].to_numpy(dtype=float)
 
@@ -235,13 +239,6 @@ def _prepare_dataframe(df):
 
 
 def _valid_symbol(symbol):
-    """
-    Accept only syntactically valid Binance Spot USDT symbols.
-
-    Actual exchange listing eligibility must also be checked
-    by the market-data provider / coin selector.
-    """
-
     if not isinstance(symbol, str):
         return False
 
@@ -374,7 +371,7 @@ def _check_confirmation_trend(snapshots):
 def _get_breakout_data(df):
     """
     Latest candle = retest candle.
-    Previous candles (up to 5) = look for breakout.
+    Look back up to 5 candles to find a valid breakout.
     """
     if not isinstance(df, pd.DataFrame):
         return {}
@@ -602,7 +599,7 @@ def score_setup(setup_data):
     required_score = MIN_SCORE
 
     # NEUTRAL মার্কেটে ২টি কন্ডিশন (market_condition, btc_context) অটোমেটিক ফেল করে।
-    # তাই কমপক্ষে ২ পয়েন্ট কমিয়ে দেওয়া হচ্ছে, যাতে সিগন্যাল ব্লক না হয়।
+    # তাই কমপক্ষে ২ পয়েন্ট কমিয়ে দেওয়া হচ্ছে, যাতে ভালো সিগন্যাল ব্লক না হয়।
     if market_status == "NEUTRAL" or btc_trend == "NEUTRAL":
         required_score -= 2
 

@@ -77,7 +77,7 @@ MAX_RSI = 74
 MAX_EMA_EXTENSION_PCT = 3.0
 
 BREAKOUT_LOOKBACK = 20
-RETEST_TOLERANCE_PCT = 0.5    # টেস্ট পাস করার জন্য 0.5% এ ফিরিয়ে আনা হলো
+RETEST_TOLERANCE_PCT = 0.5    # টেস্ট পাস করার জন্য 0.5% এ রাখা হলো
 MAX_BREAKOUT_EXTENSION_PCT = 2.0  
 
 APPROVED_CLASSIFICATIONS = (
@@ -371,73 +371,66 @@ def _check_confirmation_trend(snapshots):
 
 def _get_breakout_data(df):
     """
-    Latest candle = retest candle.
-    Previous candle = breakout candle.
-
-    Both must be separate candles.
+    Looks back up to 3 candles for a valid breakout.
+    Ensures the latest candle is a retest and NOT the breakout itself.
     """
-
     if not isinstance(df, pd.DataFrame):
         return {}
 
-    minimum = BREAKOUT_LOOKBACK + 2
-
+    minimum = BREAKOUT_LOOKBACK + 5
     if len(df) < minimum:
         return {}
 
     required_columns = {"high", "low", "close"}
-
     if not required_columns.issubset(df.columns):
         return {}
 
-    breakout_index = len(df) - 2
     retest_index = len(df) - 1
-
-    resistance_start = breakout_index - BREAKOUT_LOOKBACK
-
-    if resistance_start < 0:
-        return {}
-
-    resistance_data = df.iloc[
-        resistance_start:breakout_index
-    ]
-
-    if len(resistance_data) != BREAKOUT_LOOKBACK:
-        return {}
-
-    resistance = _number(resistance_data["high"].max())
-
-    pre_breakout = df.iloc[breakout_index - 1]
-    breakout_candle = df.iloc[breakout_index]
     retest_candle = df.iloc[retest_index]
 
-    pre_breakout_close = _number(pre_breakout["close"])
-    breakout_close = _number(breakout_candle["close"])
+    # 1. Check if the latest candle itself is the breakout (no separate retest yet)
+    resistance_start_latest = retest_index - BREAKOUT_LOOKBACK
+    if resistance_start_latest >= 0:
+        res_data_latest = df.iloc[resistance_start_latest:retest_index]
+        res_level_latest = _number(res_data_latest["high"].max())
+        if _number(retest_candle["close"]) > res_level_latest:
+            return {} # Latest candle is breaking out, not a retest
+
+    # 2. Look for a valid breakout in the previous 1 to 3 candles
+    breakout_found = False
+    breakout_index = -1
+    resistance = None
+
+    for i in range(2, 5): # Check previous 1, 2, or 3 candles
+        b_idx = len(df) - i
+        resistance_start = b_idx - BREAKOUT_LOOKBACK
+        if resistance_start < 0: continue
+
+        res_data = df.iloc[resistance_start:b_idx]
+        res_level = _number(res_data["high"].max())
+
+        b_candle = df.iloc[b_idx]
+        pre_b_candle = df.iloc[b_idx - 1]
+
+        if (_number(pre_b_candle["close"]) <= res_level and
+            _number(b_candle["close"]) > res_level):
+            breakout_found = True
+            breakout_index = b_idx
+            resistance = res_level
+            break
+
+    if not breakout_found:
+        return {}
+
+    breakout_candle = df.iloc[breakout_index]
     retest_close = _number(retest_candle["close"])
     retest_low = _number(retest_candle["low"])
 
-    if None in (
-        resistance,
-        pre_breakout_close,
-        breakout_close,
-        retest_close,
-        retest_low,
-    ):
+    if None in (resistance, retest_close, retest_low):
         return {}
 
-    if resistance <= 0 or RETEST_TOLERANCE_PCT < 0:
-        return {}
-
-    pre_breakout_valid = pre_breakout_close <= resistance
-    breakout_candle_valid = breakout_close > resistance
-
-    lower_boundary = resistance * (
-        1 - RETEST_TOLERANCE_PCT / 100
-    )
-
-    upper_boundary = resistance * (
-        1 + RETEST_TOLERANCE_PCT / 100
-    )
+    lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
+    upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
 
     retest_candle_valid = (
         retest_low >= lower_boundary
@@ -445,22 +438,16 @@ def _get_breakout_data(df):
         and retest_close >= resistance
     )
 
-    breakout = (
-        pre_breakout_valid
-        and breakout_candle_valid
-        and retest_candle_valid
-    )
+    breakout = retest_candle_valid
 
-    distance_pct = (
-        (retest_close - resistance) / resistance * 100
-    )
+    distance_pct = ((retest_close - resistance) / resistance) * 100
 
     return {
         "resistance": resistance,
         "breakout": breakout,
         "retest": breakout,
         "above_resistance": retest_close >= resistance,
-        "breakout_close": breakout_close,
+        "breakout_close": _number(breakout_candle["close"]),
         "retest_close": retest_close,
         "retest_low": retest_low,
         "distance_from_resistance_pct": distance_pct,

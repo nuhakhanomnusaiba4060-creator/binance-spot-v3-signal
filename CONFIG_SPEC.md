@@ -1,491 +1,346 @@
-CONFIG SPECIFICATION
+# CONFIG SPECIFICATION
 
-Binance Spot V3 Smart Signal Scanner
+**Binance Spot V3 Smart Signal Scanner**
 
-Version: 1.0
-Status: Initial Configuration — Pending Backtesting
-Python: 3.11
-Exchange: Binance
-Market: Spot Only
-Quote Asset: USDT Only
+**Version:** 2.0  
+**Status:** Initial Configuration — Pending Backtesting  
+**Python:** 3.11  
+**Exchange:** Binance  
+**Market:** Spot Only  
+**Quote Asset:** USDT Only  
 
 ---
 
-1. CORE CONFIGURATION
+## 1. CORE CONFIGURATION
 
-Parameter| Value
-Exchange| Binance
-Market Type| Spot
-Allowed Quote Asset| USDT
-Scan Interval| 5 minutes
-Target Signals| 5–7 per day (not mandatory)
-Allowed Signal Types| STRONG BUY, EXCELLENT BUY
-Maximum Trade Duration| 48 hours
-Maximum Capital Risk| 1% per trade
-Minimum Risk/Reward| 1:2
-Signal Tracking| 48 hours
-Timezone| UTC
+| Parameter | Value |
+|---|---|
+| Exchange | Binance |
+| Market Type | Spot |
+| Allowed Quote Asset | USDT |
+| Scan Interval | 5 minutes |
+| Target Signals | 5–7 per day (not mandatory) |
+| Allowed Signal Types | STRONG BUY, EXCELLENT BUY |
+| Maximum Trade Duration | 48 hours |
+| Maximum Capital Risk | 1% per trade |
+| Minimum Risk/Reward | 1:2 |
+| Signal Tracking | 48 hours |
+| Timezone | UTC |
 
-Strict Exclusions
-
-- Futures
-- Margin
+**Strict Exclusions:**
+- Futures, Margin
 - Non-USDT trading pairs
-- Stocks and shares
-- Equities
-- Tokenized stocks
-- Non-crypto assets
+- Stocks, shares, equities
+- Tokenized stocks (xStocks like NVDABUSDT, TSLABUSDT)
+- Stablecoins (USDCUSDT, TUSDUSDT)
+- Wrapped/Low-volatility assets (WBTCUSDT, XAUTUSDT)
+- Leveraged tokens (UP, DOWN, BULL, BEAR)
 
 Only eligible Binance Spot crypto/USDT pairs are permitted.
 
 ---
 
-2. STRATEGY TIMEFRAMES
+## 2. STRATEGY TIMEFRAMES & THRESHOLDS
 
-Scalp Strategy
+### Scalp Strategy
+| Parameter | Value |
+|---|---|
+| Trigger | 5m |
+| Confirmation | 15m, 30m |
+| Entry Validity | 15 minutes |
+| RSI Range | 50–68 |
+| Minimum ADX | 18 |
+| Minimum RVOL | 1.2x |
+| Max ROC | 4.0% |
+| Max BB Width | 0.20 |
 
-Parameter| Timeframe
-Trigger| 5m
-Confirmation| 15m
-Additional Confirmation| 30m
-Entry Validity| 15 minutes
-Maximum Duration| Several hours
+### Swing Strategy
+| Parameter | Value |
+|---|---|
+| Trigger | 15m |
+| Confirmation | 30m, 1H |
+| Entry Validity | 60 minutes |
+| RSI Range | 52–70 |
+| Minimum ADX | 22 |
+| Minimum RVOL | 1.3x |
+| Max ROC | 5.0% |
+| Max BB Width | 0.25 |
 
-Swing Strategy
-
-Parameter| Timeframe
-Trigger| 15m
-Confirmation| 30m
-Trend Confirmation| 1H
-Entry Validity| 60 minutes
-Maximum Duration| 48 hours
-
-Only closed candles may confirm a signal. An incomplete candle must never independently trigger an entry.
-
----
-
-3. MARKET FILTER CONFIGURATION
-
-BTC Market Analysis
-
-Required indicators:
-
-- MA20
-- MA50
-- MA200
-- RSI14
-- MACD
-- ADX14
-- ATR14
-- Volume trend
-
-Required timeframes:
-
-- 15m
-- 1H
-- 4H
-
-Market Classification
-
-Status| Action
-BULLISH| Normal signal evaluation
-NEUTRAL| Selective signal evaluation
-BEARISH| Strict confirmation required
-HIGH_RISK| Reject new signals
-UNKNOWN| No market-based assumptions; apply conservative rules
-
-A single bearish BTC indicator must not automatically reject every coin. However, strong BTC weakness, abnormal volatility or major market risk must increase rejection requirements.
-
-Missing market data must be classified as UNKNOWN.
+*Only closed candles may confirm a signal. An incomplete candle must never independently trigger an entry.*
 
 ---
 
-4. COIN SELECTION FILTERS
+## 3. MARKET FILTER CONFIGURATION
 
-Liquidity Requirements
+**BTC Market Analysis:**
+- Required timeframes: 15m, 1H, 4H
+- Required indicators: MA20, MA50, MA200, RSI14, MACD, ADX14, ATR14, Volume trend
 
-Parameter| Initial Threshold
-Minimum 24H Quote Volume| $3,000,000
-Minimum Relative Volume| 1.5x
-Preferred Relative Volume| 2.0x or higher
-Maximum Spread| 0.15%
-Minimum Trade Count| 1,000
-Quote Asset| USDT
+**Market Classification & Signal Policy:**
+| Status | Action |
+|---|---|
+| BULLISH | Normal signal evaluation |
+| NEUTRAL | Require stronger confirmation (2-point score deduction) |
+| BEARISH | Strict confirmation required (1-point score penalty) |
+| HIGH_RISK | Reject new signals |
+| UNKNOWN | Reject new signals |
 
-These are initial screening thresholds, not guaranteed liquidity or execution conditions.
-
-Order Book Validation
-
-Check:
-
-- Bid/ask spread
-- Order book depth
-- Buy-side liquidity
-- Sell-side liquidity
-- Estimated slippage
-- Abnormal order-book imbalance
-
-Reject a candidate when the expected execution cost makes the required risk/reward invalid.
-
-Do not treat spoofable order-book walls as confirmed buying pressure.
-
-RSI Filter
-
-RSI14| Interpretation
-Below 45| Weak momentum
-45–49| Caution
-50–68| Preferred range
-69–74| Overextension warning
-Above 74| Reject fresh breakout entry unless separately validated
-
-RSI alone must never create a BUY signal.
+Missing market data must be classified as UNKNOWN. Never invent market conditions.
 
 ---
 
-5. INDICATOR CONFIGURATION
+## 4. COIN SELECTION FILTERS
 
-Indicator| Configuration
-EMA Fast| 9
-EMA Slow| 20
-SMA| 20
-SMA| 50
-SMA| 200
-RSI| 14
-MACD Fast| 12
-MACD Slow| 26
-MACD Signal| 9
-ADX| 14
-ATR| 14
-Bollinger Period| 20
-Bollinger Standard Deviation| 2
-VWAP| Session-based
-Relative Volume| 20-candle baseline
-OBV| Standard
-CMF| 20
-Support/Resistance| Recent confirmed swing levels
+**Liquidity Requirements:**
+| Parameter | Threshold |
+|---|---|
+| Minimum 24H Quote Volume | $3,000,000 |
+| Minimum Relative Volume | **1.2x (tuned for early pump)** |
+| Preferred Relative Volume | 1.5x or higher |
+| Maximum Spread | 0.15% |
+| Minimum Trade Count | 1,000 |
 
-All indicators must use sufficient historical candle data.
+**Order Book Validation:**
+- Bid/ask spread, depth, and imbalance checks
+- Estimated slippage must not violate risk/reward bounds
+- Reject spoofable order-book walls
 
-Minimum required candle history: 220 candles where MA200 is required.
-
-If sufficient data is unavailable, the relevant setup must not receive a fabricated indicator value.
+**RSI Filter (Base Guideline):**
+- Below 45: Weak
+- 50–68 (Scalp) / 52–70 (Swing): Preferred
+- Above 74: Reject fresh breakout unless separately validated
 
 ---
 
-6. BREAKOUT AND ENTRY CONFIGURATION
+## 5. INDICATOR CONFIGURATION
 
-Breakout Requirements
+| Indicator | Configuration |
+|---|---|
+| EMA | 9, 20 |
+| SMA | 20, 50, 200 |
+| RSI | 14 |
+| MACD | 12, 26, 9 |
+| ADX | 14 |
+| ATR | 14 |
+| Bollinger Bands | 20 period, 2 StdDev |
+| **Bollinger Band Width** | **Derived from BB (Squeeze detection)** |
+| **Rate of Change (ROC)** | **5 period (Early momentum)** |
+| **Volume Momentum** | **3 period (Volume acceleration)** |
+| VWAP | Session-based |
+| Relative Volume | 20-candle baseline |
+| OBV, CMF | Standard, 20 period |
 
-A valid breakout candidate should have:
+- Minimum required candle history: 220 candles where MA200 is required.
+- Unclosed live candles are dropped before calculation.
+- If sufficient data is unavailable, do not fabricate indicator values.
 
+---
+
+## 6. BREAKOUT AND ENTRY CONFIGURATION
+
+**Breakout Requirements:**
 1. Confirmed resistance breakout.
 2. Closed-candle confirmation.
-3. Relative volume confirmation.
-4. Positive momentum confirmation.
-5. Acceptable RSI.
-6. No excessive price extension.
-7. Valid stop-loss placement.
-8. Minimum 1:2 risk/reward.
+3. Relative volume confirmation (RVOL).
+4. Positive momentum (MACD, RSI).
+5. No excessive price extension (ROC / EMA distance).
+6. Valid stop-loss placement (within bounds).
+7. Minimum 1:2 risk/reward.
 
-Retest Requirements
+**Retest Requirements:**
+- Preferred sequence: Breakout → Candle Close → Retest → Buyer Confirmation → Entry
+- Retest tolerance: ±0.5% of resistance.
+- Retest must not close back below resistance.
 
-Preferred entry sequence:
-
-Breakout → Candle Close → Retest → Buyer Confirmation → Entry
-
-A retest is preferred over chasing an already extended candle.
-
-If price moves too far from the planned entry, expire the signal rather than chasing the pump.
-
-Late Entry Protection
-
-Reject signals when:
-
-- Price is excessively extended from EMA20.
-- Breakout already occurred without a valid retest.
-- Remaining upside is insufficient for 1:2 R:R.
-- Resistance is too close.
-- Volume confirmation disappears.
-- The setup becomes invalid before entry.
+**Pump Protection (Mandatory Rejection):**
+- 3 or more consecutive strong bullish candles (>1.5% body each).
+- RVOL spikes above 2.0 then collapses below 70% of peak.
+- Next resistance is <1.5% above entry (insufficient upside).
+- Price excessively extended from EMA20 or VWAP.
+- Late entry (ROC exceeds max threshold).
 
 ---
 
-7. SIGNAL SCORING CONFIGURATION
+## 7. SIGNAL SCORING CONFIGURATION
 
-Maximum score: 12 points.
+**Maximum score: 15 points.**
 
-Component| Maximum Points
-Market Condition| 1
-BTC Context| 1
-Trend Structure| 1
-EMA Confirmation| 1
-MA Confirmation| 1
-RSI Momentum| 1
-MACD Confirmation| 1
-ADX Strength| 1
-Relative Volume| 1
-VWAP Confirmation| 1
-OBV/CMF Confirmation| 1
-Breakout/Retest Quality| 1
-Total| 12
+| Component | Max Points |
+|---|---|
+| Market Condition | 1 |
+| BTC Context | 1 |
+| Multi-Timeframe Trend | 1 |
+| EMA Trend | 1 |
+| Moving Average Trend | 1 |
+| RSI Momentum | 1 |
+| MACD Momentum | 1 |
+| ADX Strength | 1 |
+| Relative Volume | 1 |
+| VWAP Confirmation | 1 |
+| OBV/CMF Buyer Flow | 1 |
+| Breakout/Retest Quality | 1 |
+| **BB Squeeze** | **1** |
+| **Early Momentum (ROC)** | **1** |
+| **Volume Acceleration** | **1** |
+| **Total** | **15** |
 
-Signal Classification
+**Signal Classification:**
+| Score | Classification |
+|---|---|
+| 0–9 | REJECT |
+| 10–12 | STRONG BUY candidate |
+| 13–15 | EXCELLENT BUY candidate |
 
-Score| Classification
-0–8| REJECT
-9–10| STRONG BUY candidate
-11–12| EXCELLENT BUY candidate
-
-A high score does not override mandatory rejection conditions.
-
-If required data is missing, do not award points based on assumptions.
-
-Only STRONG BUY and EXCELLENT BUY signals may be sent to Telegram.
-
----
-
-8. RISK MANAGEMENT CONFIGURATION
-
-Capital Risk
-
-Parameter| Value
-Maximum Risk per Trade| 1% of Total Capital
-Minimum Risk/Reward| 1:2
-Position Sizing| Stop-loss distance based
-Trading Mode| Spot Only
-
-Position sizing must account for:
-
-- Entry price
-- Stop-loss price
-- Total available capital
-- Maximum risk percentage
-- Trading fees
-- Estimated slippage
-
-The scanner must reject a setup if its calculated position size or execution cost violates risk limits.
-
-Stop-Loss
-
-Stop-loss must be based on:
-
-- Technical invalidation
-- Confirmed support
-- ATR14
-- Market volatility
-
-Stop-loss must not be selected using an arbitrary fixed percentage.
-
-Targets
-
-Target| Calculation Basis
-T1| First meaningful resistance / reward level
-T2| Next resistance / market structure
-T3| Extended resistance / trend continuation
-
-The initial setup must satisfy minimum 1:2 R:R to T1.
-
-Targets must be recalculated from actual entry and stop-loss levels.
+*A high score does not override mandatory rejection conditions. Missing data does not award points.*
 
 ---
 
-9. SIGNAL TRACKING CONFIGURATION
+## 8. RISK MANAGEMENT CONFIGURATION
 
-Parameter| Value
-Maximum Tracking Duration| 48 hours
-Scalp Entry Validity| 15 minutes
-Swing Entry Validity| 60 minutes
-Duplicate Prevention| Enabled
-Cooldown| 6 hours (initial)
-Signal Expiry| Enabled
-Performance Tracking| Enabled
+| Parameter | Value |
+|---|---|
+| Maximum Risk per Trade | 1% of Total Capital |
+| Minimum Risk/Reward | 1:2 |
+| Position Sizing | Stop-loss distance based |
+| Trading Mode | Spot Only |
 
-Track:
+**Position sizing includes:**
+Entry price, Stop-loss, Capital, Risk %, Fees (0.1%), Slippage (0.1%).
 
-- Signal timestamp
-- Entry price
-- Actual entry status
-- Stop-loss
-- T1/T2/T3
-- Maximum favorable movement
-- Maximum adverse movement
-- Target reached
-- Stop-loss reached
-- Expired status
-- Final result
+**Stop-Loss:**
+- Based on technical invalidation, support, and ATR.
+- **Minimum SL distance: 0.5%** (prevent noise stop-outs).
+- **Maximum SL distance: 8%** (prevent oversized losses).
+- Reject setup if SL cannot be placed within these bounds.
 
-A signal that expires before entry must not be counted as a completed trade.
+**Targets:**
+- T1: First meaningful resistance meeting minimum 1:2 R:R.
+- T2: Next higher resistance.
+- T3: Extended resistance / trend continuation.
+- **ATR Fallback:** If no resistance meets T1 R:R, use 2x, 3.5x, 5x ATR above entry.
 
 ---
 
-10. PUMP AND MANIPULATION PROTECTION
+## 9. SIGNAL TRACKING CONFIGURATION
+
+| Parameter | Value |
+|---|---|
+| Maximum Tracking Duration | 48 hours |
+| Scalp Entry Validity | 15 minutes |
+| Swing Entry Validity | 60 minutes |
+| Duplicate Prevention | Enabled |
+| Cooldown | 6 hours per symbol + strategy |
+
+**Tracked Fields:**
+- Signal timestamp, Entry price, Actual entry status (`entry_reached_at`).
+- **Entry window expired flag (`entry_window_expired`)**.
+- Stop-loss, T1/T2/T3.
+- Maximum favorable/adverse movement, Final result.
+
+*Signals that expire before entry (`EXPIRED_BEFORE_ENTRY`) are not counted as losing trades.*
+
+---
+
+## 10. PUMP AND MANIPULATION PROTECTION
 
 Reject or flag candidates showing:
+- Abnormal one-candle price spikes.
+- Extreme volume without follow-through.
+- Excessive spread or thin order books.
+- Rapid price reversal or unusual volatility.
+- Unreliable or stale market data (>120s for ticker).
+- Insufficient liquidity for planned position size.
 
-- Abnormal one-candle price spikes
-- Extreme volume without sustainable follow-through
-- Excessive spread
-- Thin order books
-- Rapid price reversal
-- Unusual volatility
-- Unreliable or stale market data
-- Insufficient liquidity for planned position size
-
-Volume spikes alone do not establish a valid breakout.
+*Volume spikes alone do not establish a valid breakout.*
 
 ---
 
-11. DATA QUALITY AND API CONFIGURATION
+## 11. DATA QUALITY AND API CONFIGURATION
 
-Binance Public API
+**Binance Public API:**
+- Base URL: `https://data-api.binance.vision`
+- Endpoints: Exchange Information, Klines, 24H Ticker, Order Book Depth.
 
-Required endpoints:
-
-- Exchange Information
-- Kline/Candlestick Data
-- 24H Ticker Statistics
-- Order Book Depth
-
-Base URL:
-
-"https://data-api.binance.vision"
-
-Data Rules
-
-- Use public Spot market data only.
-- Validate symbol trading status.
+**Data Rules:**
+- Validate symbol trading status (Spot only).
 - Validate candle timestamps.
-- Reject stale or incomplete data.
-- Handle API errors and rate limits.
-- Retry temporary failures with controlled backoff.
+- Reject stale or incomplete data (drop unclosed candles).
+- Handle API errors (418/429) with exponential backoff.
 - Never replace missing data with invented values.
 
-External data such as BTC dominance, total market cap, Fear & Greed and macro indicators may be used only when a reliable source is available.
-
-Unavailable external data must be marked UNKNOWN.
-
-Initial Data Freshness Limits
-
-Data| Maximum Age
-5m Candle| Must be closed
-15m Candle| Must be closed
-30m Candle| Must be closed
-1H Candle| Must be closed
-24H Ticker| 120 seconds
-Order Book| 10 seconds
-
-If data exceeds its freshness limit, reject or re-fetch it before evaluation.
+**Data Freshness Limits:**
+| Data | Maximum Age |
+|---|---|
+| Candles (5m, 15m, 1H) | Must be closed |
+| 24H Ticker | 120 seconds |
+| Order Book | 10 seconds |
 
 ---
 
-12. TELEGRAM CONFIGURATION
+## 12. TELEGRAM CONFIGURATION
 
-Required GitHub Secrets:
+**Required GitHub Secrets:**
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
 
-- "TELEGRAM_BOT_TOKEN"
-- "TELEGRAM_CHAT_ID"
+**Message Formatting:**
+- **HTML formatting** for readability (fallback to plain text on error).
+- Bold headers, code-formatted prices.
 
-Never store Telegram credentials directly in source code.
-
-Signal Message Requirements
-
-Every actionable alert must contain:
-
-- Coin symbol
-- Signal classification
-- Strategy type
-- Signal score
-- Market condition
-- Entry zone
-- Stop-loss
-- T1
-- T2
-- T3
-- Risk/reward
-- Entry expiry
-- Signal timestamp in UTC
-- Important warnings
-
-Telegram test messages must be separate from actual trading signals.
+**Every actionable alert must contain:**
+- Coin symbol, Signal classification, Strategy, Score (X/15).
+- Market condition, BTC trend.
+- Entry zone, Stop-loss (% distance), T1/T2/T3 (with R:R).
+- Position risk %, Estimated loss, Position value.
+- RSI, Relative Volume.
+- Entry expiry time (UTC) and Signal timestamp (UTC).
+- Invalidation condition and Important warnings.
 
 ---
 
-13. GITHUB ACTIONS CONFIGURATION
+## 13. GITHUB ACTIONS CONFIGURATION
 
-Parameter| Value
-Runtime| Python 3.11
-Scan Schedule| Every 5 minutes
-Workflow| GitHub Actions
-Notifications| Telegram
-Credentials| GitHub Secrets
-Manual Testing| Enabled
-Automated Tests| Required
+| Parameter | Value |
+|---|---|
+| Runtime | Python 3.11 |
+| Scan Schedule | Every 5 minutes (cron) |
+| Workflow | GitHub Actions |
+| Manual Testing | Enabled (DRY_RUN) |
+| Automated Tests | Required (45 tests) |
 
-The workflow must run tests before production signal generation.
-
-A successful GitHub Actions run does not prove that the scanner generates profitable signals.
+*The workflow must run tests before production signal generation. A successful GitHub Actions run does not prove profitability.*
 
 ---
 
-14. TESTING AND VALIDATION
+## 14. TESTING AND VALIDATION
 
-Before live deployment:
+**Stage 1 — Technical Tests (45 tests):**
+- Syntax/Import tests, Config, Indicators, Market filter, Coin selection, Entry engine, Risk calculation, Telegram interface, Signal tracking.
 
-Stage 1 — Technical Tests
+**Stage 2 — Historical Backtesting:**
+- Win rate, Profit factor, Max drawdown, False breakout rate, Target hit rates, Fees/slippage impact.
 
-- Syntax tests
-- Import tests
-- Indicator tests
-- Market filter tests
-- Coin selection tests
-- Entry validation tests
-- Risk calculation tests
-- Telegram connection tests
-- Signal tracking tests
+**Stage 3 — Paper Trading:**
+- Collect at least 30–50 paper signals before considering live deployment.
 
-Stage 2 — Historical Backtesting
-
-Evaluate:
-
-- Win rate
-- Profit factor
-- Average win/loss
-- Maximum drawdown
-- T1/T2/T3 achievement rates
-- Stop-loss frequency
-- False breakout frequency
-- Fees and slippage
-- Scalp vs swing performance
-
-Stage 3 — Paper Trading
-
-Collect at least 30–50 paper signals before considering live deployment.
-
-Do not assume profitability from a small sample.
-
-Stage 4 — Live Deployment
-
-Enable live Telegram signals only after the previous stages pass.
-
-Review actual execution quality and performance regularly.
+**Stage 4 — Live Deployment:**
+- Enable live Telegram signals only after stages 1–3 pass.
 
 ---
 
-15. CONFIGURATION CHANGE POLICY
+## 15. CONFIGURATION CHANGE POLICY
 
 1. All initial thresholds are provisional.
 2. Do not change thresholds without a documented reason.
 3. Use backtesting and paper-trading evidence before optimization.
 4. Avoid overfitting to a small sample.
-5. Preserve the original configuration for comparison.
-6. Every configuration change must be tested.
-7. Do not force 5–7 daily signals.
-8. Signal quality takes priority over signal quantity.
-9. Never bypass mandatory rejection rules to increase signal frequency.
+5. Every configuration change must be tested.
+6. Do not force 5–7 daily signals.
+7. Never bypass mandatory rejection rules to increase signal frequency.
 
 ---
 
-16. FINAL CONFIGURATION PRINCIPLE
+## 16. FINAL CONFIGURATION PRINCIPLE
 
 The scanner's primary objective is not to generate frequent alerts.
 
@@ -493,4 +348,4 @@ Its objective is to identify early, liquid, technically confirmed Binance Spot U
 
 Accuracy, execution quality and capital protection take priority over signal frequency.
 
-END OF CONFIG SPECIFICATION
+**END OF CONFIG SPECIFICATION**

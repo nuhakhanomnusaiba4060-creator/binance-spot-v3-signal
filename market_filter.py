@@ -1,4 +1,3 @@
-
 """
 Binance Spot V3 Smart Signal Scanner
 BTC Market Filter
@@ -16,7 +15,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from config import MARKET_CONFIG
+from config import (
+    MARKET_CONFIG,
+    INDICATOR_CONFIG,
+    FILTER_CONFIG,
+)
+
 from indicators import calculate_all_indicators
 
 
@@ -57,26 +61,38 @@ def _normalise_key(value):
     )
 
 
-def _find_config_value(target):
-    target = _normalise_key(target)
-
-    def search(mapping):
-        if not isinstance(mapping, dict):
-            return None
-
-        for key, value in mapping.items():
-            if _normalise_key(key) == target:
-                return value
-
-        for value in mapping.values():
-            if isinstance(value, dict):
-                result = search(value)
-                if result is not None:
-                    return result
-
+def _find_in_config(config, target):
+    """Search for a normalised key inside a config dict (recursive)."""
+    if not isinstance(config, dict):
         return None
 
-    return search(MARKET_CONFIG)
+    target_key = _normalise_key(target)
+
+    for key, value in config.items():
+        if _normalise_key(key) == target_key:
+            return value
+
+    for value in config.values():
+        if isinstance(value, dict):
+            result = _find_in_config(value, target)
+            if result is not None:
+                return result
+
+    return None
+
+
+def _find_config_value(target):
+    """
+    Search order:
+    1. INDICATOR_CONFIG (contains RSI/ADX periods)
+    2. FILTER_CONFIG (contains volume thresholds)
+    3. MARKET_CONFIG (contains market-specific overrides)
+    """
+    for config in (INDICATOR_CONFIG, FILTER_CONFIG, MARKET_CONFIG):
+        value = _find_in_config(config, target)
+        if value is not None:
+            return value
+    return None
 
 
 def _get_setting(name, default):
@@ -127,9 +143,10 @@ STRONG_ADX_MIN = float(
     )
 )
 
+# 🔥 HIGH_VOLUME_RVOL now pulls from FILTER_CONFIG.PREFERRED_RELATIVE_VOLUME
 HIGH_VOLUME_RVOL = float(
     _get_setting(
-        "HIGH_VOLUME_RVOL",
+        "PREFERRED_RELATIVE_VOLUME",
         DEFAULT_CONFIG["HIGH_VOLUME_RVOL"],
     )
 )
@@ -191,6 +208,7 @@ def analyze_btc_timeframe(df, timeframe):
         "relative_volume": None,
         "volume_status": "UNKNOWN",
         "data_quality": "UNKNOWN",
+        "trend_conditions": {},
         "warnings": [],
     }
 
@@ -200,8 +218,14 @@ def analyze_btc_timeframe(df, timeframe):
         )
         return result
 
+    # 🔥 Defensive: Drop the latest unclosed candle if it exists.
+    # This ensures indicators on 1h/4h reflect only completed candles.
+    prepared = df.copy()
+    if len(prepared) > 2:
+        prepared = prepared.iloc[:-1]
+
     try:
-        enriched = calculate_all_indicators(df)
+        enriched = calculate_all_indicators(prepared)
 
     except Exception as exc:
         logger.exception(
@@ -298,6 +322,14 @@ def analyze_btc_timeframe(df, timeframe):
         and macd_histogram < 0
     )
 
+    # 🔥 Detailed diagnostic breakdown for tuning
+    result["trend_conditions"] = {
+        "bullish_structure": bool(bullish_structure),
+        "bearish_structure": bool(bearish_structure),
+        "bullish_momentum": bool(bullish_momentum),
+        "bearish_momentum": bool(bearish_momentum),
+    }
+
     if bullish_structure and bullish_momentum:
         result["trend"] = "BULLISH"
 
@@ -320,6 +352,17 @@ def analyze_btc_timeframe(df, timeframe):
 
     else:
         result["volume_status"] = "LOW"
+
+    # 🔥 Explain WHY trend is NEUTRAL
+    if result["trend"] == "NEUTRAL":
+        reasons = []
+        if not (bullish_structure or bearish_structure):
+            reasons.append("MA structure mixed")
+        if not (bullish_momentum or bearish_momentum):
+            reasons.append("momentum mixed")
+        result["warnings"].append(
+            f"{timeframe}: NEUTRAL trend — " + ", ".join(reasons)
+        )
 
     return result
 
@@ -387,11 +430,6 @@ def determine_btc_trend(timeframe_results):
 # ==================================================
 
 def detect_high_risk(timeframe_results):
-    """
-    Existing HIGH_RISK conditions are preserved.
-    Additional diagnostic logs explain the decision.
-    """
-
     one_hour = timeframe_results.get("1h", {})
     four_hour = timeframe_results.get("4h", {})
 
@@ -669,13 +707,6 @@ def determine_risk_level(market_status):
 # ==================================================
 
 def analyze_market(btc_data, external_data=None):
-    """
-    Main market analysis.
-
-    btc_data must contain DataFrames for 15m, 1h and 4h.
-    External data is optional and is never fabricated.
-    """
-
     if not isinstance(btc_data, dict):
         return {
             "market_status": "UNKNOWN",
@@ -765,6 +796,23 @@ def analyze_market(btc_data, external_data=None):
     if external_result["sentiment_status"] == "UNKNOWN":
         warnings.append("Fear and Greed data unavailable.")
 
+    # 🔥 Detailed diagnostic: explain 1h and 4h trend conditions
+    logger.info(
+        "BTC TREND BREAKDOWN | "
+        "1h: bullish_structure=%s, bearish_structure=%s, "
+        "bullish_momentum=%s, bearish_momentum=%s | "
+        "4h: bullish_structure=%s, bearish_structure=%s, "
+        "bullish_momentum=%s, bearish_momentum=%s",
+        timeframe_results["1h"]["trend_conditions"].get("bullish_structure"),
+        timeframe_results["1h"]["trend_conditions"].get("bearish_structure"),
+        timeframe_results["1h"]["trend_conditions"].get("bullish_momentum"),
+        timeframe_results["1h"]["trend_conditions"].get("bearish_momentum"),
+        timeframe_results["4h"]["trend_conditions"].get("bullish_structure"),
+        timeframe_results["4h"]["trend_conditions"].get("bearish_structure"),
+        timeframe_results["4h"]["trend_conditions"].get("bullish_momentum"),
+        timeframe_results["4h"]["trend_conditions"].get("bearish_momentum"),
+    )
+
     return {
         "market_status": market_status,
         "btc_trend": btc_trend,
@@ -804,19 +852,7 @@ def analyze_market(btc_data, external_data=None):
 # 11. MARKET FILTER VALIDATION
 # ==================================================
 
-
 def validate_market_context(market_context):
-    """
-    Validate BTC market context before allowing new signals.
-
-    Rejects:
-    - Missing or malformed market context
-    - HIGH_RISK and UNKNOWN market conditions
-    - Incomplete or partial market data
-    - Inconsistent risk levels
-    - Missing or contradictory signal policies
-    """
-
     if not isinstance(market_context, dict):
         return False
 
@@ -828,11 +864,9 @@ def validate_market_context(market_context):
     if status in ("HIGH_RISK", "UNKNOWN"):
         return False
 
-    # All required BTC timeframes must be valid.
     if market_context.get("data_quality") != "VALID":
         return False
 
-    # Verify the risk level against the actual market status.
     expected_risk_levels = {
         "BULLISH": "LOW_TO_MODERATE",
         "NEUTRAL": "MODERATE",
@@ -846,7 +880,6 @@ def validate_market_context(market_context):
     if market_context.get("risk_level") != expected_risk:
         return False
 
-    # Signal policy must exist and explicitly allow new signals.
     signal_policy = market_context.get("signal_policy")
 
     if not isinstance(signal_policy, dict):
@@ -855,7 +888,6 @@ def validate_market_context(market_context):
     if signal_policy.get("allow_new_signals") is not True:
         return False
 
-    # Market caution must match the market classification.
     expected_caution = status in ("BEARISH", "NEUTRAL")
 
     if signal_policy.get("market_caution") is not expected_caution:

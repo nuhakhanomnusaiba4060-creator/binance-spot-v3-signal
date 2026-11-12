@@ -1,4 +1,3 @@
-
 """
 Binance Spot V3 Smart Signal Scanner
 Coin Selection Engine
@@ -9,6 +8,7 @@ Responsibilities:
 - Filter by 24h quote volume and trade count.
 - Validate order-book spread and liquidity.
 - Reject invalid, illiquid, and leveraged-token symbols.
+- Reject tokenized stocks, stablecoins, and metals.
 - Return structured candidate records.
 
 No trading signals are generated in this module.
@@ -104,18 +104,77 @@ LEVERAGED_SUFFIXES = (
     "BEARUSDT",
 )
 
-EXCLUDED_SYMBOLS = {
-    "TSLAUSDT",
-    "AAPLUSDT",
-    "NVDAUSDT",
-    "AMZNUSDT",
-    "GOOGLUSDT",
-    "METAUSDT",
-    "MSFTUSDT",
-    "MSTRUSDT",
-    "COINUSDT",
-    "HOODUSDT",
+# 🔥 Binance xStocks (tokenized stocks) — NOT real cryptocurrencies.
+# These do not pump like crypto and follow traditional stock market hours.
+TOKENIZED_STOCKS = {
+    "AAPLBUSDT",   # Apple
+    "AMCBUSDT",    # AMC Entertainment
+    "AMZNBUSDT",   # Amazon
+    "COINBUSDT",   # Coinbase
+    "CRMBUSDT",    # Salesforce
+    "FWDIBUSDT",   # Forward Industries
+    "GMEBUSDT",    # GameStop
+    "GOOGLBUSDT",  # Google (Alphabet)
+    "HOODBUSDT",   # Robinhood
+    "HPEBUSDT",    # Hewlett Packard Enterprise
+    "INTCBUSDT",   # Intel
+    "MDBBUSDT",    # MongoDB
+    "MSFTBUSDT",   # Microsoft
+    "MSTRBUSDT",   # MicroStrategy
+    "MUBUSDT",     # Micron Technology
+    "NFLXBUSDT",   # Netflix
+    "NVDABUSDT",   # Nvidia
+    "PYPLBUSDT",   # PayPal
+    "QBTSBUSDT",   # Quantum Computing
+    "SOXLBUSDT",   # Semiconductor Bull ETF
+    "SOXSBUSDT",   # Semiconductor Bear ETF
+    "SPCXBUSDT",   # SpaceX
+    "STXBUSDT",    # Seagate Technology
+    "TSLABUSDT",   # Tesla
+    "USARBUSDT",   # USA Rare Earth
+    "UVXYBUSDT",   # VIX Short-Term ETF
+    "VSTBUSDT",    # Vistra Corp
+    "WENBUSDT",    # Wendy's
+    "ZMBUSDT",     # Zoom
+    "BOTBUSDT",    # BOT tokenized
 }
+
+# 🔥 Stablecoins — price pegged to $1, cannot pump.
+STABLECOINS = {
+    "USDCUSDT",     # USD Coin
+    "BUSDUSDT",     # Binance USD (deprecated)
+    "TUSDUSDT",     # TrueUSD
+    "USDPUSDT",     # Pax Dollar
+    "FDUSDUSDT",    # First Digital USD
+    "USD1USDT",     # World Liberty USD
+    "RLUSDUSDT",    # Ripple USD
+    "XUSDUSDT",     # X USD
+    "USDEUSDT",     # Ethena USD
+    "USDEBUSDT",    # Ethena USD (alt)
+    "DUSDT",        # D stablecoin
+    "AEURUSDT",     # Anchored EUR
+    "EURUSDT",      # Euro
+    "GBPUSDT",      # British Pound
+    "AUDUSDT",      # Australian Dollar
+}
+
+# 🔥 Precious metals and wrapped tokens — low volatility or non-independent.
+LOW_VOLATILITY_ASSETS = {
+    "XAUTUSDT",   # Tether Gold
+    "PAXGUSDT",   # Pax Gold
+    "WBTCUSDT",   # Wrapped Bitcoin
+    "WETHUSDT",   # Wrapped Ethereum
+    "STETHUSDT",  # Lido Staked ETH
+    "CBBTCUSDT",  # Coinbase Wrapped BTC
+    "BFUSDUSDT",  # Binance Futures USD
+}
+
+# Combined exclusion set for fast lookup.
+EXCLUDED_SYMBOLS = (
+    TOKENIZED_STOCKS
+    | STABLECOINS
+    | LOW_VOLATILITY_ASSETS
+)
 
 
 def _is_valid_symbol(symbol: str) -> bool:
@@ -400,12 +459,29 @@ def select_coins(
 
     candidates = []
 
+    excluded_stocks_count = 0
+    excluded_stables_count = 0
+    excluded_leveraged_count = 0
+
     for raw_symbol in symbols:
 
         if not isinstance(raw_symbol, str):
             continue
 
         symbol = raw_symbol.upper().strip()
+
+        # 🔥 Track exclusion counts for diagnostic logs.
+        if symbol in TOKENIZED_STOCKS:
+            excluded_stocks_count += 1
+            continue
+
+        if symbol in STABLECOINS:
+            excluded_stables_count += 1
+            continue
+
+        if symbol.endswith(LEVERAGED_SUFFIXES):
+            excluded_leveraged_count += 1
+            continue
 
         if not _is_valid_symbol(symbol):
             continue
@@ -563,6 +639,16 @@ def select_coins(
         len(candidates),
     )
 
+    # 🔥 Diagnostic log so you know what was filtered out.
+
+    if excluded_stocks_count or excluded_stables_count:
+        logger.info(
+            "Filtered out: %s stock tokens | %s stablecoins | %s leveraged",
+            excluded_stocks_count,
+            excluded_stables_count,
+            excluded_leveraged_count,
+        )
+
     return candidates
 
 
@@ -629,4 +715,6 @@ def get_selector_config() -> dict:
         "QUOTE_ASSET": "USDT",
         "SPOT_ONLY": True,
         "EXCLUDE_LEVERAGED_TOKENS": True,
+        "EXCLUDE_TOKENIZED_STOCKS": True,
+        "EXCLUDE_STABLECOINS": True,
     }

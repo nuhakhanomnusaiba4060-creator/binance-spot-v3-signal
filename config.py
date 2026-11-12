@@ -1,9 +1,8 @@
-
 """
 Binance Spot V3 Smart Signal Scanner
 Central Configuration Module
 
-Version: 3.0.1
+Version: 3.1.0
 Python: 3.11
 Market: Binance Spot Only
 Quote Asset: USDT Only
@@ -21,7 +20,7 @@ import math
 # ============================================================
 
 CONFIG = {
-    "VERSION": "3.0.1",
+    "VERSION": "3.1.0",
     "EXCHANGE": "BINANCE",
     "MARKET_TYPE": "SPOT",
     "QUOTE_ASSET": "USDT",
@@ -143,8 +142,10 @@ FILTER_CONFIG = {
     "MIN_24H_QUOTE_VOLUME_USDT": 3_000_000,
     "MIN_QUOTE_VOLUME_USDT": 3_000_000,
     "MIN_QUOTE_VOLUME": 3_000_000,
-    "MIN_RELATIVE_VOLUME": 1.5,
-    "PREFERRED_RELATIVE_VOLUME": 2.0,
+    
+    # 🔥 অপ্টিমাইজড লিমিট (Early Pump ধরার জন্য)
+    "MIN_RELATIVE_VOLUME": 1.2,
+    "PREFERRED_RELATIVE_VOLUME": 1.5,
     "MAX_SPREAD_PERCENT": 0.15,
     "MIN_24H_TRADE_COUNT": 1000,
     "MIN_24H_TRADES": 1000,
@@ -180,6 +181,8 @@ FILTER_CONFIG = {
         "CHECK_THIN_ORDER_BOOK": True,
         "CHECK_ABNORMAL_VOLATILITY": True,
         "REJECT_STALE_DATA": True,
+        "MAX_ROC_PERCENT": 4.0,       # 4% এর বেশি বাড়লে Late Entry
+        "MAX_BB_WIDTH": 0.20,         # বোলিঙ্গার ব্যান্ড অতিরিক্ত চওড়া হলে বাদ
     },
 }
 
@@ -200,6 +203,11 @@ INDICATOR_CONFIG = {
     "RELATIVE_VOLUME": {"BASELINE_CANDLES": 20},
     "OBV": {"METHOD": "STANDARD"},
     "CMF": {"PERIOD": 20},
+    
+    # 🔥 নতুন ৩টি ইন্ডিকেটর
+    "ROC": {"PERIOD": 5},
+    "VOLUME_MOMENTUM": {"PERIOD": 3},
+
     "SUPPORT_RESISTANCE": {
         "METHOD": "RECENT_CONFIRMED_SWING_LEVELS",
         "PIVOT_LOOKBACK": 5,
@@ -234,6 +242,7 @@ MARKET_CONFIG = {
 # ============================================================
 
 SIGNAL_CONFIG = {
+    # 🔥 নতুন ৩টি স্কোরিং কম্পোনেন্ট যুক্ত করা হলো (মোট ১৫টি)
     "SCORE_COMPONENTS": [
         "market_condition",
         "btc_context",
@@ -247,19 +256,22 @@ SIGNAL_CONFIG = {
         "vwap_confirmation",
         "buyer_flow",
         "breakout_retest",
+        "bb_squeeze",             # NEW
+        "early_momentum",         # NEW
+        "volume_acceleration",    # NEW
     ],
     "POINTS_PER_COMPONENT": 1,
-    "MAX_SCORE": 12,
-    "MIN_SCORE": 9,
-    "REJECT_MAX_SCORE": 8,
-    "STRONG_MIN_SCORE": 9,
-    "EXCELLENT_MIN_SCORE": 11,
+    "MAX_SCORE": 15,
+    "MIN_SCORE": 10,
+    "REJECT_MAX_SCORE": 9,
+    "STRONG_MIN_SCORE": 10,
+    "EXCELLENT_MIN_SCORE": 13,
 
-    # Compatibility aliases used by configuration validation.
-    "STRONG_BUY_MIN_SCORE": 9,
-    "STRONG_BUY_MAX_SCORE": 10,
-    "EXCELLENT_BUY_MIN_SCORE": 11,
-    "EXCELLENT_BUY_MAX_SCORE": 12,
+    # Compatibility aliases
+    "STRONG_BUY_MIN_SCORE": 10,
+    "STRONG_BUY_MAX_SCORE": 12,
+    "EXCELLENT_BUY_MIN_SCORE": 13,
+    "EXCELLENT_BUY_MAX_SCORE": 15,
 
     "MISSING_DATA_POLICY": "DO_NOT_AWARD_POINTS",
     "MANDATORY_REJECTION_OVERRIDES_SCORE": True,
@@ -273,6 +285,7 @@ SIGNAL_CONFIG = {
 
 TRACKING_CONFIG = {
     "MAX_TRACKING_HOURS": 48,
+    "MAX_TRACK_HOURS": 48,  # 🔥 signal_tracker.py-এর সাথে সিঙ্ক
     "SCALP_ENTRY_VALIDITY_MINUTES": 15,
     "SWING_ENTRY_VALIDITY_MINUTES": 60,
     "DUPLICATE_PREVENTION": True,
@@ -568,11 +581,12 @@ def validate_config():
     if "UNKNOWN" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
         raise ValueError("UNKNOWN market must reject new signals.")
 
+    # 🔥 স্কোরিং সিস্টেম ভ্যালিডেশন আপডেট করা হলো
     if SIGNAL_CONFIG["MAX_SCORE"] != len(SIGNAL_CONFIG["SCORE_COMPONENTS"]):
-        raise ValueError("Signal scoring configuration mismatch.")
+        raise ValueError("Signal scoring configuration mismatch. MAX_SCORE must equal number of components.")
 
-    if SIGNAL_CONFIG["MIN_SCORE"] != 9:
-        raise ValueError("Minimum signal score must be 9.")
+    if SIGNAL_CONFIG["MIN_SCORE"] < 8:
+        raise ValueError("Minimum signal score must be at least 8.")
 
     if not (
         0 <= SIGNAL_CONFIG["REJECT_MAX_SCORE"]

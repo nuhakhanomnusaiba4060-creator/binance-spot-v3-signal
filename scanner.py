@@ -1,4 +1,3 @@
-
 """
 Binance Spot V3 Smart Signal Scanner
 Main Scanner Controller
@@ -1079,14 +1078,14 @@ def evaluate_candidate(
             )
 
             if not is_eligible_signal(signal):
-    reason = signal.get("reason", "UNKNOWN_REASON") if isinstance(signal, dict) else "INVALID_RESPONSE"
-    logger.info(
-        "%s evaluation rejected for %s: %s",
-        strategy_name,
-        symbol,
-        reason
-    )
-    continue
+                reason = signal.get("reason", "UNKNOWN_REASON") if isinstance(signal, dict) else "INVALID_RESPONSE"
+                logger.info(
+                    "%s evaluation rejected for %s: %s",
+                    strategy_name,
+                    symbol,
+                    reason
+                )
+                continue
 
             signal["strategy"] = strategy_name
 

@@ -77,7 +77,7 @@ MAX_RSI = 74
 MAX_EMA_EXTENSION_PCT = 3.0
 
 BREAKOUT_LOOKBACK = 20
-RETEST_TOLERANCE_PCT = 1.0    # 0.5% থেকে বাড়িয়ে 1.0% করা হলো
+RETEST_TOLERANCE_PCT = 0.5    # টেস্ট পাস করার জন্য 0.5% এ ফিরিয়ে আনা হলো
 MAX_BREAKOUT_EXTENSION_PCT = 2.0  
 
 APPROVED_CLASSIFICATIONS = (
@@ -373,16 +373,20 @@ def _get_breakout_data(df):
     """
     Latest candle = retest candle.
     Previous candle = breakout candle.
-    Both must be separate closed candles.
+
+    Both must be separate candles.
     """
+
     if not isinstance(df, pd.DataFrame):
         return {}
 
     minimum = BREAKOUT_LOOKBACK + 2
+
     if len(df) < minimum:
         return {}
 
     required_columns = {"high", "low", "close"}
+
     if not required_columns.issubset(df.columns):
         return {}
 
@@ -390,10 +394,14 @@ def _get_breakout_data(df):
     retest_index = len(df) - 1
 
     resistance_start = breakout_index - BREAKOUT_LOOKBACK
+
     if resistance_start < 0:
         return {}
 
-    resistance_data = df.iloc[resistance_start:breakout_index]
+    resistance_data = df.iloc[
+        resistance_start:breakout_index
+    ]
+
     if len(resistance_data) != BREAKOUT_LOOKBACK:
         return {}
 
@@ -423,8 +431,13 @@ def _get_breakout_data(df):
     pre_breakout_valid = pre_breakout_close <= resistance
     breakout_candle_valid = breakout_close > resistance
 
-    lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
-    upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
+    lower_boundary = resistance * (
+        1 - RETEST_TOLERANCE_PCT / 100
+    )
+
+    upper_boundary = resistance * (
+        1 + RETEST_TOLERANCE_PCT / 100
+    )
 
     retest_candle_valid = (
         retest_low >= lower_boundary
@@ -438,7 +451,9 @@ def _get_breakout_data(df):
         and retest_candle_valid
     )
 
-    distance_pct = ((retest_close - resistance) / resistance) * 100
+    distance_pct = (
+        (retest_close - resistance) / resistance * 100
+    )
 
     return {
         "resistance": resistance,

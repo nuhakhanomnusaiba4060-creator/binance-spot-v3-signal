@@ -71,13 +71,14 @@ STRONG_MIN_SCORE = int(_setting("STRONG_MIN_SCORE", 9))
 EXCELLENT_MIN_SCORE = int(_setting("EXCELLENT_MIN_SCORE", 11))
 MAX_SCORE = int(_setting("MAX_SCORE", 12))
 
-MIN_RVOL = 1.5
+# 🔥 অপ্টিমাইজড সেটিংস (Early Pump ধরার জন্য)
+MIN_RVOL = 1.2                # 1.5 থেকে কমিয়ে 1.2 করা হলো (আর্লি ভলিউম স্পাইক ধরতে)
 MAX_RSI = 74
 MAX_EMA_EXTENSION_PCT = 3.0
 
 BREAKOUT_LOOKBACK = 20
-RETEST_TOLERANCE_PCT = 0.5
-MAX_BREAKOUT_EXTENSION_PCT = 1.5
+RETEST_TOLERANCE_PCT = 1.0    # 0.5% থেকে বাড়িয়ে 1.0% করা হলো (রিটেস্ট মিস না হওয়ার জন্য)
+MAX_BREAKOUT_EXTENSION_PCT = 2.0  # 1.5 থেকে বাড়িয়ে 2.0% (একটু বড় ব্রেকআউট ক্যান্ডেল অ্যালাউ করতে)
 
 APPROVED_CLASSIFICATIONS = (
     "STRONG BUY",

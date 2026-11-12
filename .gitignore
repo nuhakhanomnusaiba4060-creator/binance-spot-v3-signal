@@ -1,13 +1,14 @@
-
 # Python cache
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
 # Virtual environment
 venv/
 env/
 .venv/
+ENV/
 
 # Environment variables and secrets
 .env
@@ -17,7 +18,15 @@ env/
 # Test cache
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.tox/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
 
 # Logs
 *.log
@@ -25,13 +34,21 @@ logs/
 
 # Runtime data
 signal_history.json
-scenner_state.json
+scanner_state.json
 *.tmp
+*.bak
 
 # IDE and editor
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # Operating system
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Icon\r
+
+# Notebook checkpoints
+.ipynb_checkpoints/

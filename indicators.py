@@ -1,4 +1,3 @@
-
 """
 Binance Spot V3 Smart Signal Scanner
 Technical Indicators Engine
@@ -219,6 +218,10 @@ MIN_CANDLES_FOR_MA200 = int(
         220,
     )
 )
+
+# 🔥 NEW INDICATOR SETTINGS
+ROC_PERIOD = int(_get_setting("ROC_PERIOD", 5))  # 5-candle momentum
+VOLUME_MOMENTUM_PERIOD = int(_get_setting("VOLUME_MOMENTUM_PERIOD", 3))
 
 
 # Validate configuration at import time.
@@ -829,6 +832,47 @@ def calculate_relative_volume(
 
 
 # ==================================================
+# 11b. VOLUME MOMENTUM (NEW)
+# ==================================================
+
+def calculate_volume_momentum(
+    volume,
+    period=VOLUME_MOMENTUM_PERIOD,
+):
+    """
+    Measures if volume is sequentially increasing.
+    A value > 1 means current volume is higher than the average of the last N candles.
+    A value > 1.5 means strong volume acceleration.
+    """
+    if period < 1:
+        raise ValueError("Volume momentum period must be positive.")
+
+    series = pd.Series(volume, dtype="float64")
+    
+    # Compare current candle volume to the average of previous N candles
+    previous_avg = series.shift(1).rolling(window=period, min_periods=period).mean()
+    
+    return series / previous_avg.replace(0, np.nan)
+
+
+# ==================================================
+# 11c. RATE OF CHANGE (ROC) (NEW)
+# ==================================================
+
+def calculate_roc(data, period=ROC_PERIOD):
+    """
+    Rate of Change: percentage change in price over N periods.
+    Useful for detecting sudden early price acceleration.
+    """
+    if period < 1:
+        raise ValueError("ROC period must be positive.")
+
+    close = pd.Series(data, dtype="float64")
+    
+    return ((close - close.shift(period)) / close.shift(period).replace(0, np.nan)) * 100
+
+
+# ==================================================
 # 12. OBV
 # ==================================================
 
@@ -934,10 +978,14 @@ def calculate_bollinger_bands(
         middle - std_dev * standard_deviation
     )
 
+    # 🔥 NEW: Bollinger Band Width (BBW) - detects squeezes
+    bb_width = (upper - lower) / middle.replace(0, np.nan)
+
     return pd.DataFrame({
         "bb_upper": upper,
         "bb_middle": middle,
         "bb_lower": lower,
+        "bb_width": bb_width,
     })
 
 
@@ -1211,11 +1259,14 @@ def calculate_all_indicators(df):
         atr
         vwap
         relative_volume
+        volume_momentum  # NEW
+        roc              # NEW
         obv
         cmf
         bb_upper
         bb_middle
         bb_lower
+        bb_width         # NEW
     """
 
     result = validate_dataframe(df)
@@ -1312,6 +1363,20 @@ def calculate_all_indicators(df):
         )
     )
 
+    # 🔥 NEW: Volume Momentum
+    result["volume_momentum"] = (
+        calculate_volume_momentum(
+            result["volume"],
+            VOLUME_MOMENTUM_PERIOD,
+        )
+    )
+
+    # 🔥 NEW: Rate of Change (Price Momentum)
+    result["roc"] = calculate_roc(
+        close,
+        ROC_PERIOD,
+    )
+
     # OBV
 
     result["obv"] = calculate_obv(
@@ -1336,6 +1401,9 @@ def calculate_all_indicators(df):
     result["bb_upper"] = bands["bb_upper"]
     result["bb_middle"] = bands["bb_middle"]
     result["bb_lower"] = bands["bb_lower"]
+    
+    # 🔥 NEW: Bollinger Band Width (Squeeze Detection)
+    result["bb_width"] = bands["bb_width"]
 
     return result
 
@@ -1412,6 +1480,10 @@ def get_latest_indicator_snapshot(df):
         "relative_volume": safe_value(
             "relative_volume"
         ),
+        
+        # 🔥 NEW INDICATORS IN SNAPSHOT
+        "volume_momentum": safe_value("volume_momentum"),
+        "roc": safe_value("roc"),
 
         "obv": safe_value("obv"),
         "cmf": safe_value("cmf"),
@@ -1419,6 +1491,7 @@ def get_latest_indicator_snapshot(df):
         "bb_upper": safe_value("bb_upper"),
         "bb_middle": safe_value("bb_middle"),
         "bb_lower": safe_value("bb_lower"),
+        "bb_width": safe_value("bb_width"),
 
         "support": levels["support"],
         "resistance": levels["resistance"],
@@ -1465,4 +1538,6 @@ def get_indicator_config():
         "min_candles_for_ma200": (
             MIN_CANDLES_FOR_MA200
         ),
+        "roc_period": ROC_PERIOD,
+        "volume_momentum_period": VOLUME_MOMENTUM_PERIOD,
     }

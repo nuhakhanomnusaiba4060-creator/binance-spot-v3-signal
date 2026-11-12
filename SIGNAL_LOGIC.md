@@ -114,11 +114,10 @@ Missing external data must be marked UNKNOWN.
 5. Coin Selection Filters
 
 Initial testing parameters:
-
 - Minimum 24H quote volume: $3 million.
-- Minimum relative volume: 1.5x.
-- Preferred relative volume: 2x or higher.
-- RSI initial preferred range: 50–68.
+- Minimum relative volume: 1.2x (tuned for early pump detection).
+- Preferred relative volume: 1.5x or higher.
+- RSI initial preferred range: 50–68 (SCALP) / 52–70 (SWING).
 - Minimum liquidity and order-book depth must be established through testing.
 - Spread and estimated slippage must remain within configured limits.
 
@@ -127,17 +126,16 @@ Do not treat these initial values as proven optimal settings.
 6. Pump Protection
 
 Reject or penalize a setup when:
-
 - Price has already experienced an excessive 24H pump.
+- **3 or more consecutive strong bullish candles (>1.5% body each) without consolidation.**
+- **RVOL spikes above 2.0 then collapses below 70% of peak (pump is dying).**
+- **Next resistance is within 1.5% above entry (insufficient upside).**
 - Multiple large bullish candles have occurred without a healthy consolidation.
 - Relative Volume collapses after a sharp price increase.
-- Price is too far above EMA20 or VWAP.
-- RSI is excessively extended.
-- Price is immediately below major resistance.
+- Price is too far above EMA20 or VWAP (extension > 3%).
+- RSI is excessively extended (> 74).
 - Buying pressure is weakening.
 - Breakout occurs without meaningful follow-through.
-
-Never chase a coin merely because it is moving rapidly.
 
 7. Breakout Confirmation
 
@@ -184,33 +182,36 @@ Reject the signal regardless of its numerical score if:
 - Duplicate signal cooldown is active.
 - Market is classified HIGH RISK.
 
+
 10. Signal Scoring
 
-Use a 12-point scoring model.
+Use a 15-point scoring model.
 
-Each category contributes one point:
-
+Base components (12):
 1. Market condition.
 2. BTC relative strength context.
 3. Trend alignment.
 4. EMA confirmation.
 5. MA structure.
-6. RSI momentum.
+6. RSI momentum (SCALP: 50–68 / SWING: 52–70).
 7. MACD confirmation.
-8. ADX trend strength.
-9. Relative Volume.
+8. ADX trend strength (SCALP: ≥18 / SWING: ≥22).
+9. Relative Volume (SCALP: ≥1.2 / SWING: ≥1.3).
 10. VWAP position.
 11. OBV/CMF buying pressure.
 12. Breakout/retest quality.
 
-Classification:
+Early-pump components (3):
+13. Bollinger Band Squeeze (width < 0.10).
+14. Early Momentum (ROC between 0.5% and 3%).
+15. Volume Acceleration (volume_momentum ≥ 1.2).
 
-- 0–8: REJECT.
-- 9–10: STRONG BUY candidate.
-- 11–12: EXCELLENT BUY candidate.
+Classification:
+- 0–9: REJECT.
+- 10–12: STRONG BUY candidate.
+- 13–15: EXCELLENT BUY candidate.
 
 Mandatory rejection rules override all scores.
-
 Scoring thresholds must be validated using historical data before live deployment.
 
 11. Risk Management
@@ -241,11 +242,13 @@ Targets:
 
 Never calculate targets without checking resistance and available upside.
 
-12. Signal Expiration
+## 12. Signal Expiration
 
-- Scalp entry validity: Initial 15-minute window.
-- Swing entry validity: Initial 60-minute window.
+- Scalp entry validity: 15-minute window.
+- Swing entry validity: 60-minute window.
+- If price does not reach entry within the window, mark as `ENTRY_WINDOW_EXPIRED`.
 - Cancel unfilled signals after expiration.
+- Track `entry_expiry` field in signal history.
 - Cancel immediately if technical invalidation occurs.
 - Recalculate only after a fresh setup forms.
 

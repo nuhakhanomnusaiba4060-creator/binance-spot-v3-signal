@@ -74,23 +74,23 @@ MAX_SCORE = int(_setting("MAX_SCORE", 15))
 # =========================================================
 
 SCALP_CONFIG = {
-    "MIN_RVOL": 1.4,               # ফেক পাম্প বাদ দিতে 1.4x ভলিউম
-    "MIN_ADX": 18.0,               # শক্তিশালী ট্রেন্ড নিশ্চিত করতে
-    "RSI_MIN": 50.0,               # মোমেন্টাম নিশ্চিত করতে
-    "RSI_MAX": 68.0,               # ওভারবট হওয়ার আগেই এন্ট্রি
-    "MAX_ROC": 3.5,                # এর বেশি বাড়লে "লেট এন্ট্রি" বাদ যাবে
-    "MAX_BB_WIDTH": 0.20,          # বেশি ভলাটাইল কয়েন বাদ
-    "MAX_EMA_EXTENSION_PCT": 3.0,  # EMA20 থেকে বেশি দূরে থাকলে বাদ
+    "MIN_RVOL": 1.05,              # টেস্টিংয়ের জন্য শিথিল
+    "MIN_ADX": 15.0,               # টেস্টিংয়ের জন্য শিথিল
+    "RSI_MIN": 45.0,
+    "RSI_MAX": 72.0,
+    "MAX_ROC": 5.0,
+    "MAX_BB_WIDTH": 0.25,
+    "MAX_EMA_EXTENSION_PCT": 3.5,
 }
 
 SWING_CONFIG = {
-    "MIN_RVOL": 1.5,               # সুইংয়ের জন্য আরও শক্তিশালী ভলিউম
-    "MIN_ADX": 22.0,               # সুইংয়ে শক্তিশালী ট্রেন্ড দরকার
-    "RSI_MIN": 52.0,
-    "RSI_MAX": 70.0,
-    "MAX_ROC": 4.5,
-    "MAX_BB_WIDTH": 0.25,
-    "MAX_EMA_EXTENSION_PCT": 3.5,
+    "MIN_RVOL": 1.10,              # টেস্টিংয়ের জন্য শিথিল
+    "MIN_ADX": 18.0,               # টেস্টিংয়ের জন্য শিথিল
+    "RSI_MIN": 48.0,
+    "RSI_MAX": 74.0,
+    "MAX_ROC": 6.0,
+    "MAX_BB_WIDTH": 0.30,
+    "MAX_EMA_EXTENSION_PCT": 4.0,
 }
 
 # Global safety limits

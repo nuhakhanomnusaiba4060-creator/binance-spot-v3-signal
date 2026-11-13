@@ -5,9 +5,9 @@ Entry Signal Generation Engine
 Spot market only.
 No Futures or Margin.
 
-Focus: PROFIT-FIRST (quality over quantity)
-- SCALP / SWING separate scoring (strict thresholds)
-- Breakout + separate candle retest
+Includes:
+- Profit-First SCALP / SWING separate scoring
+- Smart Breakout + separate-candle retest (looks back up to 4 candles)
 - Pump protection (consecutive bullish, RVOL collapse, insufficient upside)
 - Early-pump indicators (BB squeeze, ROC, volume momentum)
 """
@@ -70,33 +70,33 @@ MAX_SCORE = int(_setting("MAX_SCORE", 15))
 
 
 # =========================================================
-# STRATEGY-SPECIFIC THRESHOLDS (Profit-Quality Balanced)
+# STRATEGY-SPECIFIC THRESHOLDS (Profit-First)
 # =========================================================
 
 SCALP_CONFIG = {
-    "MIN_RVOL": 1.05,              # টেস্টিংয়ের জন্য শিথিল
-    "MIN_ADX": 15.0,               # টেস্টিংয়ের জন্য শিথিল
-    "RSI_MIN": 45.0,
-    "RSI_MAX": 72.0,
-    "MAX_ROC": 5.0,
+    "MIN_RVOL": 1.4,
+    "MIN_ADX": 18.0,
+    "RSI_MIN": 50.0,
+    "RSI_MAX": 68.0,
+    "MAX_ROC": 3.5,
+    "MAX_BB_WIDTH": 0.20,
+    "MAX_EMA_EXTENSION_PCT": 3.0,
+}
+
+SWING_CONFIG = {
+    "MIN_RVOL": 1.5,
+    "MIN_ADX": 22.0,
+    "RSI_MIN": 52.0,
+    "RSI_MAX": 70.0,
+    "MAX_ROC": 4.5,
     "MAX_BB_WIDTH": 0.25,
     "MAX_EMA_EXTENSION_PCT": 3.5,
 }
 
-SWING_CONFIG = {
-    "MIN_RVOL": 1.10,              # টেস্টিংয়ের জন্য শিথিল
-    "MIN_ADX": 18.0,               # টেস্টিংয়ের জন্য শিথিল
-    "RSI_MIN": 48.0,
-    "RSI_MAX": 74.0,
-    "MAX_ROC": 6.0,
-    "MAX_BB_WIDTH": 0.30,
-    "MAX_EMA_EXTENSION_PCT": 4.0,
-}
-
 # Global safety limits
 MAX_RSI = 74
-BREAKOUT_LOOKBACK = 10  # 20 থেকে কমিয়ে 10
-RETEST_TOLERANCE_PCT = 0.5
+BREAKOUT_LOOKBACK = 20
+RETEST_TOLERANCE_PCT = 1.0        # 🔥 বাড়ানো হলো ০.৫% থেকে ১.০%
 MAX_BREAKOUT_EXTENSION_PCT = 2.0
 
 # 🔥 Pump Protection constants
@@ -171,7 +171,7 @@ def _prepare_dataframe(df):
         return None
 
     required = ("open", "high", "low", "close", "volume")
-    minimum = max(30, BREAKOUT_LOOKBACK + 2)
+    minimum = max(30, BREAKOUT_LOOKBACK + 6)
 
     if len(df) < minimum:
         return None
@@ -387,14 +387,20 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 
 
 # =========================================================
-# BREAKOUT AND SEPARATE-CANDLE RETEST
+# BREAKOUT AND SEPARATE-CANDLE RETEST (SMART DETECTION)
 # =========================================================
 
 def _get_breakout_data(df):
+    """
+    Smart breakout + retest detection:
+    - Looks back up to 4 candles for a valid breakout.
+    - Ensures breakout and retest are on SEPARATE candles.
+    - Wider tolerance (±1.0%) so we don't miss good retests.
+    """
     if not isinstance(df, pd.DataFrame):
         return {}
 
-    minimum = BREAKOUT_LOOKBACK + 5
+    minimum = BREAKOUT_LOOKBACK + 6
     if len(df) < minimum:
         return {}
 
@@ -405,20 +411,25 @@ def _get_breakout_data(df):
     retest_index = len(df) - 1
     retest_candle = df.iloc[retest_index]
 
-    resistance_start_latest = retest_index - BREAKOUT_LOOKBACK
-    if resistance_start_latest >= 0:
-        res_data_latest = df.iloc[resistance_start_latest:retest_index]
-        res_level_latest = _number(res_data_latest["high"].max())
-        if res_level_latest is not None and _number(retest_candle["close"]) > res_level_latest:
+    # Check if the RETEST candle itself is a new breakout
+    resistance_start_retest = retest_index - BREAKOUT_LOOKBACK
+    if resistance_start_retest >= 0:
+        res_data_retest = df.iloc[resistance_start_retest:retest_index]
+        res_level_retest = _number(res_data_retest["high"].max())
+        if (
+            res_level_retest is not None
+            and _number(retest_candle["close"]) > res_level_retest
+        ):
             return {}
 
     breakout_found = False
     breakout_index = -1
     resistance = None
 
-    for i in range(2, 5):
+    for i in range(2, 5):  # Check 2, 3, and 4 candles back
         b_idx = len(df) - i
         resistance_start = b_idx - BREAKOUT_LOOKBACK
+
         if resistance_start < 0:
             continue
 
@@ -427,6 +438,9 @@ def _get_breakout_data(df):
 
         b_candle = df.iloc[b_idx]
         pre_b_candle = df.iloc[b_idx - 1]
+
+        if res_level is None:
+            continue
 
         if (
             _number(pre_b_candle["close"]) <= res_level
@@ -470,6 +484,7 @@ def _get_breakout_data(df):
         "distance_from_resistance_pct": distance_pct,
         "breakout_index": breakout_index,
         "retest_index": retest_index,
+        "candles_since_breakout": retest_index - breakout_index,
     }
 
 
@@ -751,15 +766,15 @@ def _build_components_scalp(trigger, entry_validation, trend_ok, market_status, 
         ),
         "bb_squeeze": (
             trigger.get("bb_width") is not None
-            and trigger["bb_width"] < 0.15
+            and trigger["bb_width"] < 0.10
         ),
         "early_momentum": (
             trigger.get("roc") is not None
-            and 0.3 <= trigger["roc"] <= SCALP_CONFIG["MAX_ROC"]
+            and 0.5 <= trigger["roc"] <= SCALP_CONFIG["MAX_ROC"]
         ),
         "volume_acceleration": (
             trigger.get("volume_momentum") is not None
-            and trigger["volume_momentum"] >= 1.15
+            and trigger["volume_momentum"] >= 1.2
         ),
     }
 
@@ -803,15 +818,15 @@ def _build_components_swing(trigger, entry_validation, trend_ok, market_status, 
         ),
         "bb_squeeze": (
             trigger.get("bb_width") is not None
-            and trigger["bb_width"] < 0.18
+            and trigger["bb_width"] < 0.12
         ),
         "early_momentum": (
             trigger.get("roc") is not None
-            and 0.3 <= trigger["roc"] <= SWING_CONFIG["MAX_ROC"]
+            and 0.5 <= trigger["roc"] <= SWING_CONFIG["MAX_ROC"]
         ),
         "volume_acceleration": (
             trigger.get("volume_momentum") is not None
-            and trigger["volume_momentum"] >= 1.10
+            and trigger["volume_momentum"] >= 1.15
         ),
     }
 
@@ -954,8 +969,8 @@ def _evaluate(symbol, market_data, market_context, strategy):
         "resistance": resistance,
         "resistance_levels": resistance_levels,
         "atr": entry_validation["atr"],
-        "atr_value": entry_validation["atr"],
-                "rsi": entry_validation["rsi"],
+                "atr_value": entry_validation["atr"],
+        "rsi": entry_validation["rsi"],
         "rvol": entry_validation["rvol"],
         "market_status": market_status,
         "btc_trend": btc_trend,
@@ -981,8 +996,18 @@ def _evaluate(symbol, market_data, market_context, strategy):
 # =========================================================
 
 def evaluate_scalp(symbol, market_data, indicators=None, market_context=None):
-    return _evaluate(symbol=symbol, market_data=market_data, market_context=market_context, strategy="SCALP")
+    return _evaluate(
+        symbol=symbol,
+        market_data=market_data,
+        market_context=market_context,
+        strategy="SCALP",
+    )
 
 
 def evaluate_swing(symbol, market_data, indicators=None, market_context=None):
-    return _evaluate(symbol=symbol, market_data=market_data, market_context=market_context, strategy="SWING")
+    return _evaluate(
+        symbol=symbol,
+        market_data=market_data,
+        market_context=market_context,
+        strategy="SWING",
+    )

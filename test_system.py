@@ -126,7 +126,6 @@ class ConfigurationTests(unittest.TestCase):
         self.assertTrue(config.API_CONFIG["USE_PUBLIC_API_ONLY"])
 
     def test_15_point_scoring_matches_components(self):
-        """🔥 NEW: Verify 15-point scoring sync with components."""
         self.assertEqual(
             config.SIGNAL_CONFIG["MAX_SCORE"],
             len(config.SIGNAL_CONFIG["SCORE_COMPONENTS"])
@@ -134,20 +133,17 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.SIGNAL_CONFIG["MAX_SCORE"], 15)
 
     def test_early_pump_components_present(self):
-        """🔥 NEW: Ensure early-pump components are in the scoring model."""
         components = config.SIGNAL_CONFIG["SCORE_COMPONENTS"]
         self.assertIn("bb_squeeze", components)
         self.assertIn("early_momentum", components)
         self.assertIn("volume_acceleration", components)
 
     def test_pump_protection_config_present(self):
-        """🔥 NEW: Pump protection thresholds must be configured."""
         protection = config.FILTER_CONFIG["PUMP_PROTECTION"]
         self.assertIn("MAX_ROC_PERCENT", protection)
         self.assertIn("MAX_BB_WIDTH", protection)
 
     def test_entry_validity_minutes_configured(self):
-        """🔥 NEW: Entry window validity must be set."""
         self.assertEqual(
             config.TRACKING_CONFIG["SCALP_ENTRY_VALIDITY_MINUTES"], 15
         )
@@ -189,7 +185,6 @@ class IndicatorTests(unittest.TestCase):
             self.assertTrue(np.isfinite(values.dropna()).all())
 
     def test_new_early_pump_indicators_present(self):
-        """🔥 NEW: Verify BB width, ROC, volume momentum are calculated."""
         result = indicators.calculate_all_indicators(self.df.copy())
         self.assertIn("bb_width", result.columns)
         self.assertIn("roc", result.columns)
@@ -243,12 +238,10 @@ class CoinSelectorTests(unittest.TestCase):
         self.assertFalse(coin_selector._is_valid_symbol("TESTUPUSDT"))
 
     def test_tokenized_stock_rejected(self):
-        """🔥 NEW: Binance xStocks must be rejected."""
         self.assertFalse(coin_selector._is_valid_symbol("NVDABUSDT"))
         self.assertFalse(coin_selector._is_valid_symbol("TSLABUSDT"))
 
     def test_stablecoin_rejected(self):
-        """🔥 NEW: Stablecoins must be rejected."""
         self.assertFalse(coin_selector._is_valid_symbol("USDCUSDT"))
         self.assertFalse(coin_selector._is_valid_symbol("XAUTUSDT"))
 
@@ -297,7 +290,6 @@ class EntryEngineTests(unittest.TestCase):
         )
 
     def test_scalp_swing_configs_differ(self):
-        """🔥 NEW: SCALP and SWING must have different thresholds."""
         self.assertNotEqual(
             entry_engine.SCALP_CONFIG["MIN_RVOL"],
             entry_engine.SWING_CONFIG["MIN_RVOL"],
@@ -308,7 +300,6 @@ class EntryEngineTests(unittest.TestCase):
         )
 
     def test_pump_protection_functions_exist(self):
-        """🔥 NEW: Pump protection functions must exist."""
         required = [
             "_has_consecutive_bullish_candles",
             "_has_rvol_collapse",
@@ -343,14 +334,12 @@ class RiskManagerTests(unittest.TestCase):
         self.assertGreater(result.get("quantity", 0), 0)
 
     def test_stop_loss_rejects_too_wide(self):
-        """🔥 NEW: SL wider than 8% must be rejected."""
         with self.assertRaises(ValueError):
             risk_manager.calculate_stop_loss(
                 entry_price=100, support_level=85, atr=None,
             )
 
     def test_stop_loss_bounds_configured(self):
-        """🔥 NEW: SL distance bounds must be configured."""
         self.assertGreater(risk_manager.MAX_STOP_LOSS_DISTANCE_PERCENT, 0)
         self.assertLessEqual(risk_manager.MAX_STOP_LOSS_DISTANCE_PERCENT, 20)
         self.assertGreater(risk_manager.MIN_STOP_LOSS_DISTANCE_PERCENT, 0)
@@ -394,11 +383,9 @@ class SignalTrackerTests(unittest.TestCase):
                 self.assertTrue(callable(getattr(signal_tracker, name, None)))
 
     def test_entry_expiry_function_exists(self):
-        """🔥 NEW: expire_unfilled_entries must exist."""
         self.assertTrue(callable(getattr(signal_tracker, "expire_unfilled_entries", None)))
 
     def test_entry_validity_constants_present(self):
-        """🔥 NEW: Entry window constants must be loaded."""
         self.assertEqual(signal_tracker.SCALP_ENTRY_VALIDITY_MINUTES, 15)
         self.assertEqual(signal_tracker.SWING_ENTRY_VALIDITY_MINUTES, 60)
 
@@ -438,47 +425,81 @@ class ScannerTests(unittest.TestCase):
 
 
 # =========================================================
-# 11. BREAKOUT + RETEST LOGIC TESTS
+# 11. BREAKOUT + RETEST LOGIC TESTS (SMART MULTI-CANDLE)
 # =========================================================
 
 class EntryEngineBreakoutRetestTests(unittest.TestCase):
 
     def make_breakout_dataframe(self, retest_low=100.80):
+        """
+        Structure:
+        - 20 stable candles → resistance at 101.0
+        - Breakout candle → closes at 102.0 (above resistance)
+        - Pullback candle → small red candle, still above resistance
+        - Retest candle → low touches resistance zone, closes above
+        """
         rows = []
-        for _ in range(23):
+
+        # 20 prior stable candles (resistance = 101.0)
+        for _ in range(20):
             rows.append({
                 "open": 100.0, "high": 101.0, "low": 99.5,
                 "close": 100.0, "volume": 1000.0,
             })
+
+        # Breakout candle
         rows.append({
-            "open": 100.0, "high": 103.0, "low": 100.0,
-            "close": 102.5, "volume": 2500.0,
+            "open": 100.0, "high": 102.5, "low": 100.0,
+            "close": 102.0, "volume": 2500.0,
         })
+
+        # Pullback candle (still above resistance)
         rows.append({
-            "open": 101.0, "high": 102.0, "low": retest_low,
-            "close": 101.5, "volume": 1800.0,
+            "open": 102.0, "high": 102.3, "low": 101.2,
+            "close": 101.8, "volume": 1500.0,
         })
+
+        # Retest candle (the one we evaluate)
+        rows.append({
+            "open": 101.8, "high": 102.1, "low": retest_low,
+            "close": 101.9, "volume": 1800.0,
+        })
+
         return pd.DataFrame(rows)
 
     def test_separate_candle_breakout_and_retest(self):
+        """Breakout and retest must be on separate candles and detected."""
         df = self.make_breakout_dataframe()
         result = entry_engine._get_breakout_data(df)
         self.assertTrue(result.get("breakout"))
         self.assertTrue(result.get("retest"))
         self.assertTrue(result.get("above_resistance"))
+        self.assertGreaterEqual(result.get("candles_since_breakout", 0), 1)
 
     def test_failed_retest_is_rejected(self):
+        """If retest low falls below resistance, it must be rejected."""
         df = self.make_breakout_dataframe(retest_low=99.0)
         result = entry_engine._get_breakout_data(df)
         self.assertFalse(result.get("retest", False))
 
     def test_breakout_without_separate_retest_is_rejected(self):
-        df = self.make_breakout_dataframe()
-        df.loc[df.index[-1], "open"] = 100.0
-        df.loc[df.index[-1], "high"] = 103.0
-        df.loc[df.index[-1], "low"] = 100.0
-        df.loc[df.index[-1], "close"] = 102.5
+        """If the latest candle itself is the breakout, it must be rejected."""
+        rows = []
 
+        # 20 stable candles
+        for _ in range(20):
+            rows.append({
+                "open": 100.0, "high": 101.0, "low": 99.5,
+                "close": 100.0, "volume": 1000.0,
+            })
+
+        # Latest candle itself is the breakout (no retest yet)
+        rows.append({
+            "open": 100.0, "high": 103.0, "low": 100.0,
+            "close": 102.5, "volume": 2500.0,
+        })
+
+        df = pd.DataFrame(rows)
         result = entry_engine._get_breakout_data(df)
 
         self.assertFalse(result.get("breakout", False))

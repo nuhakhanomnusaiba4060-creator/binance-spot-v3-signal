@@ -400,7 +400,7 @@ def _get_breakout_data(df):
     if not isinstance(df, pd.DataFrame):
         return {}
 
-    minimum = BREAKOUT_LOOKBACK + 6
+    minimum = BREAKOUT_LOOKBACK + 3
     if len(df) < minimum:
         return {}
 

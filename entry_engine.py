@@ -96,7 +96,7 @@ SWING_CONFIG = {
 # Global safety limits
 MAX_RSI = 74
 BREAKOUT_LOOKBACK = 20
-RETEST_TOLERANCE_PCT = 1.0        # 🔥 বাড়ানো হলো ০.৫% থেকে ১.০%
+RETEST_TOLERANCE_PCT = 1.0
 MAX_BREAKOUT_EXTENSION_PCT = 2.0
 
 # 🔥 Pump Protection constants
@@ -412,27 +412,26 @@ def _get_breakout_data(df):
     retest_candle = df.iloc[retest_index]
 
     # Check if the RETEST candle itself is a new breakout
-# (i.e., no separate pullback candle exists between breakout and retest)
-resistance_start_retest = retest_index - BREAKOUT_LOOKBACK
-if resistance_start_retest >= 0:
-    res_data_retest = df.iloc[resistance_start_retest:retest_index]
-    res_level_retest = _number(res_data_retest["high"].max())
-    previous_candle = df.iloc[retest_index - 1]
-    previous_close = _number(previous_candle["close"])
+    resistance_start_retest = retest_index - BREAKOUT_LOOKBACK
+    if resistance_start_retest >= 0:
+        res_data_retest = df.iloc[resistance_start_retest:retest_index]
+        res_level_retest = _number(res_data_retest["high"].max())
+        previous_candle = df.iloc[retest_index - 1]
+        previous_close = _number(previous_candle["close"])
 
-    if (
-        res_level_retest is not None
-        and _number(retest_candle["close"]) > res_level_retest
-        and previous_close is not None
-        and previous_close <= res_level_retest
-    ):
-        return {}
+        if (
+            res_level_retest is not None
+            and _number(retest_candle["close"]) > res_level_retest
+            and previous_close is not None
+            and previous_close <= res_level_retest
+        ):
+            return {}
 
     breakout_found = False
     breakout_index = -1
     resistance = None
 
-    for i in range(2, 5):  # Check 2, 3, and 4 candles back
+    for i in range(2, 5):
         b_idx = len(df) - i
         resistance_start = b_idx - BREAKOUT_LOOKBACK
 
@@ -975,7 +974,7 @@ def _evaluate(symbol, market_data, market_context, strategy):
         "resistance": resistance,
         "resistance_levels": resistance_levels,
         "atr": entry_validation["atr"],
-                "atr_value": entry_validation["atr"],
+        "atr_value": entry_validation["atr"],
         "rsi": entry_validation["rsi"],
         "rvol": entry_validation["rvol"],
         "market_status": market_status,

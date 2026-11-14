@@ -412,15 +412,21 @@ def _get_breakout_data(df):
     retest_candle = df.iloc[retest_index]
 
     # Check if the RETEST candle itself is a new breakout
-    resistance_start_retest = retest_index - BREAKOUT_LOOKBACK
-    if resistance_start_retest >= 0:
-        res_data_retest = df.iloc[resistance_start_retest:retest_index]
-        res_level_retest = _number(res_data_retest["high"].max())
-        if (
-            res_level_retest is not None
-            and _number(retest_candle["close"]) > res_level_retest
-        ):
-            return {}
+# (i.e., no separate pullback candle exists between breakout and retest)
+resistance_start_retest = retest_index - BREAKOUT_LOOKBACK
+if resistance_start_retest >= 0:
+    res_data_retest = df.iloc[resistance_start_retest:retest_index]
+    res_level_retest = _number(res_data_retest["high"].max())
+    previous_candle = df.iloc[retest_index - 1]
+    previous_close = _number(previous_candle["close"])
+
+    if (
+        res_level_retest is not None
+        and _number(retest_candle["close"]) > res_level_retest
+        and previous_close is not None
+        and previous_close <= res_level_retest
+    ):
+        return {}
 
     breakout_found = False
     breakout_index = -1

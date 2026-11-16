@@ -6,8 +6,8 @@ Spot market only.
 No Futures or Margin.
 
 Includes:
-- Profit-First SCALP / SWING separate scoring
-- Smart Breakout + separate-candle retest (looks back up to 4 candles)
+- SCALP / SWING separate scoring (diagnostic relaxed)
+- Smart Breakout + separate-candle retest
 - Pump protection (consecutive bullish, RVOL collapse, insufficient upside)
 - Early-pump indicators (BB squeeze, ROC, volume momentum)
 """
@@ -70,41 +70,41 @@ MAX_SCORE = int(_setting("MAX_SCORE", 15))
 
 
 # =========================================================
-# STRATEGY-SPECIFIC THRESHOLDS (Profit-First)
+# STRATEGY-SPECIFIC THRESHOLDS (Diagnostic Test - Relaxed)
 # =========================================================
 
 SCALP_CONFIG = {
-    "MIN_RVOL": 1.4,
-    "MIN_ADX": 18.0,
-    "RSI_MIN": 50.0,
-    "RSI_MAX": 68.0,
-    "MAX_ROC": 3.5,
-    "MAX_BB_WIDTH": 0.20,
-    "MAX_EMA_EXTENSION_PCT": 3.0,
-}
-
-SWING_CONFIG = {
-    "MIN_RVOL": 1.5,
-    "MIN_ADX": 22.0,
-    "RSI_MIN": 52.0,
-    "RSI_MAX": 70.0,
-    "MAX_ROC": 4.5,
+    "MIN_RVOL": 1.05,
+    "MIN_ADX": 15.0,
+    "RSI_MIN": 45.0,
+    "RSI_MAX": 72.0,
+    "MAX_ROC": 5.0,
     "MAX_BB_WIDTH": 0.25,
     "MAX_EMA_EXTENSION_PCT": 3.5,
 }
 
+SWING_CONFIG = {
+    "MIN_RVOL": 1.10,
+    "MIN_ADX": 18.0,
+    "RSI_MIN": 48.0,
+    "RSI_MAX": 74.0,
+    "MAX_ROC": 6.0,
+    "MAX_BB_WIDTH": 0.30,
+    "MAX_EMA_EXTENSION_PCT": 4.0,
+}
+
 # Global safety limits
-MAX_RSI = 74
-BREAKOUT_LOOKBACK = 20
-RETEST_TOLERANCE_PCT = 1.0
-MAX_BREAKOUT_EXTENSION_PCT = 2.0
+MAX_RSI = 80
+BREAKOUT_LOOKBACK = 10
+RETEST_TOLERANCE_PCT = 1.5
+MAX_BREAKOUT_EXTENSION_PCT = 3.0
 
 # 🔥 Pump Protection constants
-MAX_CONSECUTIVE_BULLISH = 3
-MIN_CANDLE_BODY_PCT = 1.5
-RVOL_SPIKE_THRESHOLD = 2.0
-RVOL_COLLAPSE_RATIO = 0.7
-MIN_UPSIDE_TO_RESISTANCE_PCT = 1.5
+MAX_CONSECUTIVE_BULLISH = 4
+MIN_CANDLE_BODY_PCT = 2.0
+RVOL_SPIKE_THRESHOLD = 2.5
+RVOL_COLLAPSE_RATIO = 0.6
+MIN_UPSIDE_TO_RESISTANCE_PCT = 1.0
 
 APPROVED_CLASSIFICATIONS = (
     "STRONG BUY",
@@ -171,7 +171,7 @@ def _prepare_dataframe(df):
         return None
 
     required = ("open", "high", "low", "close", "volume")
-    minimum = max(30, BREAKOUT_LOOKBACK + 6)
+    minimum = max(30, BREAKOUT_LOOKBACK + 3)
 
     if len(df) < minimum:
         return None
@@ -387,15 +387,15 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 
 
 # =========================================================
-# BREAKOUT AND SEPARATE-CANDLE RETEST (SMART DETECTION)
+# BREAKOUT AND SEPARATE-CANDLE RETEST (RELAXED FOR TESTING)
 # =========================================================
 
 def _get_breakout_data(df):
     """
     Smart breakout + retest detection:
-    - Looks back up to 4 candles for a valid breakout.
+    - Looks back up to 3 candles for a valid breakout.
     - Ensures breakout and retest are on SEPARATE candles.
-    - Wider tolerance (±1.0%) so we don't miss good retests.
+    - Wider tolerance (±1.5%) so we don't miss good retests.
     """
     if not isinstance(df, pd.DataFrame):
         return {}
@@ -431,7 +431,7 @@ def _get_breakout_data(df):
     breakout_index = -1
     resistance = None
 
-    for i in range(2, 5):
+    for i in range(2, 4):  # Check 2 and 3 candles back
         b_idx = len(df) - i
         resistance_start = b_idx - BREAKOUT_LOOKBACK
 
@@ -771,15 +771,15 @@ def _build_components_scalp(trigger, entry_validation, trend_ok, market_status, 
         ),
         "bb_squeeze": (
             trigger.get("bb_width") is not None
-            and trigger["bb_width"] < 0.10
+            and trigger["bb_width"] < 0.15
         ),
         "early_momentum": (
             trigger.get("roc") is not None
-            and 0.5 <= trigger["roc"] <= SCALP_CONFIG["MAX_ROC"]
+            and 0.3 <= trigger["roc"] <= SCALP_CONFIG["MAX_ROC"]
         ),
         "volume_acceleration": (
             trigger.get("volume_momentum") is not None
-            and trigger["volume_momentum"] >= 1.2
+            and trigger["volume_momentum"] >= 1.1
         ),
     }
 
@@ -823,15 +823,15 @@ def _build_components_swing(trigger, entry_validation, trend_ok, market_status, 
         ),
         "bb_squeeze": (
             trigger.get("bb_width") is not None
-            and trigger["bb_width"] < 0.12
+            and trigger["bb_width"] < 0.18
         ),
         "early_momentum": (
             trigger.get("roc") is not None
-            and 0.5 <= trigger["roc"] <= SWING_CONFIG["MAX_ROC"]
+            and 0.3 <= trigger["roc"] <= SWING_CONFIG["MAX_ROC"]
         ),
         "volume_acceleration": (
             trigger.get("volume_momentum") is not None
-            and trigger["volume_momentum"] >= 1.15
+            and trigger["volume_momentum"] >= 1.05
         ),
     }
 

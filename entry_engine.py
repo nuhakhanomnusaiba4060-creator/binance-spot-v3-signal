@@ -419,7 +419,7 @@ def _get_breakout_data(df):
     resistance = None
 
     # Look for a breakout in the last 2-4 candles
-    for i in range(2, 5):
+    for i in range(2, 12):
         b_idx = len(df) - i
         if b_idx < BREAKOUT_LOOKBACK:
             continue

@@ -389,7 +389,8 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 def _get_breakout_data(df):
     """
     Smart breakout + retest detection with diagnostic logging.
-    Uses CLOSE-based resistance to avoid wick inflation.
+    Uses CLOSE-based resistance with 0.2% tolerance for wick inflation.
+    Retest close allows 0.5% tolerance below resistance.
     """
     if not isinstance(df, pd.DataFrame):
         return {}
@@ -440,8 +441,6 @@ def _get_breakout_data(df):
     breakout_found = False
     breakout_index = -1
     resistance = None
-
-    # Diagnostic tracking
     diagnostics = []
 
     for i in range(2, 5):
@@ -461,7 +460,10 @@ def _get_breakout_data(df):
 
         res_start = b_idx - BREAKOUT_LOOKBACK
         res_data = df.iloc[res_start:b_idx]
-        res_level = _number(res_data["close"].max())
+        
+        # Use CLOSE-based resistance with 0.2% tolerance for wick inflation
+        raw_res = _number(res_data["close"].max())
+        res_level = raw_res * 0.998 if raw_res is not None else None
 
         if res_level is None or res_level <= 0:
             diagnostics.append(f"i={i}: invalid_resistance")
@@ -492,10 +494,11 @@ def _get_breakout_data(df):
     lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
     upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
 
+    # 🔥 0.5% tolerance for retest close below resistance
     retest_valid = (
         retest_low >= lower_boundary
         and retest_low <= upper_boundary
-        and retest_close >= resistance
+        and retest_close >= resistance * 0.995
     )
 
     if not retest_valid:
@@ -511,7 +514,7 @@ def _get_breakout_data(df):
         "resistance": resistance,
         "breakout": retest_valid,
         "retest": retest_valid,
-        "above_resistance": retest_close >= resistance,
+        "above_resistance": retest_close >= resistance * 0.995,
         "breakout_close": _number(df.iloc[breakout_index]["close"]),
         "retest_close": retest_close,
         "retest_low": retest_low,
@@ -520,7 +523,7 @@ def _get_breakout_data(df):
         "retest_index": retest_index,
         "candles_since_breakout": retest_index - breakout_index,
     }
-
+    
 # =========================================================
 # SUPPORT AND RESISTANCE
 # =========================================================

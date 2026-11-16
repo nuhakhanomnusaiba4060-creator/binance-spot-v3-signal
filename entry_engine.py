@@ -100,7 +100,7 @@ MAX_CONSECUTIVE_BULLISH = 5
 MIN_CANDLE_BODY_PCT = 2.5
 RVOL_SPIKE_THRESHOLD = 3.0
 RVOL_COLLAPSE_RATIO = 0.5
-MIN_UPSIDE_TO_RESISTANCE_PCT = 0.8
+MIN_UPSIDE_TO_RESISTANCE_PCT = 0.3
 
 APPROVED_CLASSIFICATIONS = (
     "STRONG BUY",
@@ -541,15 +541,22 @@ def _find_resistance_levels(df, lookback=100):
 # =========================================================
 
 def _buyer_confirmation(snapshot):
+    """Relaxed buyer confirmation for diagnostic testing."""
     close = snapshot.get("close")
     open_price = snapshot.get("open")
     volume = snapshot.get("volume")
     previous_volume = snapshot.get("previous_volume")
+
     if None in (close, open_price, volume, previous_volume):
         return False
-    return close > open_price and volume >= previous_volume
 
-
+    # Relaxed: bullish candle OR strong volume
+    if close > open_price:
+        return True
+    if volume >= previous_volume * 1.2:
+        return True
+    return False
+    
 # =========================================================
 # MARKET CONTEXT VALIDATION
 # =========================================================

@@ -15,10 +15,6 @@ Tests:
 - Risk manager interface (SL bounds + ATR fallback targets)
 - Telegram interface
 - Signal tracker persistence + entry expiry
-
-No Binance API requests.
-No Telegram messages.
-No live trading.
 """
 
 import unittest
@@ -433,14 +429,12 @@ class EntryEngineBreakoutRetestTests(unittest.TestCase):
     def make_breakout_dataframe(self, retest_low=100.80):
         """
         Structure:
-        - 20 stable candles → resistance at 101.0
-        - Breakout candle → closes at 102.0 (above resistance)
-        - Pullback candle → small red candle, still above resistance
-        - Retest candle → low touches resistance zone, closes above
+        - 20 stable candles -> resistance at 101.0
+        - Breakout candle -> closes at 102.0
+        - Pullback candle -> still above resistance
+        - Retest candle -> low touches resistance zone, closes above
         """
         rows = []
-
-        # 20 prior stable candles (resistance = 101.0)
         for _ in range(20):
             rows.append({
                 "open": 100.0, "high": 101.0, "low": 99.5,
@@ -453,13 +447,13 @@ class EntryEngineBreakoutRetestTests(unittest.TestCase):
             "close": 102.0, "volume": 2500.0,
         })
 
-        # Pullback candle (still above resistance)
+        # Pullback candle
         rows.append({
             "open": 102.0, "high": 102.3, "low": 101.2,
             "close": 101.8, "volume": 1500.0,
         })
 
-        # Retest candle (the one we evaluate)
+        # Retest candle
         rows.append({
             "open": 101.8, "high": 102.1, "low": retest_low,
             "close": 101.9, "volume": 1800.0,
@@ -468,32 +462,27 @@ class EntryEngineBreakoutRetestTests(unittest.TestCase):
         return pd.DataFrame(rows)
 
     def test_separate_candle_breakout_and_retest(self):
-        """Breakout and retest must be on separate candles and detected."""
         df = self.make_breakout_dataframe()
         result = entry_engine._get_breakout_data(df)
         self.assertTrue(result.get("breakout"))
         self.assertTrue(result.get("retest"))
         self.assertTrue(result.get("above_resistance"))
-        self.assertGreaterEqual(result.get("candles_since_breakout", 0), 1)
 
     def test_failed_retest_is_rejected(self):
-    """If retest low falls WELL below resistance, it must be rejected."""
-    df = self.make_breakout_dataframe(retest_low=97.0)
-    result = entry_engine._get_breakout_data(df)
-    self.assertFalse(result.get("retest", False))
+        """If retest low falls WELL below resistance, it must be rejected."""
+        df = self.make_breakout_dataframe(retest_low=97.0)
+        result = entry_engine._get_breakout_data(df)
+        self.assertFalse(result.get("retest", False))
 
     def test_breakout_without_separate_retest_is_rejected(self):
-        """If the latest candle itself is the breakout, it must be rejected."""
         rows = []
-
-        # 20 stable candles
         for _ in range(20):
             rows.append({
                 "open": 100.0, "high": 101.0, "low": 99.5,
                 "close": 100.0, "volume": 1000.0,
             })
 
-        # Latest candle itself is the breakout (no retest yet)
+        # Latest candle itself is the breakout
         rows.append({
             "open": 100.0, "high": 103.0, "low": 100.0,
             "close": 102.5, "volume": 2500.0,

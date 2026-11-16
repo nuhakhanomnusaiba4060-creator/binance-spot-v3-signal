@@ -6,11 +6,10 @@ Spot market only.
 No Futures or Margin.
 
 Includes:
-- SCALP / SWING separate scoring (diagnostic relaxed)
+- SCALP / SWING separate scoring (scalp-tuned RVOL)
 - Smart Breakout + separate-candle retest
 - Pump protection (consecutive bullish, RVOL collapse, insufficient upside)
 - Early-pump indicators (BB squeeze, ROC, volume momentum)
-- RVOL diagnostic logging for debugging
 """
 
 import logging
@@ -71,11 +70,11 @@ MAX_SCORE = int(_setting("MAX_SCORE", 15))
 
 
 # =========================================================
-# STRATEGY-SPECIFIC THRESHOLDS (Diagnostic Test - Relaxed)
+# STRATEGY-SPECIFIC THRESHOLDS (Scalp-Tuned)
 # =========================================================
 
 SCALP_CONFIG = {
-    "MIN_RVOL": 1.05,
+    "MIN_RVOL": 0.7,                # 🔥 1.05 থেকে কমিয়ে 0.7
     "MIN_ADX": 15.0,
     "RSI_MIN": 45.0,
     "RSI_MAX": 72.0,
@@ -85,7 +84,7 @@ SCALP_CONFIG = {
 }
 
 SWING_CONFIG = {
-    "MIN_RVOL": 1.10,
+    "MIN_RVOL": 0.8,                # 🔥 1.10 থেকে কমিয়ে 0.8
     "MIN_ADX": 18.0,
     "RSI_MIN": 48.0,
     "RSI_MAX": 74.0,
@@ -388,7 +387,7 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 
 
 # =========================================================
-# BREAKOUT AND SEPARATE-CANDLE RETEST (RELAXED FOR TESTING)
+# BREAKOUT AND SEPARATE-CANDLE RETEST
 # =========================================================
 
 def _get_breakout_data(df):
@@ -618,7 +617,7 @@ def score_setup(setup_data):
 
 
 # =========================================================
-# ENTRY VALIDATION (WITH RVOL DEBUG LOGGING)
+# ENTRY VALIDATION
 # =========================================================
 
 def validate_entry(df, market_context, strategy="SCALP"):
@@ -641,11 +640,6 @@ def validate_entry(df, market_context, strategy="SCALP"):
 
     required = ("close", "open", "ema_20", "rsi", "atr", "rvol")
     if any(snapshot.get(key) is None for key in required):
-        missing = [k for k in required if snapshot.get(k) is None]
-        logger.warning(
-            "MISSING_INDICATORS | %s | missing=%s",
-            strategy, missing,
-        )
         return {"valid": False, "reason": "MISSING_REQUIRED_INDICATORS"}
 
     close = snapshot["close"]
@@ -662,15 +656,10 @@ def validate_entry(df, market_context, strategy="SCALP"):
     if rsi > MAX_RSI:
         return {"valid": False, "reason": "RSI_OVEREXTENDED"}
 
-    # 🔥 RVOL DEBUG LOGGING
     if rvol < config["MIN_RVOL"]:
         logger.info(
-            "RVOL DEBUG | %s | RVOL=%.4f | threshold=%.2f | close=%.6f | volume=%.2f",
-            strategy,
-            rvol,
-            config["MIN_RVOL"],
-            close,
-            float(snapshot.get("volume", 0) or 0),
+            "RVOL REJECT | %s | RVOL=%.4f | min=%.2f | close=%.6f",
+            strategy, rvol, config["MIN_RVOL"], close,
         )
         return {"valid": False, "reason": "LOW_RELATIVE_VOLUME"}
 
@@ -787,7 +776,7 @@ def _build_components_scalp(trigger, entry_validation, trend_ok, market_status, 
         ),
         "volume_acceleration": (
             trigger.get("volume_momentum") is not None
-            and trigger["volume_momentum"] >= 1.1
+            and trigger["volume_momentum"] >= 0.9
         ),
     }
 
@@ -839,7 +828,7 @@ def _build_components_swing(trigger, entry_validation, trend_ok, market_status, 
         ),
         "volume_acceleration": (
             trigger.get("volume_momentum") is not None
-            and trigger["volume_momentum"] >= 1.05
+            and trigger["volume_momentum"] >= 0.85
         ),
     }
 

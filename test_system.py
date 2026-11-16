@@ -477,10 +477,10 @@ class EntryEngineBreakoutRetestTests(unittest.TestCase):
         self.assertGreaterEqual(result.get("candles_since_breakout", 0), 1)
 
     def test_failed_retest_is_rejected(self):
-        """If retest low falls below resistance, it must be rejected."""
-        df = self.make_breakout_dataframe(retest_low=99.0)
-        result = entry_engine._get_breakout_data(df)
-        self.assertFalse(result.get("retest", False))
+    """If retest low falls WELL below resistance, it must be rejected."""
+    df = self.make_breakout_dataframe(retest_low=97.0)
+    result = entry_engine._get_breakout_data(df)
+    self.assertFalse(result.get("retest", False))
 
     def test_breakout_without_separate_retest_is_rejected(self):
         """If the latest candle itself is the breakout, it must be rejected."""

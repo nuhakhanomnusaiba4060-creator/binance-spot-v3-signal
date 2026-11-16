@@ -389,13 +389,7 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 def _get_breakout_data(df):
     """
     Smart breakout + retest detection.
-    
-    Logic:
-    1. Last candle = retest candidate.
-    2. Look back 2-4 candles for a breakout.
-    3. Breakout = close crosses above recent resistance (high).
-    4. Uses 20-candle resistance, with 10-candle fallback.
-    5. Retest = last candle low touches resistance zone, close above.
+    Uses CLOSE-based resistance to avoid wick inflation.
     """
     if not isinstance(df, pd.DataFrame):
         return {}
@@ -416,13 +410,12 @@ def _get_breakout_data(df):
     if None in (retest_close, retest_low):
         return {}
 
-    # Check if the LAST candle is itself a fresh breakout (not a retest)
+    # Check if the LAST candle is itself a fresh breakout
     last_res_start = retest_index - BREAKOUT_LOOKBACK
     if last_res_start >= 0:
         last_res_data = df.iloc[last_res_start:retest_index]
-        last_res_level = _number(last_res_data["high"].max())
-        pre_last_candle = df.iloc[retest_index - 1]
-        pre_last_close = _number(pre_last_candle["close"])
+        last_res_level = _number(last_res_data["close"].max())
+        pre_last_close = _number(df.iloc[retest_index - 1]["close"])
 
         if (
             last_res_level is not None
@@ -432,7 +425,6 @@ def _get_breakout_data(df):
         ):
             return {}
 
-    # Search for a valid breakout 2-4 candles back
     breakout_found = False
     breakout_index = -1
     resistance = None
@@ -446,38 +438,29 @@ def _get_breakout_data(df):
         pre_b_candle = df.iloc[b_idx - 1]
         pre_close = _number(pre_b_candle["close"])
         b_close = _number(b_candle["close"])
-        b_high = _number(b_candle["high"])
 
         if None in (pre_close, b_close):
             continue
 
-        # 🔥 Use CLOSE-based resistance to avoid wick inflation
-res_start = b_idx - BREAKOUT_LOOKBACK
-if res_start < 0:
-    continue
+        res_start = b_idx - BREAKOUT_LOOKBACK
+        if res_start < 0:
+            continue
 
-res_data = df.iloc[res_start:b_idx]
+        res_data = df.iloc[res_start:b_idx]
+        res_level = _number(res_data["close"].max())
 
-# Resistance = max CLOSE (not high) in previous candles
-res_level = _number(res_data["close"].max())
+        if res_level is None or res_level <= 0:
+            continue
 
-if res_level is None or res_level <= 0:
-    continue
-
-# Breakout: previous close below resistance, breakout close above
-if pre_close <= res_level and b_close > res_level:
-    breakout_found = True
-    breakout_index = b_idx
-    resistance = res_level
-    break
-
-        if breakout_found:
+        if pre_close <= res_level and b_close > res_level:
+            breakout_found = True
+            breakout_index = b_idx
+            resistance = res_level
             break
 
     if not breakout_found:
         return {}
 
-    # Validate retest on the last candle
     if resistance is None or resistance <= 0:
         return {}
 

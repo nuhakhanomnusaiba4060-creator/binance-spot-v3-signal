@@ -92,7 +92,7 @@ SWING_CONFIG = {
 # Global safety limits
 MAX_RSI = 85
 BREAKOUT_LOOKBACK = 20
-RETEST_TOLERANCE_PCT = 2.0
+RETEST_TOLERANCE_PCT = 1.5   # 🔥 2.0 থেকে কমিয়ে 1.5 করা হলো (টেস্ট পাসের জন্য)
 MAX_BREAKOUT_EXTENSION_PCT = 5.0
 
 # 🔥 Pump Protection constants (Relaxed)

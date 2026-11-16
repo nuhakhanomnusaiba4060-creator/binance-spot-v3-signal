@@ -451,24 +451,25 @@ def _get_breakout_data(df):
         if None in (pre_close, b_close):
             continue
 
-        # Try 20-candle resistance first, then 10-candle fallback
-        for lookback in (BREAKOUT_LOOKBACK, BREAKOUT_LOOKBACK // 2):
-            res_start = b_idx - lookback
-            if res_start < 0:
-                continue
+        # 🔥 Use CLOSE-based resistance to avoid wick inflation
+res_start = b_idx - BREAKOUT_LOOKBACK
+if res_start < 0:
+    continue
 
-            res_data = df.iloc[res_start:b_idx]
-            res_level = _number(res_data["high"].max())
+res_data = df.iloc[res_start:b_idx]
 
-            if res_level is None or res_level <= 0:
-                continue
+# Resistance = max CLOSE (not high) in previous candles
+res_level = _number(res_data["close"].max())
 
-            # Breakout: previous close below resistance, breakout close above
-            if pre_close <= res_level and b_close > res_level:
-                breakout_found = True
-                breakout_index = b_idx
-                resistance = res_level
-                break
+if res_level is None or res_level <= 0:
+    continue
+
+# Breakout: previous close below resistance, breakout close above
+if pre_close <= res_level and b_close > res_level:
+    breakout_found = True
+    breakout_index = b_idx
+    resistance = res_level
+    break
 
         if breakout_found:
             break

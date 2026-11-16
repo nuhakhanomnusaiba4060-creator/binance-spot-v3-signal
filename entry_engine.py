@@ -10,6 +10,7 @@ Includes:
 - Smart Breakout + separate-candle retest
 - Pump protection (consecutive bullish, RVOL collapse, insufficient upside)
 - Early-pump indicators (BB squeeze, ROC, volume momentum)
+- RVOL diagnostic logging for debugging
 """
 
 import logging
@@ -391,12 +392,6 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 # =========================================================
 
 def _get_breakout_data(df):
-    """
-    Smart breakout + retest detection:
-    - Looks back up to 3 candles for a valid breakout.
-    - Ensures breakout and retest are on SEPARATE candles.
-    - Wider tolerance (±1.5%) so we don't miss good retests.
-    """
     if not isinstance(df, pd.DataFrame):
         return {}
 
@@ -411,7 +406,6 @@ def _get_breakout_data(df):
     retest_index = len(df) - 1
     retest_candle = df.iloc[retest_index]
 
-    # Check if the RETEST candle itself is a new breakout
     resistance_start_retest = retest_index - BREAKOUT_LOOKBACK
     if resistance_start_retest >= 0:
         res_data_retest = df.iloc[resistance_start_retest:retest_index]
@@ -431,7 +425,7 @@ def _get_breakout_data(df):
     breakout_index = -1
     resistance = None
 
-    for i in range(2, 4):  # Check 2 and 3 candles back
+    for i in range(2, 4):
         b_idx = len(df) - i
         resistance_start = b_idx - BREAKOUT_LOOKBACK
 
@@ -624,7 +618,7 @@ def score_setup(setup_data):
 
 
 # =========================================================
-# ENTRY VALIDATION
+# ENTRY VALIDATION (WITH RVOL DEBUG LOGGING)
 # =========================================================
 
 def validate_entry(df, market_context, strategy="SCALP"):
@@ -647,6 +641,11 @@ def validate_entry(df, market_context, strategy="SCALP"):
 
     required = ("close", "open", "ema_20", "rsi", "atr", "rvol")
     if any(snapshot.get(key) is None for key in required):
+        missing = [k for k in required if snapshot.get(k) is None]
+        logger.warning(
+            "MISSING_INDICATORS | %s | missing=%s",
+            strategy, missing,
+        )
         return {"valid": False, "reason": "MISSING_REQUIRED_INDICATORS"}
 
     close = snapshot["close"]
@@ -663,7 +662,16 @@ def validate_entry(df, market_context, strategy="SCALP"):
     if rsi > MAX_RSI:
         return {"valid": False, "reason": "RSI_OVEREXTENDED"}
 
+    # 🔥 RVOL DEBUG LOGGING
     if rvol < config["MIN_RVOL"]:
+        logger.info(
+            "RVOL DEBUG | %s | RVOL=%.4f | threshold=%.2f | close=%.6f | volume=%.2f",
+            strategy,
+            rvol,
+            config["MIN_RVOL"],
+            close,
+            float(snapshot.get("volume", 0) or 0),
+        )
         return {"valid": False, "reason": "LOW_RELATIVE_VOLUME"}
 
     if _has_consecutive_bullish_candles(prepared):

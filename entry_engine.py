@@ -5,11 +5,7 @@ Entry Signal Generation Engine
 Spot market only.
 No Futures or Margin.
 
-Includes:
-- SCALP / SWING separate scoring (scalp-tuned RVOL)
-- Smart Breakout + separate-candle retest
-- Pump protection (consecutive bullish, RVOL collapse, insufficient upside)
-- Early-pump indicators (BB squeeze, ROC, volume momentum)
+DIAGNOSTIC MODE: All thresholds relaxed to verify signal pipeline.
 """
 
 import logging
@@ -70,41 +66,41 @@ MAX_SCORE = int(_setting("MAX_SCORE", 15))
 
 
 # =========================================================
-# STRATEGY-SPECIFIC THRESHOLDS (Scalp-Tuned)
+# STRATEGY-SPECIFIC THRESHOLDS (DIAGNOSTIC MODE)
 # =========================================================
 
 SCALP_CONFIG = {
-    "MIN_RVOL": 0.7,                # 🔥 1.05 থেকে কমিয়ে 0.7
-    "MIN_ADX": 15.0,
-    "RSI_MIN": 45.0,
-    "RSI_MAX": 72.0,
-    "MAX_ROC": 5.0,
-    "MAX_BB_WIDTH": 0.25,
-    "MAX_EMA_EXTENSION_PCT": 3.5,
-}
-
-SWING_CONFIG = {
-    "MIN_RVOL": 0.8,                # 🔥 1.10 থেকে কমিয়ে 0.8
-    "MIN_ADX": 18.0,
-    "RSI_MIN": 48.0,
-    "RSI_MAX": 74.0,
+    "MIN_RVOL": 0.3,
+    "MIN_ADX": 10.0,
+    "RSI_MIN": 40.0,
+    "RSI_MAX": 75.0,
     "MAX_ROC": 6.0,
     "MAX_BB_WIDTH": 0.30,
     "MAX_EMA_EXTENSION_PCT": 4.0,
 }
 
-# Global safety limits
-MAX_RSI = 80
-BREAKOUT_LOOKBACK = 10
-RETEST_TOLERANCE_PCT = 1.5
-MAX_BREAKOUT_EXTENSION_PCT = 3.0
+SWING_CONFIG = {
+    "MIN_RVOL": 0.4,
+    "MIN_ADX": 12.0,
+    "RSI_MIN": 42.0,
+    "RSI_MAX": 78.0,
+    "MAX_ROC": 7.0,
+    "MAX_BB_WIDTH": 0.35,
+    "MAX_EMA_EXTENSION_PCT": 5.0,
+}
 
-# 🔥 Pump Protection constants
-MAX_CONSECUTIVE_BULLISH = 4
-MIN_CANDLE_BODY_PCT = 2.0
-RVOL_SPIKE_THRESHOLD = 2.5
-RVOL_COLLAPSE_RATIO = 0.6
-MIN_UPSIDE_TO_RESISTANCE_PCT = 1.0
+# Global safety limits
+MAX_RSI = 85
+BREAKOUT_LOOKBACK = 20
+RETEST_TOLERANCE_PCT = 2.0
+MAX_BREAKOUT_EXTENSION_PCT = 5.0
+
+# 🔥 Pump Protection constants (Relaxed)
+MAX_CONSECUTIVE_BULLISH = 5
+MIN_CANDLE_BODY_PCT = 2.5
+RVOL_SPIKE_THRESHOLD = 3.0
+RVOL_COLLAPSE_RATIO = 0.5
+MIN_UPSIDE_TO_RESISTANCE_PCT = 0.8
 
 APPROVED_CLASSIFICATIONS = (
     "STRONG BUY",
@@ -424,7 +420,7 @@ def _get_breakout_data(df):
     breakout_index = -1
     resistance = None
 
-    for i in range(2, 4):
+    for i in range(2, 5):
         b_idx = len(df) - i
         resistance_start = b_idx - BREAKOUT_LOOKBACK
 

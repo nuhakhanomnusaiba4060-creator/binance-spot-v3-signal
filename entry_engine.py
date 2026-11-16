@@ -386,26 +386,29 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 # BREAKOUT AND SEPARATE-CANDLE RETEST
 # =========================================================
 
+# =========================================================
+# BREAKOUT AND SEPARATE-CANDLE RETEST (SMART DETECTION)
+# =========================================================
+
 def _get_breakout_data(df):
     """
-    Smart breakout + retest detection with diagnostic logging.
-    Uses CLOSE-based resistance with 0.2% tolerance for wick inflation.
-    Retest close allows 0.5% tolerance below resistance.
+    Smart breakout + retest detection.
+
+    Key Logic:
+    - Resistance is calculated from the CLOSE of previous candles (avoids wick inflation).
+    - A breakout is valid if the previous close is below resistance and the breakout close is above.
+    - Checks the last 3 candles for a breakout.
+    - Retest is valid if the last candle's low touches the resistance zone and close is above resistance.
     """
     if not isinstance(df, pd.DataFrame):
         return {}
 
     minimum = BREAKOUT_LOOKBACK + 3
     if len(df) < minimum:
-        logger.info(
-            "BREAKOUT DEBUG | Insufficient candles | len=%d < min=%d",
-            len(df), minimum,
-        )
         return {}
 
     required_columns = {"high", "low", "close"}
     if not required_columns.issubset(df.columns):
-        logger.info("BREAKOUT DEBUG | Missing required columns")
         return {}
 
     retest_index = len(df) - 1
@@ -414,10 +417,9 @@ def _get_breakout_data(df):
     retest_low = _number(retest_candle["low"])
 
     if None in (retest_close, retest_low):
-        logger.info("BREAKOUT DEBUG | Invalid retest candle values")
         return {}
 
-    # Check if the LAST candle is itself a fresh breakout
+    # 1. Check if the LAST candle is itself a fresh breakout (no retest yet)
     last_res_start = retest_index - BREAKOUT_LOOKBACK
     if last_res_start >= 0:
         last_res_data = df.iloc[last_res_start:retest_index]
@@ -430,23 +432,16 @@ def _get_breakout_data(df):
             and pre_last_close is not None
             and pre_last_close <= last_res_level
         ):
-            logger.info(
-                "BREAKOUT DEBUG | Last candle is fresh breakout | "
-                "retest_close=%.6f > last_res=%.6f | pre_last=%.6f",
-                retest_close, last_res_level, pre_last_close,
-            )
             return {}
 
-    # Search for breakout 2-4 candles back
+    # 2. Search for a breakout in the previous 2-4 candles
     breakout_found = False
     breakout_index = -1
     resistance = None
-    diagnostics = []
 
     for i in range(2, 5):
         b_idx = len(df) - i
         if b_idx < BREAKOUT_LOOKBACK:
-            diagnostics.append(f"i={i}: too_early")
             continue
 
         b_candle = df.iloc[b_idx]
@@ -455,58 +450,40 @@ def _get_breakout_data(df):
         b_close = _number(b_candle["close"])
 
         if None in (pre_close, b_close):
-            diagnostics.append(f"i={i}: invalid_values")
             continue
 
         res_start = b_idx - BREAKOUT_LOOKBACK
         res_data = df.iloc[res_start:b_idx]
         
-        # Use CLOSE-based resistance with 0.2% tolerance for wick inflation
-        raw_res = _number(res_data["close"].max())
-        res_level = raw_res * 0.998 if raw_res is not None else None
+        # Use CLOSE-based resistance (no wick inflation)
+        res_level = _number(res_data["close"].max())
 
         if res_level is None or res_level <= 0:
-            diagnostics.append(f"i={i}: invalid_resistance")
             continue
 
-        breakout_condition = pre_close <= res_level and b_close > res_level
-        diagnostics.append(
-            f"i={i}: pre={pre_close:.6f} res={res_level:.6f} "
-            f"b_close={b_close:.6f} breakout={breakout_condition}"
-        )
-
-        if breakout_condition:
+        # Breakout condition
+        if pre_close <= res_level and b_close > res_level:
             breakout_found = True
             breakout_index = b_idx
             resistance = res_level
             break
 
     if not breakout_found:
-        logger.info(
-            "BREAKOUT DEBUG | No breakout found | retest_close=%.6f | %s",
-            retest_close, " | ".join(diagnostics),
-        )
         return {}
 
     if resistance is None or resistance <= 0:
         return {}
 
+    # 3. Validate Retest
     lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
     upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
 
-    # 🔥 0.5% tolerance for retest close below resistance
+    # Allow 0.5% tolerance for retest close
     retest_valid = (
         retest_low >= lower_boundary
         and retest_low <= upper_boundary
         and retest_close >= resistance * 0.995
     )
-
-    if not retest_valid:
-        logger.info(
-            "BREAKOUT DEBUG | Breakout found but retest invalid | "
-            "res=%.6f | retest_low=%.6f | lower=%.6f | upper=%.6f | retest_close=%.6f",
-            resistance, retest_low, lower_boundary, upper_boundary, retest_close,
-        )
 
     distance_pct = ((retest_close - resistance) / resistance) * 100
 

@@ -185,7 +185,7 @@ BOLLINGER_STD = float(
 RVOL_PERIOD = int(
     _get_setting(
         "RVOL_PERIOD",
-        20,
+        10,
         paths=(
             ("RVOL", "PERIOD"),
             ("RELATIVE_VOLUME", "PERIOD"),
@@ -220,7 +220,7 @@ MIN_CANDLES_FOR_MA200 = int(
 )
 
 # 🔥 NEW INDICATOR SETTINGS
-ROC_PERIOD = int(_get_setting("ROC_PERIOD", 5))  # 5-candle momentum
+ROC_PERIOD = int(_get_setting("ROC_PERIOD", 5))
 VOLUME_MOMENTUM_PERIOD = int(_get_setting("VOLUME_MOMENTUM_PERIOD", 3))
 
 
@@ -792,7 +792,7 @@ def calculate_vwap(df):
 
 
 # ==================================================
-# 11. RELATIVE VOLUME
+# 11. RELATIVE VOLUME (FIXED)
 # ==================================================
 
 def calculate_relative_volume(
@@ -803,32 +803,29 @@ def calculate_relative_volume(
     Current volume divided by average volume
     of previous N candles.
 
-    The current candle is excluded from baseline.
+    The current candle is EXCLUDED from the baseline average.
+    If there is not enough data, RVOL defaults to 1.0.
     """
 
     if period < 1:
-        raise ValueError(
-            "RVOL period must be positive."
-        )
+        raise ValueError("RVOL period must be positive.")
 
-    series = pd.Series(
-        volume,
-        dtype="float64",
-    )
+    series = pd.Series(volume, dtype="float64")
 
+    # 🔥 Average of PREVIOUS N candles (excluding current)
     average_volume = (
-        series.shift(1)
-        .rolling(
-            window=period,
-            min_periods=period,
-        )
+        series
+        .shift(1)
+        .rolling(window=period, min_periods=max(3, period // 2))
         .mean()
     )
 
-    return (
-        series
-        / average_volume.replace(0, np.nan)
-    )
+    result = series / average_volume.replace(0, np.nan)
+
+    # 🔥 If RVOL cannot be calculated (not enough data), default to 1.0
+    result = result.fillna(1.0)
+
+    return result
 
 
 # ==================================================
@@ -848,11 +845,13 @@ def calculate_volume_momentum(
         raise ValueError("Volume momentum period must be positive.")
 
     series = pd.Series(volume, dtype="float64")
-    
-    # Compare current candle volume to the average of previous N candles
-    previous_avg = series.shift(1).rolling(window=period, min_periods=period).mean()
-    
-    return series / previous_avg.replace(0, np.nan)
+
+    previous_avg = series.shift(1).rolling(
+        window=period, min_periods=max(2, period // 2)
+    ).mean()
+
+    result = series / previous_avg.replace(0, np.nan)
+    return result.fillna(1.0)
 
 
 # ==================================================
@@ -868,8 +867,11 @@ def calculate_roc(data, period=ROC_PERIOD):
         raise ValueError("ROC period must be positive.")
 
     close = pd.Series(data, dtype="float64")
-    
-    return ((close - close.shift(period)) / close.shift(period).replace(0, np.nan)) * 100
+
+    return (
+        (close - close.shift(period))
+        / close.shift(period).replace(0, np.nan)
+    ) * 100
 
 
 # ==================================================
@@ -978,7 +980,6 @@ def calculate_bollinger_bands(
         middle - std_dev * standard_deviation
     )
 
-    # 🔥 NEW: Bollinger Band Width (BBW) - detects squeezes
     bb_width = (upper - lower) / middle.replace(0, np.nan)
 
     return pd.DataFrame({
@@ -1001,9 +1002,6 @@ def support_resistance(
 ):
     """
     Find nearest confirmed pivot support/resistance.
-
-    A pivot is considered confirmed only after
-    the required right-side candles have closed.
     """
 
     if lookback < 10:
@@ -1017,97 +1015,43 @@ def support_resistance(
         )
 
     if df.empty:
-        return {
-            "support": None,
-            "resistance": None,
-        }
+        return {"support": None, "resistance": None}
 
-    recent = (
-        df.tail(lookback)
-        .reset_index(drop=True)
-    )
+    recent = df.tail(lookback).reset_index(drop=True)
 
     if len(recent) < left + right + 1:
-        return {
-            "support": None,
-            "resistance": None,
-        }
+        return {"support": None, "resistance": None}
 
-    current_price = float(
-        recent["close"].iloc[-1]
-    )
+    current_price = float(recent["close"].iloc[-1])
 
     pivot_lows = []
     pivot_highs = []
 
-    last_confirmed = (
-        len(recent) - right
-    )
+    last_confirmed = len(recent) - right
 
-    for index in range(
-        left,
-        last_confirmed,
-    ):
+    for index in range(left, last_confirmed):
 
-        low_value = float(
-            recent["low"].iloc[index]
-        )
+        low_value = float(recent["low"].iloc[index])
+        high_value = float(recent["high"].iloc[index])
 
-        high_value = float(
-            recent["high"].iloc[index]
-        )
+        left_lows = recent["low"].iloc[index - left:index]
+        right_lows = recent["low"].iloc[index + 1:index + right + 1]
 
-        left_lows = recent["low"].iloc[
-            index - left:index
-        ]
+        left_highs = recent["high"].iloc[index - left:index]
+        right_highs = recent["high"].iloc[index + 1:index + right + 1]
 
-        right_lows = recent["low"].iloc[
-            index + 1:index + right + 1
-        ]
-
-        left_highs = recent["high"].iloc[
-            index - left:index
-        ]
-
-        right_highs = recent["high"].iloc[
-            index + 1:index + right + 1
-        ]
-
-        if (
-            low_value < left_lows.min()
-            and low_value < right_lows.min()
-        ):
+        if low_value < left_lows.min() and low_value < right_lows.min():
             pivot_lows.append(low_value)
 
-        if (
-            high_value > left_highs.max()
-            and high_value > right_highs.max()
-        ):
+        if high_value > left_highs.max() and high_value > right_highs.max():
             pivot_highs.append(high_value)
 
-    supports = [
-        value
-        for value in pivot_lows
-        if value < current_price
-    ]
-
-    resistances = [
-        value
-        for value in pivot_highs
-        if value > current_price
-    ]
+    supports = [v for v in pivot_lows if v < current_price]
+    resistances = [v for v in pivot_highs if v > current_price]
 
     return {
-        "support": (
-            max(supports)
-            if supports
-            else None
-        ),
-        "resistance": (
-            min(resistances)
-            if resistances
-            else None
-        ),
+        "support": max(supports) if supports else None,
+        "resistance": min(resistances) if resistances else None,
     }
 
 
@@ -1116,11 +1060,7 @@ def support_resistance(
 # ==================================================
 
 def analyze_candles(df):
-    """
-    Analyze the latest candle.
-
-    This function does not generate trading signals.
-    """
+    """Analyze the latest candle."""
 
     if len(df) < 2:
         return {
@@ -1145,91 +1085,47 @@ def analyze_candles(df):
     candle_range = high - low
 
     if candle_range <= 0:
-
         body_percent = 0.0
         upper_wick_percent = 0.0
         lower_wick_percent = 0.0
-
     else:
+        body = abs(close - open_price)
+        upper_wick = high - max(open_price, close)
+        lower_wick = min(open_price, close) - low
 
-        body = abs(
-            close - open_price
-        )
-
-        upper_wick = (
-            high - max(open_price, close)
-        )
-
-        lower_wick = (
-            min(open_price, close) - low
-        )
-
-        body_percent = (
-            body / candle_range
-        ) * 100
-
-        upper_wick_percent = (
-            upper_wick / candle_range
-        ) * 100
-
-        lower_wick_percent = (
-            lower_wick / candle_range
-        ) * 100
+        body_percent = (body / candle_range) * 100
+        upper_wick_percent = (upper_wick / candle_range) * 100
+        lower_wick_percent = (lower_wick / candle_range) * 100
 
     bullish = close > open_price
     bearish = close < open_price
 
-    previous_bullish = (
-        previous["close"] > previous["open"]
-    )
-
-    previous_bearish = (
-        previous["close"] < previous["open"]
-    )
+    previous_bullish = previous["close"] > previous["open"]
+    previous_bearish = previous["close"] < previous["open"]
 
     bullish_engulfing = (
-        bullish
-        and previous_bearish
+        bullish and previous_bearish
         and open_price <= previous["close"]
         and close >= previous["open"]
     )
 
     bearish_engulfing = (
-        bearish
-        and previous_bullish
+        bearish and previous_bullish
         and open_price >= previous["close"]
         and close <= previous["open"]
     )
 
     return {
         "candle_direction": (
-            "BULLISH"
-            if bullish
-            else "BEARISH"
-            if bearish
-            else "NEUTRAL"
+            "BULLISH" if bullish else "BEARISH" if bearish else "NEUTRAL"
         ),
-        "body_percent": round(
-            float(body_percent), 2
-        ),
-        "upper_wick_percent": round(
-            float(upper_wick_percent), 2
-        ),
-        "lower_wick_percent": round(
-            float(lower_wick_percent), 2
-        ),
-        "bullish_engulfing": bool(
-            bullish_engulfing
-        ),
-        "bearish_engulfing": bool(
-            bearish_engulfing
-        ),
-        "strong_bullish_candle": bool(
-            bullish and body_percent >= 65
-        ),
-        "strong_bearish_candle": bool(
-            bearish and body_percent >= 65
-        ),
+        "body_percent": round(float(body_percent), 2),
+        "upper_wick_percent": round(float(upper_wick_percent), 2),
+        "lower_wick_percent": round(float(lower_wick_percent), 2),
+        "bullish_engulfing": bool(bullish_engulfing),
+        "bearish_engulfing": bool(bearish_engulfing),
+        "strong_bullish_candle": bool(bullish and body_percent >= 65),
+        "strong_bearish_candle": bool(bearish and body_percent >= 65),
     }
 
 
@@ -1240,169 +1136,65 @@ def analyze_candles(df):
 def calculate_all_indicators(df):
     """
     Calculate all indicators.
-
-    Original OHLCV columns are preserved.
-
-    Added columns:
-        ema_9
-        ema_20
-        sma_20
-        sma_50
-        sma_200
-        rsi
-        macd
-        macd_signal
-        macd_histogram
-        adx
-        plus_di
-        minus_di
-        atr
-        vwap
-        relative_volume
-        volume_momentum  # NEW
-        roc              # NEW
-        obv
-        cmf
-        bb_upper
-        bb_middle
-        bb_lower
-        bb_width         # NEW
     """
 
     result = validate_dataframe(df)
 
+    # 🔥 CRITICAL FIX: Use quote_volume (USDT) for RVOL instead of base volume
+    if "quote_volume" in result.columns:
+        # Store both for backward compatibility
+        result["base_volume"] = result["volume"]
+        result["volume"] = pd.to_numeric(
+            result["quote_volume"], errors="coerce"
+        ).fillna(result["volume"])
+
     close = result["close"]
 
-    # EMA
-
-    result[f"ema_{EMA_FAST}"] = (
-        calculate_ema(
-            close,
-            EMA_FAST,
-        )
-    )
-
-    result[f"ema_{EMA_SLOW}"] = (
-        calculate_ema(
-            close,
-            EMA_SLOW,
-        )
-    )
-
-    # SMA
+    result[f"ema_{EMA_FAST}"] = calculate_ema(close, EMA_FAST)
+    result[f"ema_{EMA_SLOW}"] = calculate_ema(close, EMA_SLOW)
 
     for period in SMA_PERIODS:
-
         column = f"sma_{period}"
 
-        if (
-            period == 200
-            and len(result) < MIN_CANDLES_FOR_MA200
-        ):
+        if (period == 200 and len(result) < MIN_CANDLES_FOR_MA200):
             result[column] = np.nan
-
         else:
-            result[column] = calculate_sma(
-                close,
-                period,
-            )
+            result[column] = calculate_sma(close, period)
 
-    # RSI
+    result["rsi"] = calculate_rsi(close, RSI_PERIOD)
 
-    result["rsi"] = calculate_rsi(
-        close,
-        RSI_PERIOD,
-    )
-
-    # MACD
-
-    macd = calculate_macd(
-        close,
-        MACD_FAST,
-        MACD_SLOW,
-        MACD_SIGNAL,
-    )
-
+    macd = calculate_macd(close, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
     result["macd"] = macd["macd"]
     result["macd_signal"] = macd["macd_signal"]
+    result["macd_histogram"] = macd["macd_histogram"]
 
-    result["macd_histogram"] = (
-        macd["macd_histogram"]
-    )
-
-    # ADX
-
-    adx = calculate_adx(
-        result,
-        ADX_PERIOD,
-    )
-
+    adx = calculate_adx(result, ADX_PERIOD)
     result["adx"] = adx["adx"]
     result["plus_di"] = adx["plus_di"]
     result["minus_di"] = adx["minus_di"]
 
-    # ATR
+    result["atr"] = calculate_atr(result, ATR_PERIOD)
 
-    result["atr"] = calculate_atr(
-        result,
-        ATR_PERIOD,
+    result["vwap"] = calculate_vwap(result)
+
+    result["relative_volume"] = calculate_relative_volume(
+        result["volume"], RVOL_PERIOD
     )
 
-    # VWAP
-
-    result["vwap"] = calculate_vwap(
-        result
+    result["volume_momentum"] = calculate_volume_momentum(
+        result["volume"], VOLUME_MOMENTUM_PERIOD
     )
 
-    # Relative Volume
+    result["roc"] = calculate_roc(close, ROC_PERIOD)
 
-    result["relative_volume"] = (
-        calculate_relative_volume(
-            result["volume"],
-            RVOL_PERIOD,
-        )
-    )
+    result["obv"] = calculate_obv(result)
 
-    # 🔥 NEW: Volume Momentum
-    result["volume_momentum"] = (
-        calculate_volume_momentum(
-            result["volume"],
-            VOLUME_MOMENTUM_PERIOD,
-        )
-    )
+    result["cmf"] = calculate_cmf(result, CMF_PERIOD)
 
-    # 🔥 NEW: Rate of Change (Price Momentum)
-    result["roc"] = calculate_roc(
-        close,
-        ROC_PERIOD,
-    )
-
-    # OBV
-
-    result["obv"] = calculate_obv(
-        result
-    )
-
-    # CMF
-
-    result["cmf"] = calculate_cmf(
-        result,
-        CMF_PERIOD,
-    )
-
-    # Bollinger Bands
-
-    bands = calculate_bollinger_bands(
-        close,
-        BOLLINGER_PERIOD,
-        BOLLINGER_STD,
-    )
-
+    bands = calculate_bollinger_bands(close, BOLLINGER_PERIOD, BOLLINGER_STD)
     result["bb_upper"] = bands["bb_upper"]
     result["bb_middle"] = bands["bb_middle"]
     result["bb_lower"] = bands["bb_lower"]
-    
-    # 🔥 NEW: Bollinger Band Width (Squeeze Detection)
     result["bb_width"] = bands["bb_width"]
 
     return result
@@ -1413,96 +1205,57 @@ def calculate_all_indicators(df):
 # ==================================================
 
 def get_latest_indicator_snapshot(df):
-    """
-    Return the latest available indicator values.
-
-    Missing values remain None.
-    No missing value is guessed or fabricated.
-    """
+    """Return the latest available indicator values."""
 
     if not isinstance(df, pd.DataFrame):
-        raise TypeError(
-            "Input must be a pandas DataFrame."
-        )
+        raise TypeError("Input must be a pandas DataFrame.")
 
     if df.empty:
-        raise ValueError(
-            "Cannot create snapshot from empty data."
-        )
+        raise ValueError("Cannot create snapshot from empty data.")
 
     enriched = calculate_all_indicators(df)
-
     latest = enriched.iloc[-1]
 
     def safe_value(column):
         value = latest.get(column)
-
         if value is None or pd.isna(value):
             return None
-
         return float(value)
 
-    levels = support_resistance(
-        enriched
-    )
-
-    candle_info = analyze_candles(
-        enriched
-    )
-
+    levels = support_resistance(enriched)
+    candle_info = analyze_candles(enriched)
     sma200_column = "sma_200"
 
     return {
         "close": safe_value("close"),
-
         "ema_9": safe_value("ema_9"),
         "ema_20": safe_value("ema_20"),
-
         "sma_20": safe_value("sma_20"),
         "sma_50": safe_value("sma_50"),
         "sma_200": safe_value(sma200_column),
-
         "rsi": safe_value("rsi"),
-
         "macd": safe_value("macd"),
         "macd_signal": safe_value("macd_signal"),
-        "macd_histogram": safe_value(
-            "macd_histogram"
-        ),
-
+        "macd_histogram": safe_value("macd_histogram"),
         "adx": safe_value("adx"),
         "plus_di": safe_value("plus_di"),
         "minus_di": safe_value("minus_di"),
-
         "atr": safe_value("atr"),
         "vwap": safe_value("vwap"),
-
-        "relative_volume": safe_value(
-            "relative_volume"
-        ),
-        
-        # 🔥 NEW INDICATORS IN SNAPSHOT
+        "relative_volume": safe_value("relative_volume"),
         "volume_momentum": safe_value("volume_momentum"),
         "roc": safe_value("roc"),
-
         "obv": safe_value("obv"),
         "cmf": safe_value("cmf"),
-
         "bb_upper": safe_value("bb_upper"),
         "bb_middle": safe_value("bb_middle"),
         "bb_lower": safe_value("bb_lower"),
         "bb_width": safe_value("bb_width"),
-
         "support": levels["support"],
         "resistance": levels["resistance"],
-
         "candle_analysis": candle_info,
-
         "candle_count": len(enriched),
-
-        "ma200_available": (
-            safe_value(sma200_column) is not None
-        ),
+        "ma200_available": safe_value(sma200_column) is not None,
     }
 
 
@@ -1511,10 +1264,7 @@ def get_latest_indicator_snapshot(df):
 # ==================================================
 
 def get_indicator_config():
-    """
-    Return the active indicator configuration.
-    Useful for tests and diagnostics.
-    """
+    """Return the active indicator configuration."""
 
     return {
         "ema_fast": EMA_FAST,
@@ -1530,14 +1280,10 @@ def get_indicator_config():
         "bollinger_std": BOLLINGER_STD,
         "rvol_period": RVOL_PERIOD,
         "cmf_period": CMF_PERIOD,
-        "support_resistance_lookback": (
-            SUPPORT_RESISTANCE_LOOKBACK
-        ),
+        "support_resistance_lookback": SUPPORT_RESISTANCE_LOOKBACK,
         "pivot_left": PIVOT_LEFT,
         "pivot_right": PIVOT_RIGHT,
-        "min_candles_for_ma200": (
-            MIN_CANDLES_FOR_MA200
-        ),
+        "min_candles_for_ma200": MIN_CANDLES_FOR_MA200,
         "roc_period": ROC_PERIOD,
         "volume_momentum_period": VOLUME_MOMENTUM_PERIOD,
     }

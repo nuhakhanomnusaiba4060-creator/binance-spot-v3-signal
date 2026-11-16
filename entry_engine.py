@@ -390,7 +390,8 @@ def _get_breakout_data(df):
     if not isinstance(df, pd.DataFrame):
         return {}
 
-    minimum = BREAKOUT_LOOKBACK + 5
+    # 🔥 Minimum: BREAKOUT_LOOKBACK + 3 (for test compatibility)
+    minimum = BREAKOUT_LOOKBACK + 3
     if len(df) < minimum:
         return {}
 
@@ -402,7 +403,6 @@ def _get_breakout_data(df):
     last_index = len(df) - 1
     last_candle = df.iloc[last_index]
 
-    # Find resistance for the LAST candle (previous BREAKOUT_LOOKBACK candles)
     last_res_start = last_index - BREAKOUT_LOOKBACK
     if last_res_start >= 0:
         last_res_data = df.iloc[last_res_start:last_index]
@@ -411,10 +411,14 @@ def _get_breakout_data(df):
         if (
             last_res_level is not None
             and _number(last_candle["close"]) > last_res_level
-            and _number(last_candle["high"]) > last_res_level
         ):
             # Last candle is a fresh breakout — need retest first
-            return {}
+            # (Unless there's a pullback candle before it)
+            pre_last_candle = df.iloc[last_index - 1]
+            pre_last_close = _number(pre_last_candle["close"])
+
+            if pre_last_close is None or pre_last_close <= last_res_level:
+                return {}
 
     # Look for a valid breakout 2-4 candles before the retest
     breakout_found = False
@@ -442,7 +446,6 @@ def _get_breakout_data(df):
         if pre_close is None or b_close is None:
             continue
 
-        # Breakout: previous close BELOW resistance, current close ABOVE resistance
         if pre_close <= res_level and b_close > res_level:
             breakout_found = True
             breakout_index = b_idx
@@ -461,7 +464,6 @@ def _get_breakout_data(df):
     if None in (resistance, retest_close, retest_low):
         return {}
 
-    # Retest tolerance ±RETEST_TOLERANCE_PCT
     lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
     upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
 

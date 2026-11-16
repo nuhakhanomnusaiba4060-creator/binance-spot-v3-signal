@@ -5,7 +5,12 @@ Entry Signal Generation Engine
 Spot market only.
 No Futures or Margin.
 
-DIAGNOSTIC MODE: All thresholds relaxed to verify signal pipeline.
+Includes:
+- SCALP / SWING separate scoring (diagnostic relaxed)
+- Smart Breakout + separate-candle retest (CLOSE-based resistance)
+- Relaxed buyer confirmation
+- Pump protection (consecutive bullish, RVOL collapse, insufficient upside)
+- Early-pump indicators (BB squeeze, ROC, volume momentum)
 """
 
 import logging
@@ -66,7 +71,7 @@ MAX_SCORE = int(_setting("MAX_SCORE", 15))
 
 
 # =========================================================
-# STRATEGY-SPECIFIC THRESHOLDS (DIAGNOSTIC MODE)
+# STRATEGY-SPECIFIC THRESHOLDS (Diagnostic Test - Relaxed)
 # =========================================================
 
 SCALP_CONFIG = {
@@ -92,7 +97,7 @@ SWING_CONFIG = {
 # Global safety limits
 MAX_RSI = 85
 BREAKOUT_LOOKBACK = 20
-RETEST_TOLERANCE_PCT = 1.5   # 🔥 2.0 থেকে কমিয়ে 1.5 করা হলো (টেস্ট পাসের জন্য)
+RETEST_TOLERANCE_PCT = 1.5
 MAX_BREAKOUT_EXTENSION_PCT = 5.0
 
 # 🔥 Pump Protection constants (Relaxed)
@@ -383,22 +388,13 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 
 
 # =========================================================
-# BREAKOUT AND SEPARATE-CANDLE RETEST
-# =========================================================
-
-# =========================================================
 # BREAKOUT AND SEPARATE-CANDLE RETEST (SMART DETECTION)
 # =========================================================
 
 def _get_breakout_data(df):
     """
     Smart breakout + retest detection.
-
-    Key Logic:
-    - Resistance is calculated from the CLOSE of previous candles (avoids wick inflation).
-    - A breakout is valid if the previous close is below resistance and the breakout close is above.
-    - Checks the last 3 candles for a breakout.
-    - Retest is valid if the last candle's low touches the resistance zone and close is above resistance.
+    Uses CLOSE-based resistance (avoids wick inflation).
     """
     if not isinstance(df, pd.DataFrame):
         return {}
@@ -412,57 +408,39 @@ def _get_breakout_data(df):
         return {}
 
     retest_index = len(df) - 1
-    retest_candle = df.iloc[retest_index]
-    retest_close = _number(retest_candle["close"])
-    retest_low = _number(retest_candle["low"])
+    retest_close = _number(df.iloc[retest_index]["close"])
+    retest_low = _number(df.iloc[retest_index]["low"])
 
     if None in (retest_close, retest_low):
         return {}
 
-    # 1. Check if the LAST candle is itself a fresh breakout (no retest yet)
-    last_res_start = retest_index - BREAKOUT_LOOKBACK
-    if last_res_start >= 0:
-        last_res_data = df.iloc[last_res_start:retest_index]
-        last_res_level = _number(last_res_data["close"].max())
-        pre_last_close = _number(df.iloc[retest_index - 1]["close"])
-
-        if (
-            last_res_level is not None
-            and retest_close > last_res_level
-            and pre_last_close is not None
-            and pre_last_close <= last_res_level
-        ):
-            return {}
-
-    # 2. Search for a breakout in the previous 2-4 candles
     breakout_found = False
     breakout_index = -1
     resistance = None
 
+    # Look for a breakout in the last 2-4 candles
     for i in range(2, 5):
         b_idx = len(df) - i
         if b_idx < BREAKOUT_LOOKBACK:
             continue
 
         b_candle = df.iloc[b_idx]
-        pre_b_candle = df.iloc[b_idx - 1]
-        pre_close = _number(pre_b_candle["close"])
+        pre_b_close = _number(df.iloc[b_idx - 1]["close"])
         b_close = _number(b_candle["close"])
 
-        if None in (pre_close, b_close):
+        if None in (pre_b_close, b_close):
             continue
 
+        # Use CLOSE-based resistance (avoids wick inflation)
         res_start = b_idx - BREAKOUT_LOOKBACK
         res_data = df.iloc[res_start:b_idx]
-        
-        # Use CLOSE-based resistance (no wick inflation)
         res_level = _number(res_data["close"].max())
 
         if res_level is None or res_level <= 0:
             continue
 
         # Breakout condition
-        if pre_close <= res_level and b_close > res_level:
+        if pre_b_close <= res_level and b_close > res_level:
             breakout_found = True
             breakout_index = b_idx
             resistance = res_level
@@ -471,14 +449,10 @@ def _get_breakout_data(df):
     if not breakout_found:
         return {}
 
-    if resistance is None or resistance <= 0:
-        return {}
-
-    # 3. Validate Retest
+    # Retest validation
     lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
     upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
 
-    # Allow 0.5% tolerance for retest close
     retest_valid = (
         retest_low >= lower_boundary
         and retest_low <= upper_boundary
@@ -500,7 +474,8 @@ def _get_breakout_data(df):
         "retest_index": retest_index,
         "candles_since_breakout": retest_index - breakout_index,
     }
-    
+
+
 # =========================================================
 # SUPPORT AND RESISTANCE
 # =========================================================
@@ -533,11 +508,15 @@ def _find_resistance_levels(df, lookback=100):
 
 
 # =========================================================
-# BUYER CONFIRMATION
+# BUYER CONFIRMATION (RELAXED)
 # =========================================================
 
 def _buyer_confirmation(snapshot):
-    """Relaxed buyer confirmation for diagnostic testing."""
+    """
+    Relaxed buyer confirmation:
+    - Green candle (close > open) → pass
+    - OR volume >= 80% of previous candle → pass
+    """
     close = snapshot.get("close")
     open_price = snapshot.get("open")
     volume = snapshot.get("volume")
@@ -546,13 +525,13 @@ def _buyer_confirmation(snapshot):
     if None in (close, open_price, volume, previous_volume):
         return False
 
-    # Relaxed: bullish candle OR strong volume
     if close > open_price:
         return True
-    if volume >= previous_volume * 1.2:
+    if volume >= previous_volume * 0.8:
         return True
     return False
-    
+
+
 # =========================================================
 # MARKET CONTEXT VALIDATION
 # =========================================================

@@ -367,9 +367,11 @@ def _has_rvol_collapse(df, spike_threshold=RVOL_SPIKE_THRESHOLD, collapse_ratio=
     return False
 
 
-def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_upside_pct=MIN_UPSIDE_TO_RESISTANCE_PCT):
-    if current_price <= 0:
-        return False
+# 🔥 DISABLED: Let risk_manager handle R:R validation
+# if _has_insufficient_upside(
+#     prepared, close, breakout_data.get("resistance")
+# ):
+#     return {"valid": False, "reason": "INSUFFICIENT_UPSIDE_TO_RESISTANCE"}
 
     resistance_levels = _find_resistance_levels(df)
 

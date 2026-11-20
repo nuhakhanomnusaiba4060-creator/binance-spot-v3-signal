@@ -6,11 +6,10 @@ Spot market only.
 No Futures or Margin.
 
 Includes:
-- SCALP / SWING separate scoring (diagnostic relaxed)
+- SCALP / SWING separate scoring (Diagnostic Mode)
 - Smart Breakout + separate-candle retest (CLOSE-based resistance)
 - Relaxed buyer confirmation
-- Pump protection (consecutive bullish, RVOL collapse, insufficient upside)
-- Early-pump indicators (BB squeeze, ROC, volume momentum)
+- Pump protection (consecutive bullish, RVOL collapse)
 """
 
 import logging
@@ -71,7 +70,7 @@ MAX_SCORE = int(_setting("MAX_SCORE", 15))
 
 
 # =========================================================
-# STRATEGY-SPECIFIC THRESHOLDS (Diagnostic Test - Relaxed)
+# STRATEGY-SPECIFIC THRESHOLDS (Diagnostic Mode)
 # =========================================================
 
 SCALP_CONFIG = {
@@ -100,12 +99,12 @@ BREAKOUT_LOOKBACK = 20
 RETEST_TOLERANCE_PCT = 1.5
 MAX_BREAKOUT_EXTENSION_PCT = 5.0
 
-# 🔥 Pump Protection constants (Relaxed)
+# 🔥 Pump Protection constants
 MAX_CONSECUTIVE_BULLISH = 5
 MIN_CANDLE_BODY_PCT = 2.5
 RVOL_SPIKE_THRESHOLD = 3.0
 RVOL_COLLAPSE_RATIO = 0.5
-MIN_UPSIDE_TO_RESISTANCE_PCT = 0.3
+MIN_UPSIDE_TO_RESISTANCE_PCT = 0.1  # Kept for API compatibility (not used in validation)
 
 APPROVED_CLASSIFICATIONS = (
     "STRONG BUY",
@@ -367,11 +366,13 @@ def _has_rvol_collapse(df, spike_threshold=RVOL_SPIKE_THRESHOLD, collapse_ratio=
     return False
 
 
-# 🔥 DISABLED: Let risk_manager handle R:R validation
-# if _has_insufficient_upside(
-#     prepared, close, breakout_data.get("resistance")
-# ):
-#     return {"valid": False, "reason": "INSUFFICIENT_UPSIDE_TO_RESISTANCE"}
+def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_upside_pct=MIN_UPSIDE_TO_RESISTANCE_PCT):
+    """
+    Kept for API compatibility and future use.
+    NOT called in validate_entry — risk_manager handles R:R.
+    """
+    if current_price <= 0:
+        return False
 
     resistance_levels = _find_resistance_levels(df)
 
@@ -396,7 +397,7 @@ def _has_rvol_collapse(df, spike_threshold=RVOL_SPIKE_THRESHOLD, collapse_ratio=
 def _get_breakout_data(df):
     """
     Smart breakout + retest detection.
-    Uses CLOSE-based resistance (avoids wick inflation).
+    Uses CLOSE-based resistance to avoid wick inflation.
     """
     if not isinstance(df, pd.DataFrame):
         return {}
@@ -420,7 +421,7 @@ def _get_breakout_data(df):
     breakout_index = -1
     resistance = None
 
-    # Look for a breakout in the last 2-4 candles
+    # Look for a breakout in the last 2-11 candles
     for i in range(2, 12):
         b_idx = len(df) - i
         if b_idx < BREAKOUT_LOOKBACK:
@@ -433,7 +434,6 @@ def _get_breakout_data(df):
         if None in (pre_b_close, b_close):
             continue
 
-        # Use CLOSE-based resistance (avoids wick inflation)
         res_start = b_idx - BREAKOUT_LOOKBACK
         res_data = df.iloc[res_start:b_idx]
         res_level = _number(res_data["close"].max())
@@ -441,7 +441,6 @@ def _get_breakout_data(df):
         if res_level is None or res_level <= 0:
             continue
 
-        # Breakout condition
         if pre_b_close <= res_level and b_close > res_level:
             breakout_found = True
             breakout_index = b_idx
@@ -451,7 +450,6 @@ def _get_breakout_data(df):
     if not breakout_found:
         return {}
 
-    # Retest validation
     lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
     upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
 
@@ -493,19 +491,35 @@ def _find_support(df, lookback=30):
 
 
 def _find_resistance_levels(df, lookback=100):
-    if not isinstance(df, pd.DataFrame) or len(df) < 10:
+    if not isinstance(df, pd.DataFrame) or len(df) < 20:
         return []
+
     recent = df.iloc[-(lookback + 1):-1]
     highs = recent["high"].tolist()
+    closes = recent["close"].tolist()
+
+    if not highs:
+        return []
+
+    current_price = _number(closes[-1]) if closes else None
+    if current_price is None or current_price <= 0:
+        return []
+
     levels = []
-    for index in range(1, len(highs) - 1):
+    # Require 3 candles on each side (significant pivot)
+    for index in range(3, len(highs) - 3):
         current = _number(highs[index])
-        left = _number(highs[index - 1])
-        right = _number(highs[index + 1])
-        if None in (current, left, right):
+        left_highs = [_number(highs[i]) for i in range(index - 3, index)]
+        right_highs = [_number(highs[i]) for i in range(index + 1, index + 4)]
+
+        if any(v is None for v in left_highs + right_highs):
             continue
-        if current >= left and current >= right:
-            levels.append(current)
+
+        if current >= max(left_highs) and current >= max(right_highs):
+            # Only include if at least 0.5% above current price
+            if current > current_price * 1.005:
+                levels.append(current)
+
     return sorted(set(level for level in levels if level > 0))
 
 
@@ -700,10 +714,11 @@ def validate_entry(df, market_context, strategy="SCALP"):
     if breakout_data["distance_from_resistance_pct"] > MAX_BREAKOUT_EXTENSION_PCT:
         return {"valid": False, "reason": "BREAKOUT_TOO_EXTENDED"}
 
-    if _has_insufficient_upside(
-        prepared, close, breakout_data.get("resistance")
-    ):
-        return {"valid": False, "reason": "INSUFFICIENT_UPSIDE_TO_RESISTANCE"}
+    # 🔥 DISABLED: Let risk_manager handle R:R validation
+    # if _has_insufficient_upside(
+    #     prepared, close, breakout_data.get("resistance")
+    # ):
+    #     return {"valid": False, "reason": "INSUFFICIENT_UPSIDE_TO_RESISTANCE"}
 
     if not _buyer_confirmation(snapshot):
         return {"valid": False, "reason": "BUYER_CONFIRMATION_FAILED"}

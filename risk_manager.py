@@ -2,17 +2,11 @@
 Binance Spot V3 Smart Signal Scanner
 Risk Management Engine
 
-Responsibilities:
-- Calculate technical Stop Loss with distance bounds.
-- Calculate structure-based T1, T2 and T3 targets.
-- Calculate position size using maximum capital risk.
-- Include estimated fees and slippage.
-- Validate minimum Risk/Reward ratio.
-- Reject setups with unreasonable Stop Loss distance.
-- Diagnostic logging for debugging.
-
-Spot long positions only.
-No Futures or Margin calculations.
+BALANCED MODE:
+- Real R:R validation (minimum 2:1)
+- Balanced SL bounds
+- ATR + Fixed % fallback targets
+- Diagnostic logging
 """
 
 import logging
@@ -36,19 +30,15 @@ def _normalize_key(value):
 def _find_value(data, target):
     if not isinstance(data, dict):
         return None
-
     target_key = _normalize_key(target)
-
     for key, value in data.items():
         if _normalize_key(key) == target_key:
             return value
-
     for value in data.values():
         if isinstance(value, dict):
             result = _find_value(value, target)
             if result is not None:
                 return result
-
     return None
 
 
@@ -57,16 +47,15 @@ def _setting(key, default):
     return default if value is None else value
 
 
-# 🔥 Relaxed for diagnostic mode
+# 🔥 BALANCED settings
 MAX_RISK_PERCENT = float(_setting("MAX_RISK_PERCENT", 1.0))
-MIN_RISK_REWARD = 1.3  # 🔥 2.0 থেকে কমিয়ে 1.3
-DEFAULT_ATR_MULTIPLIER = float(_setting("ATR_MULTIPLIER", 1.0))
+MIN_RISK_REWARD = 2.0  # 🔥 Real R:R requirement
+DEFAULT_ATR_MULTIPLIER = float(_setting("ATR_MULTIPLIER", 1.5))
 DEFAULT_FEE_RATE = float(_setting("FEE_RATE", 0.001))
 DEFAULT_SLIPPAGE_RATE = float(_setting("SLIPPAGE_RATE", 0.001))
 
-# 🔥 Relaxed SL bounds for diagnostic
-MAX_STOP_LOSS_DISTANCE_PERCENT = 3.0   # 🔥 8.0 থেকে কমিয়ে 3.0
-MIN_STOP_LOSS_DISTANCE_PERCENT = 0.3   # 🔥 0.5 থেকে কমিয়ে 0.3
+MAX_STOP_LOSS_DISTANCE_PERCENT = 5.0  # 🔥 Balanced SL bound
+MIN_STOP_LOSS_DISTANCE_PERCENT = 0.5  # 🔥 Balanced SL bound
 
 
 # ---------------------------------------------------------
@@ -153,8 +142,7 @@ def calculate_stop_loss(
         candidates.append(("SUPPORT", support))
 
     if atr_value is not None:
-        # Try multiple ATR multipliers
-        for atr_mult in (multiplier, multiplier * 0.75, multiplier * 1.5):
+        for atr_mult in (multiplier, multiplier * 0.75, multiplier * 1.25):
             atr_level = entry - (atr_value * atr_mult)
             if atr_level > 0 and atr_level < entry:
                 candidates.append((f"ATR_{atr_mult:.1f}x", atr_level))
@@ -246,12 +234,11 @@ def calculate_targets(
             "source": "RESISTANCE",
         })
 
-    # ATR-based fallback (more aggressive multipliers)
+    # ATR fallback (aggressive multipliers)
     if not targets:
         atr_value = _number(atr)
         if atr_value is not None and atr_value > 0:
-            # Try many multipliers to find any target
-            atr_multipliers = (2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+            atr_multipliers = (3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
             for mult in atr_multipliers:
                 level = entry + (atr_value * mult)
                 if level < minimum_t1:
@@ -267,9 +254,9 @@ def calculate_targets(
                 if len(targets) >= 3:
                     break
 
-    # 🔥 Last-resort fallback: fixed percentage targets
+    # Fixed % fallback (last resort)
     if not targets:
-        for pct in (2.0, 3.5, 5.0):
+        for pct in (2.5, 4.0, 6.0):
             level = entry * (1 + pct / 100)
             if level < minimum_t1:
                 continue

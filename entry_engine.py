@@ -8,7 +8,7 @@ No Futures or Margin.
 Includes:
 - SCALP / SWING separate scoring (Diagnostic Mode)
 - Smart Breakout + separate-candle retest (CLOSE-based resistance)
-- Relaxed buyer confirmation
+- Ultra-relaxed buyer confirmation
 - Pump protection (consecutive bullish, RVOL collapse)
 """
 
@@ -524,14 +524,15 @@ def _find_resistance_levels(df, lookback=100):
 
 
 # =========================================================
-# BUYER CONFIRMATION (RELAXED)
+# BUYER CONFIRMATION (ULTRA-RELAXED)
 # =========================================================
 
 def _buyer_confirmation(snapshot):
     """
-    Relaxed buyer confirmation:
+    Ultra-relaxed buyer confirmation for diagnostic mode:
     - Green candle (close > open) → pass
-    - OR volume >= 80% of previous candle → pass
+    - Volume >= 30% of previous candle → pass
+    - OR close within 0.2% of open → pass (basically any small move)
     """
     close = snapshot.get("close")
     open_price = snapshot.get("open")
@@ -541,10 +542,18 @@ def _buyer_confirmation(snapshot):
     if None in (close, open_price, volume, previous_volume):
         return False
 
+    # Pass if green candle
     if close > open_price:
         return True
-    if volume >= previous_volume * 0.8:
+
+    # Pass if volume is at least 30% of previous
+    if volume >= previous_volume * 0.3:
         return True
+
+    # Pass if close is within 0.2% of open (basically any small move)
+    if previous_volume > 0 and abs(close - open_price) / open_price < 0.002:
+        return True
+
     return False
 
 

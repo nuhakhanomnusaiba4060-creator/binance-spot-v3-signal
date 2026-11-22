@@ -57,31 +57,16 @@ def _setting(key, default):
     return default if value is None else value
 
 
-MAX_RISK_PERCENT = float(
-    _setting("MAX_RISK_PERCENT", 1.0)
-)
+# 🔥 Relaxed for diagnostic mode
+MAX_RISK_PERCENT = float(_setting("MAX_RISK_PERCENT", 1.0))
+MIN_RISK_REWARD = 1.3  # 🔥 2.0 থেকে কমিয়ে 1.3
+DEFAULT_ATR_MULTIPLIER = float(_setting("ATR_MULTIPLIER", 1.0))
+DEFAULT_FEE_RATE = float(_setting("FEE_RATE", 0.001))
+DEFAULT_SLIPPAGE_RATE = float(_setting("SLIPPAGE_RATE", 0.001))
 
-MIN_RISK_REWARD = float(
-    _setting("MIN_RISK_REWARD_RATIO", 2.0)
-)
-
-DEFAULT_ATR_MULTIPLIER = float(
-    _setting("ATR_MULTIPLIER", 1.5)
-)
-
-DEFAULT_FEE_RATE = float(
-    _setting("FEE_RATE", 0.001)
-)
-
-DEFAULT_SLIPPAGE_RATE = float(
-    _setting("SLIPPAGE_RATE", 0.001)
-)
-
-MAX_STOP_LOSS_DISTANCE_PERCENT = float(
-    _setting("MAX_STOP_LOSS_DISTANCE_PERCENT", 8.0)
-)
-
-MIN_STOP_LOSS_DISTANCE_PERCENT = 0.5
+# 🔥 Relaxed SL bounds for diagnostic
+MAX_STOP_LOSS_DISTANCE_PERCENT = 3.0   # 🔥 8.0 থেকে কমিয়ে 3.0
+MIN_STOP_LOSS_DISTANCE_PERCENT = 0.3   # 🔥 0.5 থেকে কমিয়ে 0.3
 
 
 # ---------------------------------------------------------
@@ -168,9 +153,11 @@ def calculate_stop_loss(
         candidates.append(("SUPPORT", support))
 
     if atr_value is not None:
-        atr_level = entry - (atr_value * multiplier)
-        if atr_level > 0 and atr_level < entry:
-            candidates.append(("ATR", atr_level))
+        # Try multiple ATR multipliers
+        for atr_mult in (multiplier, multiplier * 0.75, multiplier * 1.5):
+            atr_level = entry - (atr_value * atr_mult)
+            if atr_level > 0 and atr_level < entry:
+                candidates.append((f"ATR_{atr_mult:.1f}x", atr_level))
 
     if not candidates:
         raise ValueError("No valid Stop Loss candidate available")
@@ -206,17 +193,11 @@ def calculate_stop_loss(
             + " | ".join(rejection_notes)
         )
 
-    method = chosen_method
-    if chosen_method == "SUPPORT" and atr_value is not None:
-        method = "SUPPORT_AND_ATR"
-    elif chosen_method == "ATR" and support is not None:
-        method = "ATR"
-
     risk_distance = entry - chosen_sl
 
     return {
         "stop_loss": round(chosen_sl, 12),
-        "method": method,
+        "method": chosen_method,
         "risk_distance": round(risk_distance, 12),
         "risk_percent": round((risk_distance / entry) * 100, 4),
         "max_allowed_percent": round(max_dist, 4),
@@ -265,11 +246,12 @@ def calculate_targets(
             "source": "RESISTANCE",
         })
 
-    # ATR-based fallback
+    # ATR-based fallback (more aggressive multipliers)
     if not targets:
         atr_value = _number(atr)
         if atr_value is not None and atr_value > 0:
-            atr_multipliers = (2.0, 3.5, 5.0)
+            # Try many multipliers to find any target
+            atr_multipliers = (2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
             for mult in atr_multipliers:
                 level = entry + (atr_value * mult)
                 if level < minimum_t1:
@@ -280,10 +262,27 @@ def calculate_targets(
                     "price": round(level, 12),
                     "reward_percent": round((reward / entry) * 100, 4),
                     "risk_reward": round(rr, 2),
-                    "source": "ATR_FALLBACK",
+                    "source": f"ATR_{mult}x",
                 })
                 if len(targets) >= 3:
                     break
+
+    # 🔥 Last-resort fallback: fixed percentage targets
+    if not targets:
+        for pct in (2.0, 3.5, 5.0):
+            level = entry * (1 + pct / 100)
+            if level < minimum_t1:
+                continue
+            reward = level - entry
+            rr = reward / risk_distance
+            targets.append({
+                "price": round(level, 12),
+                "reward_percent": round(pct, 4),
+                "risk_reward": round(rr, 2),
+                "source": f"FIXED_{pct}%",
+            })
+            if len(targets) >= 3:
+                break
 
     return {
         "entry_price": round(entry, 12),
@@ -453,7 +452,7 @@ def validate_risk(
 
 
 # ---------------------------------------------------------
-# COMPLETE RISK PLAN (with Diagnostic Logs)
+# COMPLETE RISK PLAN
 # ---------------------------------------------------------
 
 def build_risk_plan(
@@ -466,9 +465,6 @@ def build_risk_plan(
     fee_rate=DEFAULT_FEE_RATE,
     slippage_rate=DEFAULT_SLIPPAGE_RATE,
 ):
-    """
-    Build a complete Spot risk plan with diagnostic logging.
-    """
     try:
         stop_data = calculate_stop_loss(
             entry_price=entry_price,

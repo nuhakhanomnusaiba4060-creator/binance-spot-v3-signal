@@ -5,11 +5,10 @@ Entry Signal Generation Engine
 Spot market only.
 No Futures or Margin.
 
-Includes:
-- SCALP / SWING separate scoring (Diagnostic Mode)
-- Smart Breakout + separate-candle retest (CLOSE-based resistance)
-- Ultra-relaxed buyer confirmation
-- Pump protection (consecutive bullish, RVOL collapse)
+BALANCED MODE:
+- Real breakouts detected
+- Fake signals rejected
+- Strong R:R requirements
 """
 
 import logging
@@ -63,48 +62,48 @@ def _setting(key, default):
     return default if value is None else value
 
 
-MIN_SCORE = int(_setting("MIN_SCORE", 10))
-STRONG_MIN_SCORE = int(_setting("STRONG_MIN_SCORE", 10))
+MIN_SCORE = int(_setting("MIN_SCORE", 11))
+STRONG_MIN_SCORE = int(_setting("STRONG_MIN_SCORE", 11))
 EXCELLENT_MIN_SCORE = int(_setting("EXCELLENT_MIN_SCORE", 13))
 MAX_SCORE = int(_setting("MAX_SCORE", 15))
 
 
 # =========================================================
-# STRATEGY-SPECIFIC THRESHOLDS (Diagnostic Mode)
+# STRATEGY-SPECIFIC THRESHOLDS (BALANCED MODE)
 # =========================================================
 
 SCALP_CONFIG = {
-    "MIN_RVOL": 0.3,
-    "MIN_ADX": 10.0,
-    "RSI_MIN": 40.0,
-    "RSI_MAX": 75.0,
-    "MAX_ROC": 6.0,
-    "MAX_BB_WIDTH": 0.30,
-    "MAX_EMA_EXTENSION_PCT": 4.0,
+    "MIN_RVOL": 1.2,
+    "MIN_ADX": 18.0,
+    "RSI_MIN": 48.0,
+    "RSI_MAX": 72.0,
+    "MAX_ROC": 4.0,
+    "MAX_BB_WIDTH": 0.22,
+    "MAX_EMA_EXTENSION_PCT": 3.5,
 }
 
 SWING_CONFIG = {
-    "MIN_RVOL": 0.4,
-    "MIN_ADX": 12.0,
-    "RSI_MIN": 42.0,
-    "RSI_MAX": 78.0,
-    "MAX_ROC": 7.0,
-    "MAX_BB_WIDTH": 0.35,
-    "MAX_EMA_EXTENSION_PCT": 5.0,
+    "MIN_RVOL": 1.3,
+    "MIN_ADX": 22.0,
+    "RSI_MIN": 50.0,
+    "RSI_MAX": 74.0,
+    "MAX_ROC": 5.0,
+    "MAX_BB_WIDTH": 0.25,
+    "MAX_EMA_EXTENSION_PCT": 4.0,
 }
 
 # Global safety limits
-MAX_RSI = 85
+MAX_RSI = 78
 BREAKOUT_LOOKBACK = 20
 RETEST_TOLERANCE_PCT = 1.5
-MAX_BREAKOUT_EXTENSION_PCT = 5.0
+MAX_BREAKOUT_EXTENSION_PCT = 2.5
 
 # 🔥 Pump Protection constants
-MAX_CONSECUTIVE_BULLISH = 5
-MIN_CANDLE_BODY_PCT = 2.5
+MAX_CONSECUTIVE_BULLISH = 4
+MIN_CANDLE_BODY_PCT = 2.0
 RVOL_SPIKE_THRESHOLD = 3.0
 RVOL_COLLAPSE_RATIO = 0.5
-MIN_UPSIDE_TO_RESISTANCE_PCT = 0.1  # Kept for API compatibility (not used in validation)
+MIN_UPSIDE_TO_RESISTANCE_PCT = 1.5  # 1.5% upside required (rejects squeezed setups)
 
 APPROVED_CLASSIFICATIONS = (
     "STRONG BUY",
@@ -310,7 +309,7 @@ def _check_confirmation_trend(snapshots):
 
 
 # =========================================================
-# 🔥 PUMP PROTECTION
+# PUMP PROTECTION
 # =========================================================
 
 def _has_consecutive_bullish_candles(df, max_count=MAX_CONSECUTIVE_BULLISH, min_body_pct=MIN_CANDLE_BODY_PCT):
@@ -368,8 +367,7 @@ def _has_rvol_collapse(df, spike_threshold=RVOL_SPIKE_THRESHOLD, collapse_ratio=
 
 def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_upside_pct=MIN_UPSIDE_TO_RESISTANCE_PCT):
     """
-    Kept for API compatibility and future use.
-    NOT called in validate_entry — risk_manager handles R:R.
+    Returns True if the next resistance level is too close.
     """
     if current_price <= 0:
         return False
@@ -391,14 +389,10 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 
 
 # =========================================================
-# BREAKOUT AND SEPARATE-CANDLE RETEST (SMART DETECTION)
+# BREAKOUT AND SEPARATE-CANDLE RETEST
 # =========================================================
 
 def _get_breakout_data(df):
-    """
-    Smart breakout + retest detection.
-    Uses CLOSE-based resistance to avoid wick inflation.
-    """
     if not isinstance(df, pd.DataFrame):
         return {}
 
@@ -421,7 +415,6 @@ def _get_breakout_data(df):
     breakout_index = -1
     resistance = None
 
-    # Look for a breakout in the last 2-11 candles
     for i in range(2, 12):
         b_idx = len(df) - i
         if b_idx < BREAKOUT_LOOKBACK:
@@ -506,7 +499,6 @@ def _find_resistance_levels(df, lookback=100):
         return []
 
     levels = []
-    # Require 3 candles on each side (significant pivot)
     for index in range(3, len(highs) - 3):
         current = _number(highs[index])
         left_highs = [_number(highs[i]) for i in range(index - 3, index)]
@@ -516,7 +508,6 @@ def _find_resistance_levels(df, lookback=100):
             continue
 
         if current >= max(left_highs) and current >= max(right_highs):
-            # Only include if at least 0.5% above current price
             if current > current_price * 1.005:
                 levels.append(current)
 
@@ -524,15 +515,14 @@ def _find_resistance_levels(df, lookback=100):
 
 
 # =========================================================
-# BUYER CONFIRMATION (ULTRA-RELAXED)
+# BUYER CONFIRMATION (BALANCED)
 # =========================================================
 
 def _buyer_confirmation(snapshot):
     """
-    Ultra-relaxed buyer confirmation for diagnostic mode:
-    - Green candle (close > open) → pass
-    - Volume >= 30% of previous candle → pass
-    - OR close within 0.2% of open → pass (basically any small move)
+    Balanced buyer confirmation:
+    - Green candle (close > open) with decent body → pass
+    - OR volume >= 70% of previous candle → pass (volume supports)
     """
     close = snapshot.get("close")
     open_price = snapshot.get("open")
@@ -542,16 +532,14 @@ def _buyer_confirmation(snapshot):
     if None in (close, open_price, volume, previous_volume):
         return False
 
-    # Pass if green candle
+    # Green candle with at least 0.1% body → pass
     if close > open_price:
-        return True
+        body_pct = (close - open_price) / open_price * 100
+        if body_pct >= 0.1:
+            return True
 
-    # Pass if volume is at least 30% of previous
-    if volume >= previous_volume * 0.3:
-        return True
-
-    # Pass if close is within 0.2% of open (basically any small move)
-    if previous_volume > 0 and abs(close - open_price) / open_price < 0.002:
+    # Volume supports (70%+ of previous)
+    if previous_volume > 0 and volume >= previous_volume * 0.7:
         return True
 
     return False
@@ -621,7 +609,7 @@ def score_setup(setup_data):
     required_score = MIN_SCORE
 
     if market_status == "NEUTRAL" or btc_trend == "NEUTRAL":
-        required_score -= 2
+        required_score -= 1
 
     if btc_trend == "BEARISH" or market_status == "BEARISH":
         required_score += 1
@@ -683,10 +671,6 @@ def validate_entry(df, market_context, strategy="SCALP"):
         return {"valid": False, "reason": "RSI_OVEREXTENDED"}
 
     if rvol < config["MIN_RVOL"]:
-        logger.info(
-            "RVOL REJECT | %s | RVOL=%.4f | min=%.2f | close=%.6f",
-            strategy, rvol, config["MIN_RVOL"], close,
-        )
         return {"valid": False, "reason": "LOW_RELATIVE_VOLUME"}
 
     if _has_consecutive_bullish_candles(prepared):
@@ -723,11 +707,10 @@ def validate_entry(df, market_context, strategy="SCALP"):
     if breakout_data["distance_from_resistance_pct"] > MAX_BREAKOUT_EXTENSION_PCT:
         return {"valid": False, "reason": "BREAKOUT_TOO_EXTENDED"}
 
-    # 🔥 DISABLED: Let risk_manager handle R:R validation
-    # if _has_insufficient_upside(
-    #     prepared, close, breakout_data.get("resistance")
-    # ):
-    #     return {"valid": False, "reason": "INSUFFICIENT_UPSIDE_TO_RESISTANCE"}
+    if _has_insufficient_upside(
+        prepared, close, breakout_data.get("resistance")
+    ):
+        return {"valid": False, "reason": "INSUFFICIENT_UPSIDE_TO_RESISTANCE"}
 
     if not _buyer_confirmation(snapshot):
         return {"valid": False, "reason": "BUYER_CONFIRMATION_FAILED"}
@@ -795,15 +778,15 @@ def _build_components_scalp(trigger, entry_validation, trend_ok, market_status, 
         ),
         "bb_squeeze": (
             trigger.get("bb_width") is not None
-            and trigger["bb_width"] < 0.15
+            and trigger["bb_width"] < 0.12
         ),
         "early_momentum": (
             trigger.get("roc") is not None
-            and 0.3 <= trigger["roc"] <= SCALP_CONFIG["MAX_ROC"]
+            and 0.5 <= trigger["roc"] <= SCALP_CONFIG["MAX_ROC"]
         ),
         "volume_acceleration": (
             trigger.get("volume_momentum") is not None
-            and trigger["volume_momentum"] >= 0.9
+            and trigger["volume_momentum"] >= 1.1
         ),
     }
 
@@ -847,15 +830,15 @@ def _build_components_swing(trigger, entry_validation, trend_ok, market_status, 
         ),
         "bb_squeeze": (
             trigger.get("bb_width") is not None
-            and trigger["bb_width"] < 0.18
+            and trigger["bb_width"] < 0.15
         ),
         "early_momentum": (
             trigger.get("roc") is not None
-            and 0.3 <= trigger["roc"] <= SWING_CONFIG["MAX_ROC"]
+            and 0.5 <= trigger["roc"] <= SWING_CONFIG["MAX_ROC"]
         ),
         "volume_acceleration": (
             trigger.get("volume_momentum") is not None
-            and trigger["volume_momentum"] >= 0.85
+            and trigger["volume_momentum"] >= 1.05
         ),
     }
 

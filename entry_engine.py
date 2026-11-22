@@ -2,13 +2,11 @@
 Binance Spot V3 Smart Signal Scanner
 Entry Signal Generation Engine
 
-Spot market only.
-No Futures or Margin.
-
-BALANCED MODE:
-- Real breakouts detected
-- Fake signals rejected
-- Strong R:R requirements
+DYNAMIC MODE:
+- RVOL threshold adapts to market status
+- BULLISH: strict (1.2x / 1.3x)
+- NEUTRAL: moderate (0.7x / 0.8x)
+- BEARISH: very strict (1.5x / 1.8x)
 """
 
 import logging
@@ -62,14 +60,14 @@ def _setting(key, default):
     return default if value is None else value
 
 
-MIN_SCORE = int(_setting("MIN_SCORE", 11))
-STRONG_MIN_SCORE = int(_setting("STRONG_MIN_SCORE", 11))
+MIN_SCORE = int(_setting("MIN_SCORE", 10))
+STRONG_MIN_SCORE = int(_setting("STRONG_MIN_SCORE", 10))
 EXCELLENT_MIN_SCORE = int(_setting("EXCELLENT_MIN_SCORE", 13))
 MAX_SCORE = int(_setting("MAX_SCORE", 15))
 
 
 # =========================================================
-# STRATEGY-SPECIFIC THRESHOLDS (BALANCED MODE)
+# STRATEGY-SPECIFIC THRESHOLDS (BASE - will be adjusted dynamically)
 # =========================================================
 
 SCALP_CONFIG = {
@@ -98,12 +96,12 @@ BREAKOUT_LOOKBACK = 20
 RETEST_TOLERANCE_PCT = 1.5
 MAX_BREAKOUT_EXTENSION_PCT = 2.5
 
-# 🔥 Pump Protection constants
+# Pump Protection
 MAX_CONSECUTIVE_BULLISH = 4
 MIN_CANDLE_BODY_PCT = 2.0
 RVOL_SPIKE_THRESHOLD = 3.0
 RVOL_COLLAPSE_RATIO = 0.5
-MIN_UPSIDE_TO_RESISTANCE_PCT = 1.5  # 1.5% upside required (rejects squeezed setups)
+MIN_UPSIDE_TO_RESISTANCE_PCT = 1.0  # 🔥 1.5 থেকে কমিয়ে 1.0 (balanced)
 
 APPROVED_CLASSIFICATIONS = (
     "STRONG BUY",
@@ -111,6 +109,38 @@ APPROVED_CLASSIFICATIONS = (
 )
 
 APPROVED_STRATEGIES = ("SCALP", "SWING")
+
+
+# =========================================================
+# DYNAMIC RVOL ADJUSTMENT
+# =========================================================
+
+def _get_dynamic_config(strategy, market_status):
+    """
+    Returns a config dict with dynamically adjusted MIN_RVOL based on market status.
+    
+    BULLISH: strict (base values)
+    NEUTRAL: moderate (reduced by 0.5x)
+    BEARISH: very strict (increased by 0.3x)
+    """
+    base_config = SCALP_CONFIG if strategy == "SCALP" else SWING_CONFIG
+    config = dict(base_config)  # copy
+
+    market_status = str(market_status).upper()
+
+    if market_status == "BULLISH":
+        # Strict - use base values
+        pass  # config unchanged
+    elif market_status == "NEUTRAL":
+        # Moderate - reduce RVOL threshold
+        config["MIN_RVOL"] = max(0.5, base_config["MIN_RVOL"] - 0.5)
+        config["MIN_ADX"] = max(8.0, base_config["MIN_ADX"] - 5.0)
+    elif market_status == "BEARISH":
+        # Very strict - increase RVOL threshold
+        config["MIN_RVOL"] = base_config["MIN_RVOL"] + 0.3
+        config["MIN_ADX"] = base_config["MIN_ADX"] + 3.0
+
+    return config
 
 
 # =========================================================
@@ -188,7 +218,6 @@ def _prepare_dataframe(df):
     if len(result) < minimum:
         return None
 
-    # Drop latest unclosed candle
     if len(result) > 1:
         result = result.iloc[:-1]
 
@@ -366,9 +395,6 @@ def _has_rvol_collapse(df, spike_threshold=RVOL_SPIKE_THRESHOLD, collapse_ratio=
 
 
 def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_upside_pct=MIN_UPSIDE_TO_RESISTANCE_PCT):
-    """
-    Returns True if the next resistance level is too close.
-    """
     if current_price <= 0:
         return False
 
@@ -515,15 +541,10 @@ def _find_resistance_levels(df, lookback=100):
 
 
 # =========================================================
-# BUYER CONFIRMATION (BALANCED)
+# BUYER CONFIRMATION
 # =========================================================
 
 def _buyer_confirmation(snapshot):
-    """
-    Balanced buyer confirmation:
-    - Green candle (close > open) with decent body → pass
-    - OR volume >= 70% of previous candle → pass (volume supports)
-    """
     close = snapshot.get("close")
     open_price = snapshot.get("open")
     volume = snapshot.get("volume")
@@ -532,13 +553,11 @@ def _buyer_confirmation(snapshot):
     if None in (close, open_price, volume, previous_volume):
         return False
 
-    # Green candle with at least 0.1% body → pass
     if close > open_price:
         body_pct = (close - open_price) / open_price * 100
         if body_pct >= 0.1:
             return True
 
-    # Volume supports (70%+ of previous)
     if previous_volume > 0 and volume >= previous_volume * 0.7:
         return True
 
@@ -640,7 +659,8 @@ def validate_entry(df, market_context, strategy="SCALP"):
     if strategy not in APPROVED_STRATEGIES:
         return {"valid": False, "reason": "INVALID_STRATEGY"}
 
-    config = SCALP_CONFIG if strategy == "SCALP" else SWING_CONFIG
+    market_status = str(market_context.get("market_status", "UNKNOWN")).upper()
+    config = _get_dynamic_config(strategy, market_status)
 
     prepared = _prepare_dataframe(df)
     if prepared is None:
@@ -671,6 +691,10 @@ def validate_entry(df, market_context, strategy="SCALP"):
         return {"valid": False, "reason": "RSI_OVEREXTENDED"}
 
     if rvol < config["MIN_RVOL"]:
+        logger.info(
+            "RVOL REJECT | %s | market=%s | RVOL=%.4f | min=%.2f | close=%.6f",
+            strategy, market_status, rvol, config["MIN_RVOL"], close,
+        )
         return {"valid": False, "reason": "LOW_RELATIVE_VOLUME"}
 
     if _has_consecutive_bullish_candles(prepared):
@@ -740,6 +764,7 @@ def validate_entry(df, market_context, strategy="SCALP"):
 # =========================================================
 
 def _build_components_scalp(trigger, entry_validation, trend_ok, market_status, btc_trend):
+    config = _get_dynamic_config("SCALP", market_status)
     return {
         "market_condition": market_status == "BULLISH",
         "btc_context": btc_trend == "BULLISH",
@@ -756,11 +781,11 @@ def _build_components_scalp(trigger, entry_validation, trend_ok, market_status, 
         ),
         "adx_strength": (
             trigger.get("adx") is not None
-            and trigger["adx"] >= SCALP_CONFIG["MIN_ADX"]
+            and trigger["adx"] >= config["MIN_ADX"]
         ),
         "relative_volume": (
             trigger.get("rvol") is not None
-            and trigger["rvol"] >= SCALP_CONFIG["MIN_RVOL"]
+            and trigger["rvol"] >= config["MIN_RVOL"]
         ),
         "vwap_confirmation": (
             trigger.get("vwap") is not None
@@ -792,6 +817,7 @@ def _build_components_scalp(trigger, entry_validation, trend_ok, market_status, 
 
 
 def _build_components_swing(trigger, entry_validation, trend_ok, market_status, btc_trend):
+    config = _get_dynamic_config("SWING", market_status)
     return {
         "market_condition": market_status == "BULLISH",
         "btc_context": btc_trend == "BULLISH",
@@ -808,11 +834,11 @@ def _build_components_swing(trigger, entry_validation, trend_ok, market_status, 
         ),
         "adx_strength": (
             trigger.get("adx") is not None
-            and trigger["adx"] >= SWING_CONFIG["MIN_ADX"]
+            and trigger["adx"] >= config["MIN_ADX"]
         ),
         "relative_volume": (
             trigger.get("rvol") is not None
-            and trigger["rvol"] >= SWING_CONFIG["MIN_RVOL"]
+            and trigger["rvol"] >= config["MIN_RVOL"]
         ),
         "vwap_confirmation": (
             trigger.get("vwap") is not None

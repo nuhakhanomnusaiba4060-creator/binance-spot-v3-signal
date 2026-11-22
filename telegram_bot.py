@@ -1,18 +1,19 @@
+
 """
 Binance Spot V3 Smart Signal Scanner
 Telegram Notification Engine
 
-Responsibilities:
-- Read Telegram credentials from environment variables.
-- Send Telegram connection test messages.
-- Format STRONG BUY and EXCELLENT BUY signals with full context.
-- Send signal notifications with HTML formatting.
-- Never expose bot credentials in logs or messages.
+- Bengali signal notifications.
+- Estimated net profit at T1/T2/T3, excluding invested capital.
+- Fees and slippage included in estimated net profit.
+- Telegram credentials are read from environment variables.
+- Only STRONG BUY and EXCELLENT BUY signals are allowed.
 """
 
 import os
 import logging
 import html
+import math
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -78,14 +79,174 @@ SWING_ENTRY_VALIDITY_MINUTES = int(
 
 
 # ---------------------------------------------------------
+# GENERAL HELPERS
+# ---------------------------------------------------------
+
+def _number(value, default=None):
+    try:
+        number = float(value)
+        if not math.isfinite(number):
+            return default
+        return number
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_price(value):
+    number = _number(value)
+
+    if number is None or number <= 0:
+        return "N/A"
+
+    if number >= 1000:
+        return f"{number:,.4f}"
+
+    if number >= 1:
+        return f"{number:.6f}".rstrip("0").rstrip(".")
+
+    return f"{number:.10f}".rstrip("0").rstrip(".")
+
+
+def _format_usdt(value):
+    number = _number(value)
+
+    if number is None:
+        return "N/A"
+
+    return f"{number:,.4f}"
+
+
+def _format_percent(value):
+    number = _number(value)
+
+    if number is None:
+        return "N/A"
+
+    return f"{number:.2f}%"
+
+
+def _format_number(value, decimals=2):
+    number = _number(value)
+
+    if number is None:
+        return "N/A"
+
+    return f"{number:.{decimals}f}"
+
+
+def _translate_signal(value):
+    translations = {
+        "STRONG BUY": "শক্তিশালী ক্রয়",
+        "EXCELLENT BUY": "অত্যন্ত শক্তিশালী ক্রয়",
+    }
+
+    return translations.get(str(value).upper(), str(value))
+
+
+def _translate_strategy(value):
+    translations = {
+        "SCALP": "স্বল্পমেয়াদি ট্রেড",
+        "SWING": "সুইং ট্রেড",
+    }
+
+    return translations.get(str(value).upper(), str(value))
+
+
+def _translate_market(value):
+    translations = {
+        "BULLISH": "ঊর্ধ্বমুখী",
+        "BEARISH": "নিম্নমুখী",
+        "NEUTRAL": "নিরপেক্ষ",
+        "HIGH_RISK": "উচ্চ ঝুঁকি",
+        "UNKNOWN": "অজানা",
+    }
+
+    return translations.get(str(value).upper(), str(value))
+
+
+# ---------------------------------------------------------
+# ESTIMATED NET PROFIT
+# ---------------------------------------------------------
+
+def _calculate_net_profit(position, target):
+    """
+    Calculate estimated net profit at a target.
+
+    Invested capital is excluded from the profit figure.
+    Entry fee, exit fee, entry slippage and exit slippage
+    are deducted.
+
+    Returns:
+        Net profit in USDT, or None if data is invalid.
+    """
+
+    if not isinstance(position, dict):
+        return None
+
+    if not isinstance(target, dict):
+        return None
+
+    quantity = _number(position.get("quantity"))
+    entry = _number(position.get("effective_entry_price"))
+    target_price = _number(target.get("price"))
+
+    if quantity is None or quantity <= 0:
+        return None
+
+    if entry is None or entry <= 0:
+        return None
+
+    if target_price is None or target_price <= 0:
+        return None
+
+    fee = _number(position.get("fee_rate_per_side"))
+    slippage = _number(position.get("slippage_rate_per_side"))
+
+    if fee is None or slippage is None:
+        return None
+
+    if fee < 0 or slippage < 0:
+        return None
+
+    if fee >= 1 or slippage >= 1:
+        return None
+
+    entry_cost = fee + slippage
+    exit_cost = fee + slippage
+
+    effective_entry_cost = entry * (1 + entry_cost)
+    effective_exit_value = target_price * (1 - exit_cost)
+
+    net_profit = quantity * (
+        effective_exit_value - effective_entry_cost
+    )
+
+    if not math.isfinite(net_profit):
+        return None
+
+    return net_profit
+
+
+def _format_profit_line(position, target, label):
+    if not isinstance(target, dict):
+        return f"<b>{label} সম্ভাব্য নিট লাভ:</b> পাওয়া যায়নি"
+
+    profit = _calculate_net_profit(position, target)
+
+    if profit is None:
+        return f"<b>{label} সম্ভাব্য নিট লাভ:</b> হিসাব করা যায়নি"
+
+    return (
+        f"<b>{label} সম্ভাব্য নিট লাভ:</b> "
+        f"{_format_usdt(profit)} USDT"
+    )
+
+
+# ---------------------------------------------------------
 # CREDENTIALS
 # ---------------------------------------------------------
 
 def _get_credentials():
-    """
-    Read credentials from environment variables.
-    Never print or log the actual credentials.
-    """
     token = os.getenv(BOT_TOKEN_ENV, "").strip()
     chat_id = os.getenv(CHAT_ID_ENV, "").strip()
 
@@ -105,16 +266,6 @@ def credentials_available():
 # ---------------------------------------------------------
 
 def _telegram_request(method, payload):
-    """
-    Send a request to Telegram Bot API.
-
-    Returns:
-        {
-            "success": bool,
-            "description": str
-        }
-    """
-
     token, chat_id = _get_credentials()
 
     if not token or not chat_id:
@@ -154,7 +305,9 @@ def _telegram_request(method, payload):
         description = "Telegram API request failed"
 
         if isinstance(result, dict):
-            description = str(result.get("description", description))
+            api_description = result.get("description")
+            if isinstance(api_description, str):
+                description = api_description[:300]
 
         logger.error(
             "Telegram API error: HTTP %s - %s",
@@ -188,13 +341,6 @@ def send_message(
     disable_notification=False,
     parse_mode="HTML",
 ):
-    """
-    Send a message to the configured Telegram chat.
-
-    Default parse mode is HTML for nice formatting.
-    Falls back to plain text if HTML parsing fails.
-    """
-
     if not isinstance(message, str) or not message.strip():
         return {
             "success": False,
@@ -203,7 +349,7 @@ def send_message(
 
     if len(message) > MAX_MESSAGE_LENGTH:
         message = message[: MAX_MESSAGE_LENGTH - 30]
-        message += "\n\n[Message shortened]"
+        message += "\n\n[বার্তা সংক্ষিপ্ত করা হয়েছে]"
 
     payload = {
         "text": message,
@@ -216,7 +362,6 @@ def send_message(
 
     result = _telegram_request("sendMessage", payload)
 
-    # Fallback to plain text if HTML parsing fails
     if not result.get("success") and parse_mode:
         error_desc = str(result.get("description", "")).lower()
 
@@ -232,85 +377,22 @@ def send_message(
 
 
 def send_connection_test():
-    """
-    Send a separate Telegram connection test message.
-    """
-
     message = (
         "<b>BINANCE SPOT V3 SMART SIGNAL SCANNER</b>\n\n"
-        "Telegram connection test successful.\n\n"
-        "<b>Market:</b> Binance Spot\n"
-        "<b>Quote Asset:</b> USDT\n"
-        "<b>Mode:</b> Spot Only\n"
-        "<b>Signal Types:</b> STRONG BUY / EXCELLENT BUY\n"
-        "<b>Scoring:</b> 15-point model\n\n"
-        "<i>This is a connection test, not a trading signal.</i>"
+        "টেলিগ্রাম সংযোগ সফল হয়েছে।\n\n"
+        "<b>মার্কেট:</b> Binance Spot\n"
+        "<b>কোট অ্যাসেট:</b> USDT\n"
+        "<b>ট্রেডিং:</b> শুধু Spot\n"
+        "<b>সিগন্যাল:</b> শক্তিশালী ক্রয় / অত্যন্ত শক্তিশালী ক্রয়\n\n"
+        "<i>এটি শুধু সংযোগ পরীক্ষা, কোনো ট্রেডিং সিগন্যাল নয়।</i>"
     )
 
     return send_message(message)
 
 
 # ---------------------------------------------------------
-# FORMATTING HELPERS
+# TIME HELPERS
 # ---------------------------------------------------------
-
-def _format_price(value):
-    if value is None:
-        return "N/A"
-
-    try:
-        number = float(value)
-
-        if number <= 0:
-            return "N/A"
-
-        if number >= 1000:
-            return f"{number:,.4f}"
-
-        if number >= 1:
-            return f"{number:.6f}".rstrip("0").rstrip(".")
-
-        return f"{number:.10f}".rstrip("0").rstrip(".")
-
-    except (TypeError, ValueError):
-        return "N/A"
-
-
-def _format_percent(value):
-    if value is None:
-        return "N/A"
-
-    try:
-        return f"{float(value):.2f}%"
-    except (TypeError, ValueError):
-        return "N/A"
-
-
-def _format_number(value, decimals=2):
-    if value is None:
-        return "N/A"
-
-    try:
-        return f"{float(value):.{decimals}f}"
-    except (TypeError, ValueError):
-        return "N/A"
-
-
-def _format_target(target, label):
-    if not isinstance(target, dict):
-        return f"<b>{label}:</b> N/A"
-
-    price = _format_price(target.get("price"))
-    rr = target.get("risk_reward")
-
-    if rr is None:
-        return f"<b>{label}:</b> {price}"
-
-    try:
-        return f"<b>{label}:</b> {price} | R:R 1:{float(rr):.2f}"
-    except (TypeError, ValueError):
-        return f"<b>{label}:</b> {price}"
-
 
 def _format_time_utc(iso_value):
     if not iso_value:
@@ -333,9 +415,6 @@ def _format_time_utc(iso_value):
 
 
 def _compute_entry_expiry(strategy):
-    """
-    Compute entry expiry from now based on strategy.
-    """
     minutes = (
         SCALP_ENTRY_VALIDITY_MINUTES
         if strategy == "SCALP"
@@ -348,23 +427,27 @@ def _compute_entry_expiry(strategy):
 
 
 # ---------------------------------------------------------
+# TARGET FORMATTING
+# ---------------------------------------------------------
+
+def _format_target(target, label):
+    if not isinstance(target, dict):
+        return f"<b>{label}:</b> পাওয়া যায়নি"
+
+    price = _format_price(target.get("price"))
+    rr = _number(target.get("risk_reward"))
+
+    if rr is None:
+        return f"<b>{label}:</b> {price}"
+
+    return f"<b>{label}:</b> {price} | R:R 1:{rr:.2f}"
+
+
+# ---------------------------------------------------------
 # SIGNAL FORMATTING
 # ---------------------------------------------------------
 
 def format_signal(signal):
-    """
-    Format an approved signal into a readable HTML Telegram message.
-
-    Includes all spec-required fields:
-    - Symbol, Strategy, Classification, Score
-    - Entry, Stop Loss, T1, T2, T3, R:R
-    - Position risk, loss, value
-    - RSI, Relative Volume
-    - BTC trend and market status
-    - Creation time, Entry expiry
-    - Invalidation condition
-    """
-
     if not isinstance(signal, dict):
         raise ValueError("Signal must be a dictionary")
 
@@ -375,7 +458,7 @@ def format_signal(signal):
     allowed_signals = ("STRONG BUY", "EXCELLENT BUY")
 
     if classification not in allowed_signals:
-        raise ValueError("Only STRONG BUY and EXCELLENT BUY are allowed")
+        raise ValueError("Only approved BUY signals are allowed")
 
     if signal.get("status") == "REJECTED":
         raise ValueError("Rejected signals cannot be sent")
@@ -403,7 +486,6 @@ def format_signal(signal):
 
     strategy = str(signal.get("strategy", "UNKNOWN")).upper()
 
-    # 🔥 Dynamic score display (works for 15-point system)
     score = signal.get("score", "N/A")
     max_score = signal.get("max_score", 15)
 
@@ -416,7 +498,7 @@ def format_signal(signal):
 
     stop = _format_price(stop_data.get("stop_loss"))
     stop_pct = _format_percent(stop_data.get("risk_percent"))
-    stop_method = stop_data.get("method", "N/A")
+    stop_method = html.escape(str(stop_data.get("method", "N/A")))
 
     targets = risk_plan.get("targets", {})
 
@@ -428,74 +510,101 @@ def format_signal(signal):
     if not isinstance(position, dict):
         raise ValueError("Position size information missing")
 
-    # 🔥 Indicators
+    # Indicators
     rsi = _format_number(signal.get("rsi"), 2)
     rvol = _format_number(signal.get("rvol"), 2)
 
-    # 🔥 Market context
-    btc_trend = str(signal.get("btc_trend", "UNKNOWN")).upper()
-    market_status = str(signal.get("market_status", "UNKNOWN")).upper()
+    # Market context
+    btc_trend = _translate_market(signal.get("btc_trend", "UNKNOWN"))
+    market_status = _translate_market(signal.get("market_status", "UNKNOWN"))
 
-    # 🔥 Times
+    # Times
     created_at = _format_time_utc(signal.get("generated_at"))
+
     entry_expiry = _format_time_utc(
         signal.get("entry_expiry") or _compute_entry_expiry(strategy)
     )
 
-    # 🔥 Warnings
+    # Position information
+    invested_amount = position.get("position_value_usdt")
+    estimated_loss = position.get("actual_estimated_loss_usdt")
+    actual_risk = position.get("actual_risk_percent")
+
+    quantity = position.get("quantity")
+
+    # Targets
+    t1 = targets.get("t1")
+    t2 = targets.get("t2")
+    t3 = targets.get("t3")
+
     warnings = signal.get("warnings", [])
+
     if not isinstance(warnings, list):
         warnings = []
 
     lines = [
-        "<b>BINANCE SPOT V3 SMART SIGNAL</b>",
+        "📊 <b>BINANCE SPOT V3 — ট্রেডিং সিগন্যাল</b>",
         "",
-        f"<b>Coin:</b> <code>{html.escape(symbol)}</code>",
-        f"<b>Signal:</b> {html.escape(classification)}",
-        f"<b>Strategy:</b> {html.escape(strategy)}",
-        f"<b>Score:</b> {score}/{max_score}",
+        f"<b>কয়েন:</b> <code>{html.escape(symbol)}</code>",
+        f"<b>সিগন্যাল:</b> {html.escape(_translate_signal(classification))}",
+        f"<b>কৌশল:</b> {html.escape(_translate_strategy(strategy))}",
+        f"<b>স্কোর:</b> {html.escape(str(score))}/{html.escape(str(max_score))}",
         "",
-        "<b>ENTRY PLAN</b>",
-        f"<b>Entry Price:</b> <code>{entry}</code>",
-        f"<b>Stop Loss:</b> <code>{stop}</code> ({stop_pct}, {html.escape(stop_method)})",
+        "📌 <b>এন্ট্রি পরিকল্পনা</b>",
+        f"<b>কেনার দাম:</b> <code>{entry}</code>",
+        f"<b>স্টপ লস:</b> <code>{stop}</code>",
+        f"<b>স্টপ লসের দূরত্ব:</b> {stop_pct}",
+        f"<b>স্টপ লসের ভিত্তি:</b> {stop_method}",
         "",
-        _format_target(targets.get("t1"), "T1"),
-        _format_target(targets.get("t2"), "T2"),
-        _format_target(targets.get("t3"), "T3"),
+        "🎯 <b>সম্ভাব্য বিক্রির লক্ষ্য</b>",
+        _format_target(t1, "T1"),
+        _format_profit_line(position, t1, "T1"),
         "",
-        "<b>RISK MANAGEMENT</b>",
-        f"<b>Estimated Risk:</b> {_format_percent(position.get('actual_risk_percent'))}",
-        f"<b>Estimated Loss:</b> {_format_price(position.get('actual_estimated_loss_usdt'))} USDT",
-        f"<b>Position Value:</b> {_format_price(position.get('position_value_usdt'))} USDT",
+        _format_target(t2, "T2"),
+        _format_profit_line(position, t2, "T2"),
         "",
-        "<b>MARKET CONTEXT</b>",
-        f"<b>BTC Trend:</b> {html.escape(btc_trend)}",
-        f"<b>Market Status:</b> {html.escape(market_status)}",
+        _format_target(t3, "T3"),
+        _format_profit_line(position, t3, "T3"),
         "",
-        "<b>INDICATORS</b>",
+        "💰 <b>বিনিয়োগ ও ঝুঁকি</b>",
+        f"<b>মোট বিনিয়োগ:</b> {_format_usdt(invested_amount)} USDT",
+        f"<b>কয়েনের পরিমাণ:</b> {_format_number(quantity, 8)}",
+        f"<b>সর্বোচ্চ নির্ধারিত ঝুঁকি:</b> {_format_percent(actual_risk)}",
+        f"<b>স্টপ লসে সম্ভাব্য ক্ষতি:</b> {_format_usdt(estimated_loss)} USDT",
+        "",
+        "<i>সম্ভাব্য নিট লাভের হিসাব থেকে বিনিয়োগের মূল টাকা বাদ দেওয়া হয়েছে। "
+        "ফি ও স্লিপেজও আনুমানিকভাবে বাদ দেওয়া হয়েছে। "
+        "বাস্তব লাভ বাজারদর ও অর্ডার সম্পাদনের ওপর নির্ভর করবে।</i>",
+        "",
+        "🌐 <b>বাজারের অবস্থা</b>",
+        f"<b>BTC-এর প্রবণতা:</b> {html.escape(btc_trend)}",
+        f"<b>সামগ্রিক বাজার:</b> {html.escape(market_status)}",
+        "",
+        "📈 <b>সূচক</b>",
         f"<b>RSI:</b> {rsi}",
-        f"<b>RVOL:</b> {rvol}x",
+        f"<b>আপেক্ষিক ভলিউম:</b> {rvol}x",
         "",
-        "<b>VALIDITY</b>",
-        f"<b>Created:</b> {created_at}",
-        f"<b>Entry Expiry:</b> {entry_expiry}",
+        "⏰ <b>সিগন্যালের মেয়াদ</b>",
+        f"<b>তৈরির সময়:</b> {created_at}",
+        f"<b>এন্ট্রির শেষ সময়:</b> {entry_expiry}",
     ]
 
     if warnings:
         lines.append("")
-        lines.append("<b>WARNINGS</b>")
+        lines.append("⚠️ <b>সতর্কতা</b>")
+
         for warning in warnings:
             lines.append(f"• {html.escape(str(warning))}")
 
     lines.extend([
         "",
-        "<b>INVALIDATION</b>",
-        "Signal is invalid if price closes below Stop Loss.",
-        "Cancel entry if price does not reach entry before expiry.",
+        "🛑 <b>সিগন্যাল বাতিলের নিয়ম</b>",
+        "দাম স্টপ লসের নিচে ক্লোজ করলে সিগন্যাল বাতিল।",
+        "নির্ধারিত সময়ের মধ্যে এন্ট্রি না হলে অর্ডার বাতিল করুন।",
         "",
-        "<i>Market: Binance Spot | Quote: USDT | Mode: Spot Only</i>",
+        "<i>মার্কেট: Binance Spot | কোট: USDT | শুধু Spot Trading</i>",
         "",
-        "⚠️ Verify the current price before placing an order.",
+        "⚠️ অর্ডার দেওয়ার আগে Binance-এ বর্তমান দাম যাচাই করুন।",
     ])
 
     return "\n".join(lines)
@@ -506,16 +615,15 @@ def format_signal(signal):
 # ---------------------------------------------------------
 
 def send_signal(signal):
-    """
-    Send a validated BUY signal.
-    A signal must include a complete valid risk_plan.
-    """
-
     try:
         message = format_signal(signal)
 
     except (ValueError, TypeError) as exc:
-        logger.warning("Signal notification rejected: %s", str(exc))
+        logger.warning(
+            "Signal notification rejected: %s",
+            str(exc),
+        )
+
         return {
             "success": False,
             "description": str(exc),
@@ -536,6 +644,8 @@ def get_telegram_status():
         "request_timeout": REQUEST_TIMEOUT,
         "max_message_length": MAX_MESSAGE_LENGTH,
         "html_formatting": True,
+        "bengali_messages": True,
+        "net_profit_calculation": True,
         "scalp_entry_validity_minutes": SCALP_ENTRY_VALIDITY_MINUTES,
         "swing_entry_validity_minutes": SWING_ENTRY_VALIDITY_MINUTES,
     }

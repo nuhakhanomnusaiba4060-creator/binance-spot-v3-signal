@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-22T21:44:40.097879+00:00",
+  "updated_at": "2026-11-22T21:45:21.014952+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -17,7 +17,7 @@
         "t2": 1794.7072,
         "t3": 1829.2208
       },
-      "current_price": 1725.68,
+      "current_price": 1725.0,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -29,7 +29,7 @@
       "entry_reached_at": null,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-22T21:44:38.862501+00:00"
+      "last_updated": "2026-11-22T21:45:21.009063+00:00"
     },
     {
       "signal_id": "LINKUSDT_SCALP_20261122T214440.097807+0000",
@@ -46,7 +46,7 @@
         "t2": 8.966936312221,
         "t3": null
       },
-      "current_price": 8.826,
+      "current_price": 8.823,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -58,7 +58,7 @@
       "entry_reached_at": null,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-22T21:44:40.097807+00:00"
+      "last_updated": "2026-11-22T21:45:21.014924+00:00"
     }
   ]
 }

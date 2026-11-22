@@ -9,6 +9,7 @@ Responsibilities:
 - Include estimated fees and slippage.
 - Validate minimum Risk/Reward ratio.
 - Reject setups with unreasonable Stop Loss distance.
+- Diagnostic logging for debugging.
 
 Spot long positions only.
 No Futures or Margin calculations.
@@ -76,12 +77,10 @@ DEFAULT_SLIPPAGE_RATE = float(
     _setting("SLIPPAGE_RATE", 0.001)
 )
 
-# 🔥 NEW: Stop loss distance safety limits
 MAX_STOP_LOSS_DISTANCE_PERCENT = float(
     _setting("MAX_STOP_LOSS_DISTANCE_PERCENT", 8.0)
 )
 
-# Minimum SL distance so normal noise does not trigger it
 MIN_STOP_LOSS_DISTANCE_PERCENT = 0.5
 
 
@@ -107,20 +106,16 @@ def _positive(value, name):
 
 
 def _unique_sorted_levels(levels, entry_price):
-    """Return unique resistance levels above entry price."""
     if levels is None:
         return []
-
     if not isinstance(levels, (list, tuple, set)):
         levels = [levels]
-
     result = []
     for level in levels:
         value = _number(level)
         if value is None or value <= entry_price:
             continue
         result.append(value)
-
     return sorted(set(result))
 
 
@@ -136,26 +131,7 @@ def calculate_stop_loss(
     max_distance_percent=None,
     min_distance_percent=None,
 ):
-    """
-    Calculate a technical Stop Loss for a Spot long position.
-
-    Method:
-    - Try support-based SL first.
-    - Try ATR-based SL as fallback.
-    - Prefer the widest SL that is within max distance bounds.
-    - Reject if no SL fits within safe distance bounds.
-
-    Returns:
-        {
-            "stop_loss": float,
-            "method": str,
-            "risk_distance": float,
-            "risk_percent": float
-        }
-    """
-
     entry = _positive(entry_price, "entry_price")
-
     support = _number(support_level)
     atr_value = _number(atr)
 
@@ -179,7 +155,6 @@ def calculate_stop_loss(
 
     if support is not None and support <= 0:
         support = None
-
     if atr_value is not None and atr_value <= 0:
         atr_value = None
 
@@ -188,9 +163,7 @@ def calculate_stop_loss(
             "Cannot calculate Stop Loss without valid support or ATR"
         )
 
-    # Build candidate SL levels with their methods
     candidates = []
-
     if support is not None and support < entry:
         candidates.append(("SUPPORT", support))
 
@@ -202,10 +175,8 @@ def calculate_stop_loss(
     if not candidates:
         raise ValueError("No valid Stop Loss candidate available")
 
-    # Sort by price ascending = widest SL first
     candidates.sort(key=lambda item: item[1])
 
-    # 🔥 Walk from widest to narrowest. Pick first that is within max bounds.
     chosen_method = None
     chosen_sl = None
     rejection_notes = []
@@ -235,17 +206,10 @@ def calculate_stop_loss(
             + " | ".join(rejection_notes)
         )
 
-    # If both support and ATR are valid, prefer combined method label
     method = chosen_method
-    if (
-        chosen_method == "SUPPORT"
-        and atr_value is not None
-    ):
+    if chosen_method == "SUPPORT" and atr_value is not None:
         method = "SUPPORT_AND_ATR"
-    elif (
-        chosen_method == "ATR"
-        and support is not None
-    ):
+    elif chosen_method == "ATR" and support is not None:
         method = "ATR"
 
     risk_distance = entry - chosen_sl
@@ -271,24 +235,6 @@ def calculate_targets(
     min_risk_reward=None,
     atr=None,
 ):
-    """
-    Calculate targets from resistance structure.
-
-    T1:
-        First resistance meeting minimum RR.
-
-    T2:
-        Next higher resistance.
-
-    T3:
-        Third higher resistance.
-
-    If no resistance meets the minimum T1 RR, ATR-based fallback
-    targets are generated (only if ATR is provided).
-
-    Returns None for unavailable targets.
-    """
-
     entry = _positive(entry_price, "entry_price")
     stop = _positive(stop_loss, "stop_loss")
 
@@ -305,18 +251,13 @@ def calculate_targets(
     minimum_t1 = entry + (risk_distance * minimum_rr)
 
     levels = _unique_sorted_levels(resistance_levels, entry)
-
-    valid_levels = [
-        level for level in levels
-        if level >= minimum_t1
-    ]
+    valid_levels = [level for level in levels if level >= minimum_t1]
 
     targets = []
 
     for level in valid_levels[:3]:
         reward = level - entry
         rr = reward / risk_distance
-
         targets.append({
             "price": round(level, 12),
             "reward_percent": round((reward / entry) * 100, 4),
@@ -324,29 +265,23 @@ def calculate_targets(
             "source": "RESISTANCE",
         })
 
-    # 🔥 ATR-based fallback if no valid resistance meets T1 RR
+    # ATR-based fallback
     if not targets:
         atr_value = _number(atr)
-
         if atr_value is not None and atr_value > 0:
             atr_multipliers = (2.0, 3.5, 5.0)
-
             for mult in atr_multipliers:
                 level = entry + (atr_value * mult)
-
                 if level < minimum_t1:
                     continue
-
                 reward = level - entry
                 rr = reward / risk_distance
-
                 targets.append({
                     "price": round(level, 12),
                     "reward_percent": round((reward / entry) * 100, 4),
                     "risk_reward": round(rr, 2),
                     "source": "ATR_FALLBACK",
                 })
-
                 if len(targets) >= 3:
                     break
 
@@ -359,10 +294,7 @@ def calculate_targets(
         "t2": targets[1] if len(targets) >= 2 else None,
         "t3": targets[2] if len(targets) >= 3 else None,
         "targets_available": len(targets),
-        "target_status": (
-            "VALID" if targets
-            else "NO_VALID_RESISTANCE_TARGET"
-        ),
+        "target_status": "VALID" if targets else "NO_VALID_RESISTANCE_TARGET",
     }
 
 
@@ -378,22 +310,9 @@ def calculate_position_size(
     fee_rate=DEFAULT_FEE_RATE,
     slippage_rate=DEFAULT_SLIPPAGE_RATE,
 ):
-    """
-    Calculate Spot position size.
-
-    capital: Total available USDT capital.
-    risk_percent: Maximum permitted capital risk in percent.
-    fee_rate: Estimated fee rate per side.
-    slippage_rate: Estimated adverse slippage rate per side.
-
-    Returns:
-        Position quantity, USDT value, estimated loss and risk.
-    """
-
     capital = _positive(capital, "capital")
     entry = _positive(entry, "entry")
     stop = _positive(stop_loss, "stop_loss")
-
     risk_pct = _positive(risk_percent, "risk_percent")
 
     fee = _number(fee_rate)
@@ -401,17 +320,12 @@ def calculate_position_size(
 
     if fee is None or fee < 0:
         raise ValueError("Invalid fee_rate")
-
     if slippage is None or slippage < 0:
         raise ValueError("Invalid slippage_rate")
-
     if stop >= entry:
         raise ValueError("Stop Loss must be below entry")
-
     if risk_pct > MAX_RISK_PERCENT:
-        raise ValueError(
-            f"Risk cannot exceed {MAX_RISK_PERCENT}%"
-        )
+        raise ValueError(f"Risk cannot exceed {MAX_RISK_PERCENT}%")
 
     risk_budget = capital * (risk_pct / 100)
 
@@ -464,15 +378,6 @@ def validate_risk(
     risk_percent=MAX_RISK_PERCENT,
     min_risk_reward=MIN_RISK_REWARD,
 ):
-    """
-    Validate:
-    - Entry and Stop Loss.
-    - Maximum risk percentage.
-    - Stop Loss distance bounds.
-    - Minimum T1 Risk/Reward.
-    - Position size, if provided.
-    """
-
     errors = []
 
     entry = _number(entry_price)
@@ -480,30 +385,18 @@ def validate_risk(
 
     if entry is None or entry <= 0:
         errors.append("Invalid entry price")
-
     if stop is None or stop <= 0:
         errors.append("Invalid Stop Loss")
-
-    if (
-        entry is not None
-        and stop is not None
-        and stop >= entry
-    ):
+    if entry is not None and stop is not None and stop >= entry:
         errors.append("Stop Loss must be below entry")
 
-    # 🔥 Stop loss distance bounds check
-    if (
-        entry is not None and entry > 0
-        and stop is not None and 0 < stop < entry
-    ):
+    if entry is not None and entry > 0 and stop is not None and 0 < stop < entry:
         sl_distance_pct = ((entry - stop) / entry) * 100
-
         if sl_distance_pct > MAX_STOP_LOSS_DISTANCE_PERCENT:
             errors.append(
                 f"Stop Loss too wide: {sl_distance_pct:.2f}% "
                 f"> {MAX_STOP_LOSS_DISTANCE_PERCENT}%"
             )
-
         if sl_distance_pct < MIN_STOP_LOSS_DISTANCE_PERCENT:
             errors.append(
                 f"Stop Loss too tight: {sl_distance_pct:.2f}% "
@@ -511,14 +404,12 @@ def validate_risk(
             )
 
     risk_pct = _number(risk_percent)
-
     if risk_pct is None or risk_pct <= 0:
         errors.append("Invalid risk percentage")
     elif risk_pct > MAX_RISK_PERCENT:
         errors.append("Risk exceeds maximum permitted level")
 
     minimum_rr = _number(min_risk_reward)
-
     if minimum_rr is None or minimum_rr < MIN_RISK_REWARD:
         errors.append("Minimum Risk/Reward is below policy")
 
@@ -531,10 +422,8 @@ def validate_risk(
     else:
         t1_price = _number(t1.get("price"))
         t1_rr = _number(t1.get("risk_reward"))
-
         if t1_price is None or t1_price <= entry:
             errors.append("Invalid T1 price")
-
         if t1_rr is None or t1_rr < minimum_rr:
             errors.append("T1 Risk/Reward is below minimum")
 
@@ -542,18 +431,13 @@ def validate_risk(
         if not isinstance(position_size, dict):
             errors.append("Invalid position size data")
         else:
-            actual_risk = _number(
-                position_size.get("actual_risk_percent")
-            )
-
+            actual_risk = _number(position_size.get("actual_risk_percent"))
             if actual_risk is None:
                 errors.append("Position risk data unavailable")
             elif actual_risk > MAX_RISK_PERCENT:
                 errors.append("Calculated position risk exceeds limit")
-
             if position_size.get("status") != "VALID":
                 errors.append("Position size is not valid")
-
             if position_size.get("quantity", 0) <= 0:
                 errors.append("Position quantity is zero or negative")
 
@@ -569,7 +453,7 @@ def validate_risk(
 
 
 # ---------------------------------------------------------
-# COMPLETE RISK PLAN
+# COMPLETE RISK PLAN (with Diagnostic Logs)
 # ---------------------------------------------------------
 
 def build_risk_plan(
@@ -583,11 +467,8 @@ def build_risk_plan(
     slippage_rate=DEFAULT_SLIPPAGE_RATE,
 ):
     """
-    Build a complete Spot risk plan.
-
-    Returns a rejected plan if any mandatory risk rule fails.
+    Build a complete Spot risk plan with diagnostic logging.
     """
-
     try:
         stop_data = calculate_stop_loss(
             entry_price=entry_price,
@@ -597,11 +478,30 @@ def build_risk_plan(
 
         stop_loss = stop_data["stop_loss"]
 
+        logger.info(
+            "RISK DEBUG | entry=%.6f | SL=%.6f | method=%s | SL_pct=%.4f | support=%s | atr=%s",
+            entry_price,
+            stop_loss,
+            stop_data.get("method"),
+            stop_data.get("risk_percent", 0),
+            support_level,
+            atr,
+        )
+
         targets = calculate_targets(
             entry_price=entry_price,
             stop_loss=stop_loss,
             resistance_levels=resistance_levels,
             atr=atr,
+        )
+
+        logger.info(
+            "RISK DEBUG | t1=%s | t2=%s | t3=%s | targets_available=%d | resistance_levels=%s",
+            targets.get("t1"),
+            targets.get("t2"),
+            targets.get("t3"),
+            targets.get("targets_available", 0),
+            resistance_levels,
         )
 
         position = calculate_position_size(
@@ -621,6 +521,13 @@ def build_risk_plan(
             risk_percent=risk_percent,
         )
 
+        if not validation["valid"]:
+            logger.warning(
+                "RISK VALIDATION FAILED | entry=%.6f | errors=%s",
+                entry_price,
+                validation.get("errors", []),
+            )
+
         return {
             "status": "VALID" if validation["valid"] else "REJECT",
             "entry_price": round(float(entry_price), 12),
@@ -631,7 +538,11 @@ def build_risk_plan(
         }
 
     except (ValueError, TypeError, ZeroDivisionError) as exc:
-        logger.warning("Risk plan rejected: %s", exc)
+        logger.warning(
+            "RISK PLAN REJECTED | entry=%.6f | error=%s",
+            entry_price if entry_price else 0,
+            str(exc),
+        )
 
         return {
             "status": "REJECT",

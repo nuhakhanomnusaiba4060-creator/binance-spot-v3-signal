@@ -4,14 +4,18 @@ import os
 import sys
 import time
 import tempfile
+import math
+
 from datetime import datetime, timezone, timedelta
 
 import requests
+
 
 HISTORY_FILE = "signal_history.json"
 ANALYTICS_FILE = "signal_analytics.json"
 
 API_URL = "https://data-api.binance.vision/api/v3/klines"
+
 RETENTION_DAYS = 7
 INTERVAL_MS = 60_000
 REQUEST_TIMEOUT = 15
@@ -25,6 +29,7 @@ def utc_now():
 def iso(value):
     if value is None:
         return None
+
     return value.astimezone(timezone.utc).isoformat()
 
 
@@ -50,7 +55,7 @@ def number(value):
     try:
         result = float(value)
 
-        if result > 0 and result < float("inf"):
+        if math.isfinite(result) and result > 0:
             return result
 
     except (TypeError, ValueError, OverflowError):
@@ -67,9 +72,10 @@ def load_json(path, default):
         with open(path, "r", encoding="utf-8") as file:
             return json.load(file)
 
-    except (OSError, json.JSONDecodeError):
-        print(f"WARNING: Cannot read {path}")
-        return default
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"Cannot safely read {path}: {exc}"
+        ) from exc
 
 
 def atomic_save(path, data):
@@ -88,7 +94,9 @@ def atomic_save(path, data):
                 file,
                 indent=2,
                 ensure_ascii=False,
+                allow_nan=False,
             )
+
             file.write("\n")
 
         os.replace(temporary, path)
@@ -196,6 +204,42 @@ def create_record(signal):
     }
 
 
+def validate_record(signal, record):
+    symbol = str(signal.get("symbol", "")).upper()
+
+    if not symbol.endswith("USDT"):
+        raise ValueError("Only USDT Spot symbols are supported")
+
+    entry = record.get("entry_price")
+    stop = record.get("stop_loss")
+    targets = record.get("targets") or {}
+
+    if not entry or not stop or stop >= entry:
+        raise ValueError("Invalid entry price or stop loss")
+
+    t1 = targets.get("t1")
+    t2 = targets.get("t2")
+    t3 = targets.get("t3")
+
+    if t1 is None or t2 is None or t3 is None:
+        raise ValueError("One or more target prices are missing")
+
+    if not (entry < t1 < t2 < t3):
+        raise ValueError("Invalid target price sequence")
+
+    created = parse_time(signal.get("created_at"))
+    entry_expiry = parse_time(signal.get("entry_expiry"))
+    signal_expiry = parse_time(signal.get("expires_at"))
+
+    if not created or not entry_expiry or not signal_expiry:
+        raise ValueError("Invalid signal timestamps")
+
+    if entry_expiry > signal_expiry:
+        raise ValueError("Entry expiry is later than signal expiry")
+
+    return created, entry_expiry, signal_expiry
+
+
 def calculate_return(record):
     entry = record.get("entry_price")
     exit_price = number(record.get("exit_price"))
@@ -217,27 +261,16 @@ def finish_signal(record, outcome, exit_price, exit_time):
 
 
 def update_signal(signal, record, now):
+    created, entry_expiry, signal_expiry = validate_record(
+        signal,
+        record,
+    )
+
     symbol = str(signal.get("symbol", "")).upper()
 
-    if not symbol.endswith("USDT"):
-        raise ValueError("Only USDT Spot symbols are supported")
-
-    entry = record.get("entry_price")
-    stop = record.get("stop_loss")
-    targets = record.get("targets", {})
-
-    if not entry or not stop or stop >= entry:
-        raise ValueError("Invalid entry price or stop loss")
-
-    created = parse_time(signal.get("created_at"))
-    entry_expiry = parse_time(signal.get("entry_expiry"))
-    signal_expiry = parse_time(signal.get("expires_at"))
-
-    if not created or not entry_expiry or not signal_expiry:
-        raise ValueError("Invalid signal timestamps")
-
-    if entry_expiry > signal_expiry:
-        raise ValueError("Entry expiry is later than signal expiry")
+    entry = record["entry_price"]
+    stop = record["stop_loss"]
+    targets = record["targets"]
 
     last_checked = parse_time(record.get("last_checked_at"))
 
@@ -304,8 +337,8 @@ def update_signal(signal, record, now):
                     record["entry_reached"] = True
                     record["entry_reached_at"] = iso(candle_time)
 
-                    # If SL is also touched in the entry candle,
-                    # use the conservative SL-first assumption.
+                    # Conservative assumption:
+                    # SL takes priority if touched in entry candle.
                     if low <= stop:
 
                         record["stop_loss_hit"] = True
@@ -317,7 +350,7 @@ def update_signal(signal, record, now):
                             candle_close,
                         )
 
-                    # Do not count targets from the entry candle.
+                    # Targets are not counted in the entry candle.
                     record["last_checked_at"] = iso(candle_time)
 
                     if record["outcome"] == "STOP_LOSS":
@@ -430,7 +463,7 @@ def build_summary(records):
 
     completed = [
         r for r in values
-        if r.get("return_pct") is not None
+        if number(r.get("return_pct")) is not None
     ]
 
     wins = sum(
@@ -519,18 +552,24 @@ def main():
         raise ValueError("History signals must be a list")
 
     analytics = load_json(ANALYTICS_FILE, {})
+
+    if not isinstance(analytics, dict):
+        raise ValueError("Invalid signal_analytics.json")
+
     records = analytics.get("signals", {})
 
     if not isinstance(records, dict):
-        records = {}
+        raise ValueError("Analytics signals must be a dictionary")
 
     # Delete records older than seven days.
     records = {
         key: value
         for key, value in records.items()
-        if isinstance(value, dict)
-        and parse_time(value.get("created_at"))
-        and parse_time(value.get("created_at")) >= cutoff
+        if (
+            isinstance(value, dict)
+            and parse_time(value.get("created_at"))
+            and parse_time(value.get("created_at")) >= cutoff
+        )
     }
 
     processed = 0
@@ -554,8 +593,22 @@ def main():
 
         if record is None:
 
-            record = create_record(signal)
-            records[signal_id] = record
+            try:
+                record = create_record(signal)
+                records[signal_id] = record
+
+            except Exception as exc:
+                errors += 1
+                print(
+                    f"WARNING: Cannot create record "
+                    f"{signal_id}: {str(exc)[:250]}"
+                )
+                continue
+
+        if not isinstance(record, dict):
+            errors += 1
+            print(f"WARNING: Invalid analytics record: {signal_id}")
+            continue
 
         # Do not process already completed signals again.
         if record.get("outcome") not in ("PENDING", None):
@@ -586,9 +639,11 @@ def main():
     records = {
         key: value
         for key, value in records.items()
-        if isinstance(value, dict)
-        and parse_time(value.get("created_at"))
-        and parse_time(value.get("created_at")) >= cutoff
+        if (
+            isinstance(value, dict)
+            and parse_time(value.get("created_at"))
+            and parse_time(value.get("created_at")) >= cutoff
+        )
     }
 
     output = {

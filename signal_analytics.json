@@ -1,16 +1,16 @@
 {
   "version": 1,
-  "updated_at": "2026-11-23T11:56:51.346937+00:00",
+  "updated_at": "2026-11-23T13:10:21.096129+00:00",
   "retention_days": 7,
   "summary": {
-    "total_signals": 11,
-    "entry_reached": 4,
-    "entry_not_reached_expired": 7,
+    "total_signals": 13,
+    "entry_reached": 5,
+    "entry_not_reached_expired": 8,
     "stop_loss_hits": 0,
     "t1_hits": 0,
     "t2_hits": 0,
     "t3_hits": 0,
-    "pending": 4,
+    "pending": 5,
     "completed_results": 0,
     "wins": 0,
     "losses": 0,
@@ -152,7 +152,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-23T11:55:00+00:00",
+      "last_checked_at": "2026-11-23T13:09:00+00:00",
       "data_error": null
     },
     "LINKUSDT_SWING_20261123T055017.080440+0000": {
@@ -179,7 +179,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-23T11:55:00+00:00",
+      "last_checked_at": "2026-11-23T13:09:00+00:00",
       "data_error": null
     },
     "BTCUSDT_SWING_20261123T070049.807750+0000": {
@@ -233,7 +233,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-23T11:55:00+00:00",
+      "last_checked_at": "2026-11-23T13:09:00+00:00",
       "data_error": null
     },
     "HYPEUSDT_SCALP_20261123T082933.487146+0000": {
@@ -314,7 +314,61 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-23T11:55:00+00:00",
+      "last_checked_at": "2026-11-23T13:09:00+00:00",
+      "data_error": null
+    },
+    "NEARUSDT_SCALP_20261123T120106.658089+0000": {
+      "signal_id": "NEARUSDT_SCALP_20261123T120106.658089+0000",
+      "symbol": "NEARUSDT",
+      "strategy": "SCALP",
+      "classification": "STRONG BUY",
+      "created_at": "2026-11-23T12:01:06.658089+00:00",
+      "entry_price": 3.016,
+      "stop_loss": 2.976,
+      "targets": {
+        "t1": 3.13664,
+        "t2": 3.19696,
+        "t3": null
+      },
+      "entry_reached": false,
+      "entry_reached_at": null,
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "outcome": "ENTRY_WINDOW_EXPIRED",
+      "entry_expired": true,
+      "exit_price": null,
+      "exit_at": null,
+      "return_pct": null,
+      "last_checked_at": "2026-11-23T12:15:00+00:00",
+      "data_error": null
+    },
+    "LTCUSDT_SCALP_20261123T120107.323799+0000": {
+      "signal_id": "LTCUSDT_SCALP_20261123T120107.323799+0000",
+      "symbol": "LTCUSDT",
+      "strategy": "SCALP",
+      "classification": "STRONG BUY",
+      "created_at": "2026-11-23T12:01:07.323799+00:00",
+      "entry_price": 40.92,
+      "stop_loss": 40.59,
+      "targets": {
+        "t1": 41.603276413462,
+        "t2": 41.774095516827,
+        "t3": null
+      },
+      "entry_reached": true,
+      "entry_reached_at": "2026-11-23T12:15:00+00:00",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "outcome": "PENDING",
+      "entry_expired": false,
+      "exit_price": null,
+      "exit_at": null,
+      "return_pct": null,
+      "last_checked_at": "2026-11-23T12:15:00+00:00",
       "data_error": null
     }
   }

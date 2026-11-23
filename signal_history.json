@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-23T16:41:48.108409+00:00",
+  "updated_at": "2026-11-23T17:41:49.037918+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -249,7 +249,7 @@
         "t2": 64.827040330763,
         "t3": null
       },
-      "current_price": 65.45,
+      "current_price": 65.47,
       "status": "TARGET_2_HIT",
       "t1_hit": true,
       "t2_hit": true,
@@ -261,7 +261,7 @@
       "entry_reached_at": "2026-11-23T08:37:22.193058+00:00",
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-23T16:41:11.370323+00:00"
+      "last_updated": "2026-11-23T17:41:49.019793+00:00"
     },
     {
       "signal_id": "SOLUSDT_SWING_20261123T083825.447655+0000",
@@ -278,7 +278,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 74.29,
+      "current_price": 73.48,
       "status": "TARGET_1_HIT",
       "t1_hit": true,
       "t2_hit": false,
@@ -290,7 +290,7 @@
       "entry_reached_at": "2026-11-23T08:47:27.687306+00:00",
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-23T16:41:11.372104+00:00"
+      "last_updated": "2026-11-23T17:41:49.033810+00:00"
     },
     {
       "signal_id": "SOLUSDT_SCALP_20261123T084821.725467+0000",
@@ -452,19 +452,19 @@
         "t2": 938.253459070868,
         "t3": 953.970150885042
       },
-      "current_price": 859.67,
-      "status": "ACTIVE",
+      "current_price": 818.37,
+      "status": "EXPIRED_BEFORE_ENTRY",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
       "entry_reached": false,
       "entry_expiry": "2026-11-23T17:41:46.693279+00:00",
-      "entry_window_expired": false,
+      "entry_window_expired": true,
       "entry_reached_at": null,
-      "result": null,
-      "closed_at": null,
-      "last_updated": "2026-11-23T16:41:46.693279+00:00"
+      "result": "ENTRY_WINDOW_EXPIRED",
+      "closed_at": "2026-11-23T17:41:49.035495+00:00",
+      "last_updated": "2026-11-23T17:41:49.035495+00:00"
     },
     {
       "signal_id": "TRXUSDT_SWING_20261123T164147.438765+0000",
@@ -481,19 +481,19 @@
         "t2": 0.32913,
         "t3": null
       },
-      "current_price": 0.3105,
-      "status": "ACTIVE",
+      "current_price": 0.3116,
+      "status": "EXPIRED_BEFORE_ENTRY",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
       "entry_reached": false,
       "entry_expiry": "2026-11-23T17:41:47.438765+00:00",
-      "entry_window_expired": false,
+      "entry_window_expired": true,
       "entry_reached_at": null,
-      "result": null,
-      "closed_at": null,
-      "last_updated": "2026-11-23T16:41:47.438765+00:00"
+      "result": "ENTRY_WINDOW_EXPIRED",
+      "closed_at": "2026-11-23T17:41:49.036785+00:00",
+      "last_updated": "2026-11-23T17:41:49.036785+00:00"
     },
     {
       "signal_id": "ADAUSDT_SWING_20261123T164148.108343+0000",
@@ -510,19 +510,19 @@
         "t2": 0.161811565877,
         "t3": 0.163353879053
       },
-      "current_price": 0.1541,
-      "status": "ACTIVE",
+      "current_price": 0.1501,
+      "status": "EXPIRED_BEFORE_ENTRY",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
       "entry_reached": false,
       "entry_expiry": "2026-11-23T17:41:48.108343+00:00",
-      "entry_window_expired": false,
+      "entry_window_expired": true,
       "entry_reached_at": null,
-      "result": null,
-      "closed_at": null,
-      "last_updated": "2026-11-23T16:41:48.108343+00:00"
+      "result": "ENTRY_WINDOW_EXPIRED",
+      "closed_at": "2026-11-23T17:41:49.037893+00:00",
+      "last_updated": "2026-11-23T17:41:49.037893+00:00"
     }
   ]
 }

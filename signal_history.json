@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-23T01:09:57.057587+00:00",
+  "updated_at": "2026-11-23T05:50:17.080470+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -88,6 +88,93 @@
       "result": "ENTRY_WINDOW_EXPIRED",
       "closed_at": "2026-11-23T01:09:57.057532+00:00",
       "last_updated": "2026-11-23T01:09:57.057532+00:00"
+    },
+    {
+      "signal_id": "SOLUSDT_SCALP_20261123T055017.078155+0000",
+      "symbol": "SOLUSDT",
+      "strategy": "SCALP",
+      "classification": "EXCELLENT BUY",
+      "score": 13,
+      "created_at": "2026-11-23T05:50:17.078155+00:00",
+      "expires_at": "2026-11-25T05:50:17.078155+00:00",
+      "entry_price": 71.68,
+      "stop_loss": 70.62,
+      "targets": {
+        "t1": 74.5472,
+        "t2": 75.9808,
+        "t3": null
+      },
+      "current_price": 71.68,
+      "status": "ACTIVE",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "entry_reached": false,
+      "entry_expiry": "2026-11-23T06:05:17.078155+00:00",
+      "entry_window_expired": false,
+      "entry_reached_at": null,
+      "result": null,
+      "closed_at": null,
+      "last_updated": "2026-11-23T05:50:17.078155+00:00"
+    },
+    {
+      "signal_id": "LINKUSDT_SCALP_20261123T055017.079554+0000",
+      "symbol": "LINKUSDT",
+      "strategy": "SCALP",
+      "classification": "STRONG BUY",
+      "score": 12,
+      "created_at": "2026-11-23T05:50:17.079554+00:00",
+      "expires_at": "2026-11-25T05:50:17.079554+00:00",
+      "entry_price": 8.962,
+      "stop_loss": 8.784,
+      "targets": {
+        "t1": 9.32048,
+        "t2": 9.49972,
+        "t3": null
+      },
+      "current_price": 8.962,
+      "status": "ACTIVE",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "entry_reached": false,
+      "entry_expiry": "2026-11-23T06:05:17.079554+00:00",
+      "entry_window_expired": false,
+      "entry_reached_at": null,
+      "result": null,
+      "closed_at": null,
+      "last_updated": "2026-11-23T05:50:17.079554+00:00"
+    },
+    {
+      "signal_id": "LINKUSDT_SWING_20261123T055017.080440+0000",
+      "symbol": "LINKUSDT",
+      "strategy": "SWING",
+      "classification": "STRONG BUY",
+      "score": 11,
+      "created_at": "2026-11-23T05:50:17.080440+00:00",
+      "expires_at": "2026-11-25T05:50:17.080440+00:00",
+      "entry_price": 8.905,
+      "stop_loss": 8.712,
+      "targets": {
+        "t1": 9.306343844977,
+        "t2": null,
+        "t3": null
+      },
+      "current_price": 8.905,
+      "status": "ACTIVE",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "entry_reached": false,
+      "entry_expiry": "2026-11-23T06:50:17.080440+00:00",
+      "entry_window_expired": false,
+      "entry_reached_at": null,
+      "result": null,
+      "closed_at": null,
+      "last_updated": "2026-11-23T05:50:17.080440+00:00"
     }
   ]
 }

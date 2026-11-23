@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-23T17:41:49.037918+00:00",
+  "updated_at": "2026-11-23T18:39:07.441480+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -249,7 +249,7 @@
         "t2": 64.827040330763,
         "t3": null
       },
-      "current_price": 65.47,
+      "current_price": 65.27,
       "status": "TARGET_2_HIT",
       "t1_hit": true,
       "t2_hit": true,
@@ -261,7 +261,7 @@
       "entry_reached_at": "2026-11-23T08:37:22.193058+00:00",
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-23T17:41:49.019793+00:00"
+      "last_updated": "2026-11-23T18:39:07.439642+00:00"
     },
     {
       "signal_id": "SOLUSDT_SWING_20261123T083825.447655+0000",
@@ -278,7 +278,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 73.48,
+      "current_price": 73.44,
       "status": "TARGET_1_HIT",
       "t1_hit": true,
       "t2_hit": false,
@@ -290,7 +290,7 @@
       "entry_reached_at": "2026-11-23T08:47:27.687306+00:00",
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-23T17:41:49.033810+00:00"
+      "last_updated": "2026-11-23T18:39:07.441424+00:00"
     },
     {
       "signal_id": "SOLUSDT_SCALP_20261123T084821.725467+0000",

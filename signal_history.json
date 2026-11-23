@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-23T12:01:07.323902+00:00",
+  "updated_at": "2026-11-23T13:19:21.717551+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -261,7 +261,7 @@
       "entry_reached_at": "2026-11-23T08:37:22.193058+00:00",
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-23T11:59:58.665623+00:00"
+      "last_updated": "2026-11-23T13:18:28.606924+00:00"
     },
     {
       "signal_id": "SOLUSDT_SWING_20261123T083825.447655+0000",
@@ -278,7 +278,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 72.55,
+      "current_price": 72.44,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -290,7 +290,7 @@
       "entry_reached_at": "2026-11-23T08:47:27.687306+00:00",
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-23T11:59:58.669181+00:00"
+      "last_updated": "2026-11-23T13:18:28.608516+00:00"
     },
     {
       "signal_id": "SOLUSDT_SCALP_20261123T084821.725467+0000",
@@ -336,19 +336,19 @@
         "t2": 3.19696,
         "t3": null
       },
-      "current_price": 3.016,
-      "status": "ACTIVE",
+      "current_price": 3.003,
+      "status": "EXPIRED_BEFORE_ENTRY",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
       "entry_reached": false,
       "entry_expiry": "2026-11-23T12:16:06.658089+00:00",
-      "entry_window_expired": false,
+      "entry_window_expired": true,
       "entry_reached_at": null,
-      "result": null,
-      "closed_at": null,
-      "last_updated": "2026-11-23T12:01:06.658089+00:00"
+      "result": "ENTRY_WINDOW_EXPIRED",
+      "closed_at": "2026-11-23T13:18:28.609863+00:00",
+      "last_updated": "2026-11-23T13:18:28.609863+00:00"
     },
     {
       "signal_id": "LTCUSDT_SCALP_20261123T120107.323799+0000",
@@ -365,19 +365,77 @@
         "t2": 41.774095516827,
         "t3": null
       },
-      "current_price": 40.92,
-      "status": "ACTIVE",
+      "current_price": 40.98,
+      "status": "EXPIRED_BEFORE_ENTRY",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
       "entry_reached": false,
       "entry_expiry": "2026-11-23T12:16:07.323799+00:00",
+      "entry_window_expired": true,
+      "entry_reached_at": null,
+      "result": "ENTRY_WINDOW_EXPIRED",
+      "closed_at": "2026-11-23T13:18:28.610876+00:00",
+      "last_updated": "2026-11-23T13:18:28.610876+00:00"
+    },
+    {
+      "signal_id": "TRXUSDT_SWING_20261123T131920.927441+0000",
+      "symbol": "TRXUSDT",
+      "strategy": "SWING",
+      "classification": "STRONG BUY",
+      "score": 12,
+      "created_at": "2026-11-23T13:19:20.927441+00:00",
+      "expires_at": "2026-11-25T13:19:20.927441+00:00",
+      "entry_price": 0.3074,
+      "stop_loss": 0.3052,
+      "targets": {
+        "t1": 0.311824303099,
+        "t2": null,
+        "t3": null
+      },
+      "current_price": 0.3074,
+      "status": "ACTIVE",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "entry_reached": false,
+      "entry_expiry": "2026-11-23T14:19:20.927441+00:00",
       "entry_window_expired": false,
       "entry_reached_at": null,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-23T12:01:07.323799+00:00"
+      "last_updated": "2026-11-23T13:19:20.927441+00:00"
+    },
+    {
+      "signal_id": "LTCUSDT_SWING_20261123T131921.717495+0000",
+      "symbol": "LTCUSDT",
+      "strategy": "SWING",
+      "classification": "STRONG BUY",
+      "score": 12,
+      "created_at": "2026-11-23T13:19:21.717495+00:00",
+      "expires_at": "2026-11-25T13:19:21.717495+00:00",
+      "entry_price": 40.9,
+      "stop_loss": 40.45,
+      "targets": {
+        "t1": 41.811353252382,
+        "t2": 42.115137669842,
+        "t3": 42.418922087303
+      },
+      "current_price": 40.9,
+      "status": "ACTIVE",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "entry_reached": false,
+      "entry_expiry": "2026-11-23T14:19:21.717495+00:00",
+      "entry_window_expired": false,
+      "entry_reached_at": null,
+      "result": null,
+      "closed_at": null,
+      "last_updated": "2026-11-23T13:19:21.717495+00:00"
     }
   ]
 }

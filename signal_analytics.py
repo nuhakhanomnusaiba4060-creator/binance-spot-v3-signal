@@ -210,22 +210,44 @@ def validate_record(signal, record):
     if not symbol.endswith("USDT"):
         raise ValueError("Only USDT Spot symbols are supported")
 
-    entry = record.get("entry_price")
-    stop = record.get("stop_loss")
+    entry = number(record.get("entry_price"))
+    stop = number(record.get("stop_loss"))
     targets = record.get("targets") or {}
 
-    if not entry or not stop or stop >= entry:
+    if entry is None or stop is None or stop >= entry:
         raise ValueError("Invalid entry price or stop loss")
 
-    t1 = targets.get("t1")
-    t2 = targets.get("t2")
-    t3 = targets.get("t3")
+    t1 = number(targets.get("t1"))
+    t2 = number(targets.get("t2"))
+    t3 = number(targets.get("t3"))
 
-    if t1 is None or t2 is None or t3 is None:
-        raise ValueError("One or more target prices are missing")
+    # T1 is mandatory. T2 and T3 are optional.
+    if t1 is None:
+        raise ValueError("T1 target price is missing")
 
-    if not (entry < t1 < t2 < t3):
-        raise ValueError("Invalid target price sequence")
+    # Validate only targets that actually exist.
+    available_targets = [
+        target
+        for target in (t1, t2, t3)
+        if target is not None
+    ]
+
+    previous = entry
+
+    for target in available_targets:
+        if target <= previous:
+            raise ValueError("Invalid target price sequence")
+
+        previous = target
+
+    # Normalize target values without inventing missing targets.
+    record["entry_price"] = entry
+    record["stop_loss"] = stop
+    record["targets"] = {
+        "t1": t1,
+        "t2": t2,
+        "t3": t3,
+    }
 
     created = parse_time(signal.get("created_at"))
     entry_expiry = parse_time(signal.get("entry_expiry"))
@@ -241,10 +263,10 @@ def validate_record(signal, record):
 
 
 def calculate_return(record):
-    entry = record.get("entry_price")
+    entry = number(record.get("entry_price"))
     exit_price = number(record.get("exit_price"))
 
-    if entry and exit_price:
+    if entry is not None and exit_price is not None:
 
         record["return_pct"] = round(
             ((exit_price - entry) / entry) * 100,
@@ -386,8 +408,11 @@ def update_signal(signal, record, now):
 
             record["last_checked_at"] = iso(candle_time)
 
-            # T3 is treated as the final target.
-            if record["t3_hit"]:
+            # T3 is final only when a T3 target exists.
+            if (
+                targets.get("t3") is not None
+                and record["t3_hit"]
+            ):
 
                 finish_signal(
                     record,
@@ -415,10 +440,10 @@ def update_signal(signal, record, now):
         and record["outcome"] == "PENDING"
     ):
 
-        if record["t2_hit"]:
+        if record["t2_hit"] and targets.get("t2") is not None:
             exit_price = targets["t2"]
 
-        elif record["t1_hit"]:
+        elif record["t1_hit"] and targets.get("t1") is not None:
             exit_price = targets["t1"]
 
         else:

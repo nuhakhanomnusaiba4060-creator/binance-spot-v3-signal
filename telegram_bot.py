@@ -170,14 +170,10 @@ def _translate_market(value):
 
 def _calculate_net_profit(position, target):
     """
-    Calculate estimated net profit at a target.
+    Calculate estimated net profit after entry and exit costs.
 
-    Invested capital is excluded from the profit figure.
-    Entry fee, exit fee, entry slippage and exit slippage
-    are deducted.
-
-    Returns:
-        Net profit in USDT, or None if data is invalid.
+    effective_entry_price already includes entry fee and slippage.
+    Therefore, only exit costs are deducted here.
     """
 
     if not isinstance(position, dict):
@@ -187,13 +183,15 @@ def _calculate_net_profit(position, target):
         return None
 
     quantity = _number(position.get("quantity"))
-    entry = _number(position.get("effective_entry_price"))
+    effective_entry = _number(
+        position.get("effective_entry_price")
+    )
     target_price = _number(target.get("price"))
 
     if quantity is None or quantity <= 0:
         return None
 
-    if entry is None or entry <= 0:
+    if effective_entry is None or effective_entry <= 0:
         return None
 
     if target_price is None or target_price <= 0:
@@ -205,41 +203,18 @@ def _calculate_net_profit(position, target):
     if fee is None or slippage is None:
         return None
 
-    if fee < 0 or slippage < 0:
+    if fee < 0 or slippage < 0 or fee >= 1 or slippage >= 1:
         return None
 
-    if fee >= 1 or slippage >= 1:
-        return None
-
-    entry_cost = fee + slippage
     exit_cost = fee + slippage
+    effective_exit = target_price * (1 - exit_cost)
 
-    effective_entry_cost = entry * (1 + entry_cost)
-    effective_exit_value = target_price * (1 - exit_cost)
-
-    net_profit = quantity * (
-        effective_exit_value - effective_entry_cost
-    )
+    net_profit = quantity * (effective_exit - effective_entry)
 
     if not math.isfinite(net_profit):
         return None
 
     return net_profit
-
-
-def _format_profit_line(position, target, label):
-    if not isinstance(target, dict):
-        return f"<b>{label} সম্ভাব্য নিট লাভ:</b> পাওয়া যায়নি"
-
-    profit = _calculate_net_profit(position, target)
-
-    if profit is None:
-        return f"<b>{label} সম্ভাব্য নিট লাভ:</b> হিসাব করা যায়নি"
-
-    return (
-        f"<b>{label} সম্ভাব্য নিট লাভ:</b> "
-        f"{_format_usdt(profit)} USDT"
-    )
 
 
 # ---------------------------------------------------------

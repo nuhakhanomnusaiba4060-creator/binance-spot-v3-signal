@@ -1,0 +1,56 @@
+
+name: V3 Signal Performance Analytics
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v3-signal-analytics
+  cancel-in-progress: false
+
+jobs:
+  analytics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependency
+        run: |
+          python -m pip install --upgrade pip
+          pip install "requests>=2.31.0,<3.0.0"
+
+      - name: Run signal analytics
+        run: python signal_analytics.py
+
+      - name: Save analytics data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add signal_analytics.json
+
+          if git diff --cached --quiet; then
+            echo "No analytics changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update 7-day signal performance analytics"
+
+          BRANCH="${GITHUB_REF_NAME}"
+          git pull --rebase origin "$BRANCH"
+          git push origin "HEAD:$BRANCH"

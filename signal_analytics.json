@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-23T18:33:41.853932+00:00",
+  "updated_at": "2026-11-23T19:27:09.725306+00:00",
   "retention_days": 7,
   "summary": {
     "total_signals": 18,
@@ -153,7 +153,7 @@
       "exit_at": null,
       "return_pct": null,
       "last_checked_at": "2026-11-23T18:32:00+00:00",
-      "data_error": null
+      "data_error": "One or more target prices are missing"
     },
     "LINKUSDT_SWING_20261123T055017.080440+0000": {
       "signal_id": "LINKUSDT_SWING_20261123T055017.080440+0000",
@@ -180,7 +180,7 @@
       "exit_at": null,
       "return_pct": null,
       "last_checked_at": "2026-11-23T18:32:00+00:00",
-      "data_error": null
+      "data_error": "One or more target prices are missing"
     },
     "BTCUSDT_SWING_20261123T070049.807750+0000": {
       "signal_id": "BTCUSDT_SWING_20261123T070049.807750+0000",
@@ -234,7 +234,7 @@
       "exit_at": null,
       "return_pct": null,
       "last_checked_at": "2026-11-23T18:32:00+00:00",
-      "data_error": null
+      "data_error": "One or more target prices are missing"
     },
     "HYPEUSDT_SCALP_20261123T082933.487146+0000": {
       "signal_id": "HYPEUSDT_SCALP_20261123T082933.487146+0000",
@@ -315,7 +315,7 @@
       "exit_at": null,
       "return_pct": null,
       "last_checked_at": "2026-11-23T18:32:00+00:00",
-      "data_error": null
+      "data_error": "One or more target prices are missing"
     },
     "NEARUSDT_SCALP_20261123T120106.658089+0000": {
       "signal_id": "NEARUSDT_SCALP_20261123T120106.658089+0000",
@@ -369,7 +369,7 @@
       "exit_at": null,
       "return_pct": null,
       "last_checked_at": "2026-11-23T18:32:00+00:00",
-      "data_error": null
+      "data_error": "One or more target prices are missing"
     },
     "TRXUSDT_SWING_20261123T131920.927441+0000": {
       "signal_id": "TRXUSDT_SWING_20261123T131920.927441+0000",
@@ -396,7 +396,7 @@
       "exit_at": null,
       "return_pct": null,
       "last_checked_at": "2026-11-23T18:32:00+00:00",
-      "data_error": null
+      "data_error": "One or more target prices are missing"
     },
     "LTCUSDT_SWING_20261123T131921.717495+0000": {
       "signal_id": "LTCUSDT_SWING_20261123T131921.717495+0000",

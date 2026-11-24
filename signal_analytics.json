@@ -1,16 +1,16 @@
 {
   "version": 1,
-  "updated_at": "2026-11-24T08:06:44.100551+00:00",
+  "updated_at": "2026-11-24T09:13:10.989399+00:00",
   "retention_days": 7,
   "summary": {
     "total_signals": 19,
     "entry_reached": 8,
     "entry_not_reached_expired": 11,
-    "stop_loss_hits": 1,
+    "stop_loss_hits": 2,
     "t1_hits": 7,
     "t2_hits": 4,
     "t3_hits": 1,
-    "pending": 6,
+    "pending": 5,
     "completed_results": 1,
     "wins": 1,
     "losses": 0,
@@ -152,7 +152,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T08:05:00+00:00",
+      "last_checked_at": "2026-11-24T09:12:00+00:00",
       "data_error": null
     },
     "LINKUSDT_SWING_20261123T055017.080440+0000": {
@@ -179,7 +179,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T08:05:00+00:00",
+      "last_checked_at": "2026-11-24T09:12:00+00:00",
       "data_error": null
     },
     "BTCUSDT_SWING_20261123T070049.807750+0000": {
@@ -233,7 +233,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T08:05:00+00:00",
+      "last_checked_at": "2026-11-24T09:12:00+00:00",
       "data_error": null
     },
     "HYPEUSDT_SCALP_20261123T082933.487146+0000": {
@@ -368,7 +368,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T08:05:00+00:00",
+      "last_checked_at": "2026-11-24T09:12:00+00:00",
       "data_error": null
     },
     "TRXUSDT_SWING_20261123T131920.927441+0000": {
@@ -395,7 +395,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T08:05:00+00:00",
+      "last_checked_at": "2026-11-24T09:12:00+00:00",
       "data_error": null
     },
     "LTCUSDT_SWING_20261123T131921.717495+0000": {
@@ -524,13 +524,13 @@
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
-      "stop_loss_hit": false,
-      "outcome": "PENDING",
+      "stop_loss_hit": true,
+      "outcome": "STOP_LOSS",
       "entry_expired": false,
-      "exit_price": null,
-      "exit_at": null,
-      "return_pct": null,
-      "last_checked_at": "2026-11-24T08:05:00+00:00",
+      "exit_price": 0.260889468308,
+      "exit_at": "2026-11-24T08:11:59.999000+00:00",
+      "return_pct": -3.9081,
+      "last_checked_at": "2026-11-24T08:11:00+00:00",
       "data_error": null
     }
   }

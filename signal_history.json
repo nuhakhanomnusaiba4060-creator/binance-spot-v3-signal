@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-24T13:57:35.752096+00:00",
+  "updated_at": "2026-11-24T14:58:16.019502+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -279,19 +279,19 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 69.91,
-      "status": "TARGET_1_HIT",
+      "current_price": 69.83,
+      "status": "STOP_LOSS_HIT",
       "t1_hit": true,
       "t2_hit": false,
       "t3_hit": false,
-      "stop_loss_hit": false,
+      "stop_loss_hit": true,
       "entry_reached": true,
       "entry_expiry": "2026-11-23T09:38:25.447655+00:00",
       "entry_window_expired": false,
       "entry_reached_at": "2026-11-23T08:47:27.687306+00:00",
-      "result": null,
-      "closed_at": null,
-      "last_updated": "2026-11-24T13:57:35.752039+00:00",
+      "result": "LOSS",
+      "closed_at": "2026-11-24T14:58:16.019459+00:00",
+      "last_updated": "2026-11-24T14:58:16.019459+00:00",
       "max_price_seen": 70.94
     },
     {

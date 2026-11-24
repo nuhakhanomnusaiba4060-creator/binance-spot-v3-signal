@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-24T02:32:25.641830+00:00",
+  "updated_at": "2026-11-24T03:31:46.321443+00:00",
   "retention_days": 7,
   "summary": {
     "total_signals": 18,
@@ -152,7 +152,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T02:31:00+00:00",
+      "last_checked_at": "2026-11-24T03:30:00+00:00",
       "data_error": null
     },
     "LINKUSDT_SWING_20261123T055017.080440+0000": {
@@ -179,7 +179,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T02:31:00+00:00",
+      "last_checked_at": "2026-11-24T03:30:00+00:00",
       "data_error": null
     },
     "BTCUSDT_SWING_20261123T070049.807750+0000": {
@@ -233,7 +233,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T02:31:00+00:00",
+      "last_checked_at": "2026-11-24T03:30:00+00:00",
       "data_error": null
     },
     "HYPEUSDT_SCALP_20261123T082933.487146+0000": {
@@ -368,7 +368,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T02:31:00+00:00",
+      "last_checked_at": "2026-11-24T03:30:00+00:00",
       "data_error": null
     },
     "TRXUSDT_SWING_20261123T131920.927441+0000": {
@@ -395,7 +395,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T02:31:00+00:00",
+      "last_checked_at": "2026-11-24T03:30:00+00:00",
       "data_error": null
     },
     "LTCUSDT_SWING_20261123T131921.717495+0000": {

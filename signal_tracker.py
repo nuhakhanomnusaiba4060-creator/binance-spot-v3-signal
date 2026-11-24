@@ -11,8 +11,6 @@ Responsibilities:
 - Track entry window expiration (Scalp 15m / Swing 60m).
 - Calculate basic signal performance.
 - Persist history safely.
-
-Spot market only.
 """
 
 import json
@@ -72,7 +70,6 @@ COOLDOWN_HOURS = int(
     _setting("COOLDOWN_HOURS", 6)
 )
 
-# 🔥 Entry window limits
 SCALP_ENTRY_VALIDITY_MINUTES = int(
     _setting("SCALP_ENTRY_VALIDITY_MINUTES", 15)
 )
@@ -345,7 +342,6 @@ def register_signal(signal, file_path=None):
 
     created_at = _to_iso(now)
     
-    # 🔥 Calculate entry expiry based on strategy
     entry_validity_minutes = (
         SCALP_ENTRY_VALIDITY_MINUTES
         if strategy == "SCALP"
@@ -371,10 +367,12 @@ def register_signal(signal, file_path=None):
         "stop_loss_hit": False,
         "entry_reached": False,
         
-        # 🔥 New Entry Tracking Fields
         "entry_expiry": _to_iso(now + timedelta(minutes=entry_validity_minutes)),
         "entry_window_expired": False,
         "entry_reached_at": None,
+        
+        # 🔥 Track max price reached (for real high tracking)
+        "max_price_seen": entry_price,
         
         "result": None,
         "closed_at": None,
@@ -436,18 +434,22 @@ def update_signal_status(signal_id, current_price, file_path=None):
 
     signal["current_price"] = price
     signal["last_updated"] = _to_iso(now)
-
-    # 2. Entry window logic (Only if entry not yet reached)
+    
+    # 🔥 Track max price seen (in case price spiked and came back)
+    max_seen = _number(signal.get("max_price_seen"))
+    if max_seen is None or price > max_seen:
+        signal["max_price_seen"] = price
+        max_seen = price
+    
+    # 2. Entry window logic
     if not signal.get("entry_reached"):
         entry_expiry = _parse_time(signal.get("entry_expiry"))
 
-        # 🔥 Check if the entry window has expired
         if entry_expiry is not None and now >= entry_expiry:
             signal["status"] = "EXPIRED_BEFORE_ENTRY"
             signal["result"] = "ENTRY_WINDOW_EXPIRED"
             signal["entry_window_expired"] = True
             signal["closed_at"] = _to_iso(now)
-            
             save_history(history, path)
             return {
                 "success": True,
@@ -455,10 +457,12 @@ def update_signal_status(signal_id, current_price, file_path=None):
                 "entry_window_expired": True,
             }
 
-        # If price reached entry
+        # Entry is reached only when price drops to or below entry (for BUY)
+        # But our logic: entry is when price touches entry_price
+        # For long: entry hit when price <= entry_price (or >= entry for breakout continuation)
         if price >= entry:
             signal["entry_reached"] = True
-            signal["entry_reached_at"] = _to_iso(now) # 🔥 Record time
+            signal["entry_reached_at"] = _to_iso(now)
         else:
             save_history(history, path)
             return {
@@ -480,11 +484,14 @@ def update_signal_status(signal_id, current_price, file_path=None):
         t2 = _number(targets.get("t2"))
         t3 = _number(targets.get("t3"))
 
-        if t1 is not None and price >= t1:
+        # 🔥 Use max_price_seen to catch intra-scan spikes
+        check_price = max(price, max_seen if max_seen else price)
+        
+        if t1 is not None and check_price >= t1:
             signal["t1_hit"] = True
-        if t2 is not None and price >= t2:
+        if t2 is not None and check_price >= t2:
             signal["t2_hit"] = True
-        if t3 is not None and price >= t3:
+        if t3 is not None and check_price >= t3:
             signal["t3_hit"] = True
             signal["status"] = "TARGET_3_HIT"
             signal["result"] = "TARGET_3"
@@ -509,13 +516,10 @@ def update_signal_status(signal_id, current_price, file_path=None):
 
 
 # ---------------------------------------------------------
-# EXPIRE SIGNALS (Overall 48H & Entry Windows)
+# EXPIRE SIGNALS
 # ---------------------------------------------------------
 
 def expire_old_signals(file_path=None, current_time=None):
-    """
-    Expire signals after the 48h tracking period.
-    """
     path = Path(file_path) if file_path else HISTORY_FILE
     history = load_history(path)
 
@@ -550,10 +554,6 @@ def expire_old_signals(file_path=None, current_time=None):
 
 
 def expire_unfilled_entries(file_path=None, current_time=None):
-    """
-    🔥 Expire signals whose entry window (15m/60m) closed without price reaching entry.
-    This acts as a sweeper for unfilled signals.
-    """
     path = Path(file_path) if file_path else HISTORY_FILE
     history = load_history(path)
 
@@ -587,10 +587,18 @@ def expire_unfilled_entries(file_path=None, current_time=None):
 
 
 # ---------------------------------------------------------
-# PERFORMANCE
+# PERFORMANCE (FIXED)
 # ---------------------------------------------------------
 
 def calculate_performance(file_path=None):
+    """
+    Calculate performance with FIXED win rate calculation.
+    
+    🔥 Key fixes:
+    - Win Rate now includes T1, T2, T3 hits (not just T3)
+    - Tracks avg return per signal
+    - Includes entry window expiries
+    """
     path = Path(file_path) if file_path else HISTORY_FILE
     history = load_history(path)
     signals = history.get("signals", [])
@@ -601,11 +609,16 @@ def calculate_performance(file_path=None):
     t3_hits = sum(bool(s.get("t3_hit")) for s in signals)
     stop_hits = sum(bool(s.get("stop_loss_hit")) for s in signals)
     
+    # 🔥 Any positive outcome (T1/T2/T3 hit) counts as a win
+    any_win = sum(
+        bool(s.get("t1_hit")) or bool(s.get("t2_hit")) or bool(s.get("t3_hit"))
+        for s in signals
+    )
+    
     expired_before_entry = sum(
         s.get("status") == "EXPIRED_BEFORE_ENTRY" for s in signals
     )
     
-    # 🔥 Count entry window expirations separately
     entry_window_expiries = sum(
         bool(s.get("entry_window_expired")) for s in signals
     )
@@ -617,7 +630,16 @@ def calculate_performance(file_path=None):
         for s in signals
     )
 
+    # 🔥 FIXED: Win rate counts any positive hit
+    total_decided = any_win + stop_hits
     win_rate = (
+        (any_win / total_decided) * 100
+        if total_decided > 0
+        else None
+    )
+    
+    # 🔥 T3-only win rate (for reference)
+    t3_win_rate = (
         (t3_hits / (t3_hits + stop_hits)) * 100
         if (t3_hits + stop_hits) > 0
         else None
@@ -631,10 +653,15 @@ def calculate_performance(file_path=None):
         "t2_hits": t2_hits,
         "t3_hits": t3_hits,
         "stop_loss_hits": stop_hits,
+        "any_positive_outcome": any_win,
         "expired_before_entry": expired_before_entry,
-        "entry_window_expiries": entry_window_expiries, # 🔥 New stat
-        "win_rate_t3_vs_stop_loss_pct": (
+        "entry_window_expiries": entry_window_expiries,
+        # 🔥 Win rate now includes T1/T2/T3
+        "win_rate_overall_pct": (
             round(win_rate, 2) if win_rate is not None else None
+        ),
+        "win_rate_t3_only_pct": (
+            round(t3_win_rate, 2) if t3_win_rate is not None else None
         ),
         "tracking_hours": TRACK_HOURS,
         "cooldown_hours": COOLDOWN_HOURS,

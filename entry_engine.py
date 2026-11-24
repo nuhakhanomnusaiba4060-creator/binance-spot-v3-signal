@@ -2,13 +2,16 @@
 Binance Spot V3 Smart Signal Scanner
 Entry Signal Generation Engine
 
-DYNAMIC MODE:
+TIME-FRAME AWARE BREAKOUT:
+- 5m: 20 candles (100 min)
+- 15m: 10 candles (150 min)
+- 30m: 8 candles (240 min)
+- 1h: 6 candles (360 min)
+
+DYNAMIC RVOL:
 - BULLISH: strict (1.2x / 1.3x)
 - NEUTRAL: moderate (0.5x / 0.6x)
-- BEARISH: relaxed (0.6x / 0.7x) - because BEARISH shouldn't block everything
-- UNKNOWN: treated as NEUTRAL
-
-The system is designed to allow real signals while rejecting fake ones.
+- BEARISH: moderately relaxed (0.6x / 0.7x)
 """
 
 import logging
@@ -22,6 +25,10 @@ from indicators import calculate_all_indicators
 
 logger = logging.getLogger(__name__)
 
+
+# =========================================================
+# CONFIG HELPERS
+# =========================================================
 
 def _normalize_key(value):
     return str(value).lower().replace("_", "").replace("-", "").replace(" ", "")
@@ -77,11 +84,13 @@ SWING_CONFIG = {
     "MAX_EMA_EXTENSION_PCT": 4.0,
 }
 
+# Global safety limits
 MAX_RSI = 78
-BREAKOUT_LOOKBACK = 20
+BREAKOUT_LOOKBACK = 20  # Default for 5m
 RETEST_TOLERANCE_PCT = 1.5
 MAX_BREAKOUT_EXTENSION_PCT = 2.5
 
+# Pump Protection
 MAX_CONSECUTIVE_BULLISH = 4
 MIN_CANDLE_BODY_PCT = 2.0
 RVOL_SPIKE_THRESHOLD = 3.0
@@ -93,17 +102,33 @@ APPROVED_STRATEGIES = ("SCALP", "SWING")
 
 
 # =========================================================
-# DYNAMIC CONFIG (FIXED)
+# TIMEFRAME-AWARE LOOKBACK
+# =========================================================
+
+TIMEFRAME_LOOKBACK_MAP = {
+    "1m": 30,
+    "3m": 25,
+    "5m": 20,
+    "15m": 10,
+    "30m": 8,
+    "1h": 6,
+    "2h": 6,
+    "4h": 5,
+    "1d": 4,
+}
+
+
+def _get_lookback(timeframe):
+    return TIMEFRAME_LOOKBACK_MAP.get(str(timeframe).lower(), 20)
+
+
+# =========================================================
+# DYNAMIC CONFIG
 # =========================================================
 
 def _get_dynamic_config(strategy, market_status):
     """
     Returns dynamic config based on market status.
-
-    - BULLISH: strict (base values)
-    - NEUTRAL: relaxed (RVOL reduced significantly)
-    - BEARISH: moderately relaxed (NOT overly strict)
-    - UNKNOWN: treated as NEUTRAL
     """
     base_config = SCALP_CONFIG if strategy == "SCALP" else SWING_CONFIG
     config = dict(base_config)
@@ -111,17 +136,13 @@ def _get_dynamic_config(strategy, market_status):
     market_status = str(market_status).upper()
 
     if market_status == "BULLISH":
-        # Strict - base values
-        pass
+        pass  # Strict - base values
 
     elif market_status in ("NEUTRAL", "UNKNOWN"):
-        # Relaxed - reduce RVOL and ADX thresholds
         config["MIN_RVOL"] = max(0.4, base_config["MIN_RVOL"] - 0.7)
         config["MIN_ADX"] = max(8.0, base_config["MIN_ADX"] - 6.0)
 
     elif market_status == "BEARISH":
-        # Moderately relaxed - NOT overly strict
-        # This prevents the "no signals in BEARISH" problem
         config["MIN_RVOL"] = max(0.5, base_config["MIN_RVOL"] - 0.6)
         config["MIN_ADX"] = max(10.0, base_config["MIN_ADX"] - 5.0)
 
@@ -247,9 +268,12 @@ def _indicator_snapshot(df):
         return {}
 
     return {
-        "close": _latest(df, "close"), "open": _latest(df, "open"),
-        "high": _latest(df, "high"), "low": _latest(df, "low"),
-        "volume": _latest(df, "volume"), "previous_volume": _previous(df, "volume"),
+        "close": _latest(df, "close"),
+        "open": _latest(df, "open"),
+        "high": _latest(df, "high"),
+        "low": _latest(df, "low"),
+        "volume": _latest(df, "volume"),
+        "previous_volume": _previous(df, "volume"),
         "ema_9": _value_from_columns(df, ["ema_9"]),
         "ema_20": _value_from_columns(df, ["ema_20"]),
         "sma_20": _value_from_columns(df, ["sma_20"]),
@@ -359,15 +383,27 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 
 
 # =========================================================
-# BREAKOUT
+# TIMEFRAME-AWARE BREAKOUT DETECTION
 # =========================================================
 
-def _get_breakout_data(df):
+def _get_breakout_data(df, timeframe="5m"):
+    """
+    Smart breakout detection with timeframe-aware lookback.
+
+    - 5m: 20 candles (100 min)
+    - 15m: 10 candles (150 min)
+    - 30m: 8 candles (240 min)
+    - 1h: 6 candles (360 min)
+    """
     if not isinstance(df, pd.DataFrame):
         return {}
-    minimum = BREAKOUT_LOOKBACK + 3
+
+    lookback = _get_lookback(timeframe)
+
+    minimum = lookback + 3
     if len(df) < minimum:
         return {}
+
     required_columns = {"high", "low", "close"}
     if not required_columns.issubset(df.columns):
         return {}
@@ -375,6 +411,7 @@ def _get_breakout_data(df):
     retest_index = len(df) - 1
     retest_close = _number(df.iloc[retest_index]["close"])
     retest_low = _number(df.iloc[retest_index]["low"])
+
     if None in (retest_close, retest_low):
         return {}
 
@@ -384,18 +421,23 @@ def _get_breakout_data(df):
 
     for i in range(2, 12):
         b_idx = len(df) - i
-        if b_idx < BREAKOUT_LOOKBACK:
+        if b_idx < lookback:
             continue
+
         b_candle = df.iloc[b_idx]
         pre_b_close = _number(df.iloc[b_idx - 1]["close"])
         b_close = _number(b_candle["close"])
+
         if None in (pre_b_close, b_close):
             continue
-        res_start = b_idx - BREAKOUT_LOOKBACK
+
+        res_start = b_idx - lookback
         res_data = df.iloc[res_start:b_idx]
         res_level = _number(res_data["close"].max())
+
         if res_level is None or res_level <= 0:
             continue
+
         if pre_b_close <= res_level and b_close > res_level:
             breakout_found = True
             breakout_index = b_idx
@@ -407,26 +449,33 @@ def _get_breakout_data(df):
 
     lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
     upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
+
     retest_valid = (
         retest_low >= lower_boundary
         and retest_low <= upper_boundary
         and retest_close >= resistance * 0.995
     )
+
     distance_pct = ((retest_close - resistance) / resistance) * 100
 
     return {
-        "resistance": resistance, "breakout": retest_valid, "retest": retest_valid,
+        "resistance": resistance,
+        "breakout": retest_valid,
+        "retest": retest_valid,
         "above_resistance": retest_close >= resistance * 0.995,
         "breakout_close": _number(df.iloc[breakout_index]["close"]),
-        "retest_close": retest_close, "retest_low": retest_low,
+        "retest_close": retest_close,
+        "retest_low": retest_low,
         "distance_from_resistance_pct": distance_pct,
-        "breakout_index": breakout_index, "retest_index": retest_index,
+        "breakout_index": breakout_index,
+        "retest_index": retest_index,
         "candles_since_breakout": retest_index - breakout_index,
+        "lookback_used": lookback,
     }
 
 
 # =========================================================
-# SUPPORT/RESISTANCE
+# SUPPORT AND RESISTANCE
 # =========================================================
 
 def _find_support(df, lookback=30):
@@ -616,7 +665,10 @@ def validate_entry(df, market_context, strategy="SCALP"):
     if extension_pct > config["MAX_EMA_EXTENSION_PCT"]:
         return {"valid": False, "reason": "ENTRY_TOO_LATE"}
 
-    breakout_data = _get_breakout_data(prepared)
+    # 🔥 Timeframe-aware breakout detection
+    trigger_tf = "5m" if strategy == "SCALP" else "15m"
+    breakout_data = _get_breakout_data(prepared, timeframe=trigger_tf)
+
     if not breakout_data:
         return {"valid": False, "reason": "BREAKOUT_DATA_UNAVAILABLE"}
     if not breakout_data["breakout"]:

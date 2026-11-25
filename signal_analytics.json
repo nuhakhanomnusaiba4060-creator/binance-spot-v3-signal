@@ -1,16 +1,16 @@
 {
   "version": 1,
-  "updated_at": "2026-11-25T22:14:29.884053+00:00",
+  "updated_at": "2026-11-25T23:12:21.108394+00:00",
   "retention_days": 7,
   "summary": {
     "total_signals": 28,
     "entry_reached": 13,
-    "entry_not_reached_expired": 14,
+    "entry_not_reached_expired": 15,
     "stop_loss_hits": 6,
     "t1_hits": 10,
     "t2_hits": 6,
     "t3_hits": 3,
-    "pending": 4,
+    "pending": 3,
     "completed_results": 4,
     "wins": 4,
     "losses": 0,
@@ -638,7 +638,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-25T22:13:00+00:00",
+      "last_checked_at": "2026-11-25T23:11:00+00:00",
       "data_error": null
     },
     "SOLUSDT_SWING_20261125T194303.146889+0000": {
@@ -719,7 +719,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-25T22:13:00+00:00",
+      "last_checked_at": "2026-11-25T23:11:00+00:00",
       "data_error": null
     },
     "BTCUSDT_SWING_20261125T214221.040487+0000": {
@@ -746,7 +746,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-25T22:13:00+00:00",
+      "last_checked_at": "2026-11-25T23:11:00+00:00",
       "data_error": null
     },
     "XRPUSDT_SWING_20261125T214221.679238+0000": {
@@ -768,12 +768,12 @@
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
-      "outcome": "PENDING",
-      "entry_expired": false,
+      "outcome": "ENTRY_WINDOW_EXPIRED",
+      "entry_expired": true,
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-25T22:13:00+00:00",
+      "last_checked_at": "2026-11-25T22:41:00+00:00",
       "data_error": null
     }
   }

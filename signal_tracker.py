@@ -666,3 +666,63 @@ def calculate_performance(file_path=None):
         "tracking_hours": TRACK_HOURS,
         "cooldown_hours": COOLDOWN_HOURS,
     }
+
+def generate_daily_report(file_path=None, hours=24):
+    """
+    Generate a report of all signals in the last N hours.
+    """
+    path = Path(file_path) if file_path else HISTORY_FILE
+    history = load_history(path)
+
+    cutoff = _utc_now() - timedelta(hours=hours)
+    signals = history.get("signals", [])
+
+    recent_signals = []
+    for sig in signals:
+        created = _parse_time(sig.get("created_at"))
+        if created is None or created < cutoff:
+            continue
+        recent_signals.append(sig)
+
+    total = len(recent_signals)
+    t1_hits = sum(bool(s.get("t1_hit")) for s in recent_signals)
+    t2_hits = sum(bool(s.get("t2_hit")) for s in recent_signals)
+    t3_hits = sum(bool(s.get("t3_hit")) for s in recent_signals)
+    stop_hits = sum(bool(s.get("stop_loss_hit")) for s in recent_signals)
+    expired = sum(s.get("status") == "EXPIRED_BEFORE_ENTRY" for s in recent_signals)
+    active = sum(_signal_is_active(s) for s in recent_signals)
+
+    any_win = sum(
+        bool(s.get("t1_hit")) or bool(s.get("t2_hit")) or bool(s.get("t3_hit"))
+        for s in recent_signals
+    )
+    total_decided = any_win + stop_hits
+    win_rate = ((any_win / total_decided) * 100 if total_decided > 0 else None)
+
+    return {
+        "period_hours": hours,
+        "total_signals": total,
+        "active_signals": active,
+        "t1_hits": t1_hits,
+        "t2_hits": t2_hits,
+        "t3_hits": t3_hits,
+        "stop_loss_hits": stop_hits,
+        "expired_before_entry": expired,
+        "any_positive_outcome": any_win,
+        "win_rate_pct": round(win_rate, 2) if win_rate is not None else None,
+        "signals": [
+            {
+                "symbol": s.get("symbol"),
+                "strategy": s.get("strategy"),
+                "status": s.get("status"),
+                "entry_reached": s.get("entry_reached"),
+                "t1_hit": s.get("t1_hit"),
+                "t2_hit": s.get("t2_hit"),
+                "t3_hit": s.get("t3_hit"),
+                "stop_loss_hit": s.get("stop_loss_hit"),
+                "created_at": s.get("created_at"),
+            }
+            for s in recent_signals
+        ],
+    }
+    

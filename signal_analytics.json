@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-25T06:53:34.376877+00:00",
+  "updated_at": "2026-11-25T08:27:29.127718+00:00",
   "retention_days": 7,
   "summary": {
     "total_signals": 19,
@@ -395,7 +395,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-25T06:52:00+00:00",
+      "last_checked_at": "2026-11-25T08:26:00+00:00",
       "data_error": null
     },
     "LTCUSDT_SWING_20261123T131921.717495+0000": {

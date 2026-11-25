@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-24T23:28:47.070874+00:00",
+  "updated_at": "2026-11-25T00:21:19.969437+00:00",
   "retention_days": 7,
   "summary": {
     "total_signals": 19,
@@ -179,7 +179,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T23:27:00+00:00",
+      "last_checked_at": "2026-11-25T00:20:00+00:00",
       "data_error": null
     },
     "BTCUSDT_SWING_20261123T070049.807750+0000": {
@@ -395,7 +395,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-24T23:27:00+00:00",
+      "last_checked_at": "2026-11-25T00:20:00+00:00",
       "data_error": null
     },
     "LTCUSDT_SWING_20261123T131921.717495+0000": {

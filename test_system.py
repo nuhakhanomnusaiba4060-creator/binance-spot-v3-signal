@@ -1,26 +1,31 @@
+
 """
 Binance Spot V3 Smart Signal Scanner
 System and Integration Contract Tests
 
 Python: 3.11
+Market: Binance Spot Only
 
-Tests:
-- Module imports
-- Configuration validation
-- Indicator calculations
-- Coin selector ticker compatibility
-- Order-book validation
-- Market filter interface
-- Entry engine interface (SCALP/SWING split + pump protection)
-- Risk manager interface (SL bounds + ATR fallback targets)
-- Telegram interface
-- Signal tracker persistence + entry expiry
+Test coverage:
+1. Module imports
+2. Configuration validation
+3. Indicator calculations
+4. Coin selector validation
+5. Market filter interface
+6. Entry engine interface and pump protection
+7. Risk manager interface
+8. Telegram interface
+9. Signal tracker persistence
+10. Scanner interface
+11. Breakout and retest logic
+12. Data provider validation
 """
 
 import unittest
 import tempfile
 import os
 import importlib
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -48,21 +53,36 @@ import scanner
 
 def create_test_dataframe(length=250):
     index = np.arange(length)
-    close = 100 + index * 0.08 + np.sin(index / 5) * 0.5
+
+    close = (
+        100
+        + index * 0.08
+        + np.sin(index / 5) * 0.5
+    )
+
     open_price = close - 0.05
+
     high = np.maximum(open_price, close) + 0.25
     low = np.minimum(open_price, close) - 0.25
+
     volume = 1000 + np.abs(np.sin(index / 4)) * 300
+
     start_time = 1_750_000_000_000
 
     return pd.DataFrame({
-        "open_time": [start_time + i * 300_000 for i in range(length)],
+        "open_time": [
+            start_time + i * 300_000
+            for i in range(length)
+        ],
         "open": open_price,
         "high": high,
         "low": low,
         "close": close,
         "volume": volume,
-        "close_time": [start_time + (i + 1) * 300_000 - 1 for i in range(length)],
+        "close_time": [
+            start_time + (i + 1) * 300_000 - 1
+            for i in range(length)
+        ],
         "quote_volume": close * volume,
         "trade_count": [1500] * length,
         "taker_buy_base_volume": volume * 0.55,
@@ -72,8 +92,16 @@ def create_test_dataframe(length=250):
 
 def create_test_order_book():
     return {
-        "bids": [["99.95", "1000"], ["99.90", "1000"], ["99.85", "1000"]],
-        "asks": [["100.05", "1000"], ["100.10", "1000"], ["100.15", "1000"]],
+        "bids": [
+            ["99.95", "1000"],
+            ["99.90", "1000"],
+            ["99.85", "1000"],
+        ],
+        "asks": [
+            ["100.05", "1000"],
+            ["100.10", "1000"],
+            ["100.15", "1000"],
+        ],
         "lastUpdateId": 123456,
     }
 
@@ -85,14 +113,26 @@ def create_test_order_book():
 class ModuleImportTests(unittest.TestCase):
 
     def test_all_modules_import(self):
+
         modules = [
-            "config", "data_provider", "indicators", "market_filter",
-            "coin_selector", "entry_engine", "risk_manager",
-            "telegram_bot", "signal_tracker", "scanner",
+            "config",
+            "data_provider",
+            "indicators",
+            "market_filter",
+            "coin_selector",
+            "entry_engine",
+            "risk_manager",
+            "telegram_bot",
+            "signal_tracker",
+            "scanner",
         ]
+
         for module_name in modules:
+
             with self.subTest(module=module_name):
+
                 module = importlib.import_module(module_name)
+
                 self.assertIsNotNone(module)
 
 
@@ -103,48 +143,87 @@ class ModuleImportTests(unittest.TestCase):
 class ConfigurationTests(unittest.TestCase):
 
     def test_required_config_sections_exist(self):
+
         required = [
-            "CONFIG", "TIMEFRAMES", "STRATEGIES",
-            "RISK_CONFIG", "FILTER_CONFIG", "API_CONFIG",
+            "CONFIG",
+            "TIMEFRAMES",
+            "STRATEGIES",
+            "RISK_CONFIG",
+            "FILTER_CONFIG",
+            "API_CONFIG",
         ]
+
         for name in required:
+
             with self.subTest(config=name):
-                self.assertTrue(hasattr(config, name), f"Missing config export: {name}")
+
+                self.assertTrue(
+                    hasattr(config, name),
+                    f"Missing config export: {name}",
+                )
 
     def test_validate_config(self):
+
         result = config.validate_config()
-        self.assertNotEqual(result, False, "Configuration validation returned False.")
+
+        self.assertNotEqual(
+            result,
+            False,
+            "Configuration validation returned False.",
+        )
 
     def test_spot_only_configuration(self):
+
         result = config.validate_config()
+
         self.assertNotEqual(result, False)
-        self.assertEqual(config.FILTER_CONFIG["ALLOWED_QUOTE_ASSET"], "USDT")
-        self.assertTrue(config.API_CONFIG["USE_PUBLIC_API_ONLY"])
+
+        self.assertEqual(
+            config.FILTER_CONFIG["ALLOWED_QUOTE_ASSET"],
+            "USDT",
+        )
+
+        self.assertTrue(
+            config.API_CONFIG["USE_PUBLIC_API_ONLY"]
+        )
 
     def test_15_point_scoring_matches_components(self):
+
         self.assertEqual(
             config.SIGNAL_CONFIG["MAX_SCORE"],
-            len(config.SIGNAL_CONFIG["SCORE_COMPONENTS"])
+            len(config.SIGNAL_CONFIG["SCORE_COMPONENTS"]),
         )
-        self.assertEqual(config.SIGNAL_CONFIG["MAX_SCORE"], 15)
+
+        self.assertEqual(
+            config.SIGNAL_CONFIG["MAX_SCORE"],
+            15,
+        )
 
     def test_early_pump_components_present(self):
+
         components = config.SIGNAL_CONFIG["SCORE_COMPONENTS"]
+
         self.assertIn("bb_squeeze", components)
         self.assertIn("early_momentum", components)
         self.assertIn("volume_acceleration", components)
 
     def test_pump_protection_config_present(self):
+
         protection = config.FILTER_CONFIG["PUMP_PROTECTION"]
+
         self.assertIn("MAX_ROC_PERCENT", protection)
         self.assertIn("MAX_BB_WIDTH", protection)
 
     def test_entry_validity_minutes_configured(self):
+
         self.assertEqual(
-            config.TRACKING_CONFIG["SCALP_ENTRY_VALIDITY_MINUTES"], 15
+            config.TRACKING_CONFIG["SCALP_ENTRY_VALIDITY_MINUTES"],
+            15,
         )
+
         self.assertEqual(
-            config.TRACKING_CONFIG["SWING_ENTRY_VALIDITY_MINUTES"], 60
+            config.TRACKING_CONFIG["SWING_ENTRY_VALIDITY_MINUTES"],
+            60,
         )
 
 
@@ -155,33 +234,83 @@ class ConfigurationTests(unittest.TestCase):
 class IndicatorTests(unittest.TestCase):
 
     def setUp(self):
+
         self.df = create_test_dataframe()
 
     def test_dataframe_validation(self):
-        result = indicators.validate_dataframe(self.df.copy())
+
+        result = indicators.validate_dataframe(
+            self.df.copy()
+        )
+
         self.assertIsInstance(result, pd.DataFrame)
         self.assertFalse(result.empty)
 
     def test_indicator_calculation(self):
-        result = indicators.calculate_all_indicators(self.df.copy())
+
+        result = indicators.calculate_all_indicators(
+            self.df.copy()
+        )
+
         self.assertIsInstance(result, pd.DataFrame)
-        self.assertGreaterEqual(len(result), 220)
+
+        self.assertGreaterEqual(
+            len(result),
+            220,
+        )
 
     def test_required_indicator_columns(self):
-        result = indicators.calculate_all_indicators(self.df.copy())
-        required_columns = ["ema_9", "ema_20", "sma_20", "sma_50", "sma_200"]
+
+        result = indicators.calculate_all_indicators(
+            self.df.copy()
+        )
+
+        required_columns = [
+            "ema_9",
+            "ema_20",
+            "sma_20",
+            "sma_50",
+            "sma_200",
+        ]
+
         for column in required_columns:
+
             with self.subTest(column=column):
-                self.assertIn(column, result.columns)
+
+                self.assertIn(
+                    column,
+                    result.columns,
+                )
 
     def test_indicator_values_are_numeric(self):
-        result = indicators.calculate_all_indicators(self.df.copy())
-        for column in ("ema_9", "ema_20", "sma_20", "sma_50", "sma_200"):
-            values = pd.to_numeric(result[column], errors="coerce")
-            self.assertTrue(np.isfinite(values.dropna()).all())
+
+        result = indicators.calculate_all_indicators(
+            self.df.copy()
+        )
+
+        for column in (
+            "ema_9",
+            "ema_20",
+            "sma_20",
+            "sma_50",
+            "sma_200",
+        ):
+
+            values = pd.to_numeric(
+                result[column],
+                errors="coerce",
+            )
+
+            self.assertTrue(
+                np.isfinite(values.dropna()).all()
+            )
 
     def test_new_early_pump_indicators_present(self):
-        result = indicators.calculate_all_indicators(self.df.copy())
+
+        result = indicators.calculate_all_indicators(
+            self.df.copy()
+        )
+
         self.assertIn("bb_width", result.columns)
         self.assertIn("roc", result.columns)
         self.assertIn("volume_momentum", result.columns)
@@ -194,75 +323,153 @@ class IndicatorTests(unittest.TestCase):
 class CoinSelectorTests(unittest.TestCase):
 
     def setUp(self):
+
         self.symbols = ["TESTUSDT"]
-        self.order_books = {"TESTUSDT": create_test_order_book()}
+
+        self.order_books = {
+            "TESTUSDT": create_test_order_book()
+        }
 
     def test_snake_case_ticker(self):
+
         ticker_data = {
             "TESTUSDT": {
-                "quote_volume": "5000000", "trade_count": "5000",
-                "last_price": "100", "price_change_percent": "3.5",
-                "volume": "50000", "high_price": "105", "low_price": "95",
+                "quote_volume": "5000000",
+                "trade_count": "5000",
+                "last_price": "100",
+                "price_change_percent": "3.5",
+                "volume": "50000",
+                "high_price": "105",
+                "low_price": "95",
             }
         }
-        result = coin_selector.select_coins(self.symbols, ticker_data, self.order_books)
+
+        result = coin_selector.select_coins(
+            self.symbols,
+            ticker_data,
+            self.order_books,
+        )
+
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["symbol"], "TESTUSDT")
+
+        self.assertEqual(
+            result[0]["symbol"],
+            "TESTUSDT",
+        )
 
     def test_camel_case_ticker(self):
+
         ticker_data = {
             "TESTUSDT": {
-                "quoteVolume": "5000000", "count": "5000",
-                "lastPrice": "100", "priceChangePercent": "3.5",
-                "volume": "50000", "highPrice": "105", "lowPrice": "95",
+                "quoteVolume": "5000000",
+                "count": "5000",
+                "lastPrice": "100",
+                "priceChangePercent": "3.5",
+                "volume": "50000",
+                "highPrice": "105",
+                "lowPrice": "95",
             }
         }
-        result = coin_selector.select_coins(self.symbols, ticker_data, self.order_books)
+
+        result = coin_selector.select_coins(
+            self.symbols,
+            ticker_data,
+            self.order_books,
+        )
+
         self.assertEqual(len(result), 1)
 
     def test_low_volume_rejected(self):
+
         ticker_data = {
-            "TESTUSDT": {"quote_volume": "1000", "trade_count": "5000", "last_price": "100"}
+            "TESTUSDT": {
+                "quote_volume": "1000",
+                "trade_count": "5000",
+                "last_price": "100",
+            }
         }
-        result = coin_selector.select_coins(self.symbols, ticker_data, self.order_books)
+
+        result = coin_selector.select_coins(
+            self.symbols,
+            ticker_data,
+            self.order_books,
+        )
+
         self.assertEqual(result, [])
 
     def test_non_usdt_pair_rejected(self):
-        self.assertFalse(coin_selector._is_valid_symbol("TESTBTC"))
+
+        self.assertFalse(
+            coin_selector._is_valid_symbol("TESTBTC")
+        )
 
     def test_leveraged_token_rejected(self):
-        self.assertFalse(coin_selector._is_valid_symbol("TESTUPUSDT"))
+
+        self.assertFalse(
+            coin_selector._is_valid_symbol("TESTUPUSDT")
+        )
 
     def test_tokenized_stock_rejected(self):
-        self.assertFalse(coin_selector._is_valid_symbol("NVDABUSDT"))
-        self.assertFalse(coin_selector._is_valid_symbol("TSLABUSDT"))
+
+        self.assertFalse(
+            coin_selector._is_valid_symbol("NVDABUSDT")
+        )
+
+        self.assertFalse(
+            coin_selector._is_valid_symbol("TSLABUSDT")
+        )
 
     def test_stablecoin_rejected(self):
-        self.assertFalse(coin_selector._is_valid_symbol("USDCUSDT"))
-        self.assertFalse(coin_selector._is_valid_symbol("XAUTUSDT"))
+
+        self.assertFalse(
+            coin_selector._is_valid_symbol("USDCUSDT")
+        )
+
+        self.assertFalse(
+            coin_selector._is_valid_symbol("XAUTUSDT")
+        )
 
     def test_order_book_validation(self):
-        result = coin_selector.analyze_order_book(create_test_order_book())
+
+        result = coin_selector.analyze_order_book(
+            create_test_order_book()
+        )
+
         self.assertTrue(result["valid"])
-        self.assertGreater(result["best_ask"], result["best_bid"])
-        self.assertIsNotNone(result["spread_percent"])
+
+        self.assertGreater(
+            result["best_ask"],
+            result["best_bid"],
+        )
+
+        self.assertIsNotNone(
+            result["spread_percent"]
+        )
 
     def test_invalid_order_book_rejected(self):
+
         result = coin_selector.analyze_order_book({})
+
         self.assertFalse(result["valid"])
 
 
 # =========================================================
-# 5. MARKET FILTER INTERFACE TESTS
+# 5. MARKET FILTER TESTS
 # =========================================================
 
 class MarketFilterTests(unittest.TestCase):
 
     def test_market_filter_function_exists(self):
-        self.assertTrue(callable(market_filter.analyze_market))
+
+        self.assertTrue(
+            callable(market_filter.analyze_market)
+        )
 
     def test_market_context_validator_exists(self):
-        self.assertTrue(callable(market_filter.validate_market_context))
+
+        self.assertTrue(
+            callable(market_filter.validate_market_context)
+        )
 
 
 # =========================================================
@@ -272,38 +479,70 @@ class MarketFilterTests(unittest.TestCase):
 class EntryEngineTests(unittest.TestCase):
 
     def test_required_functions_exist(self):
-        required = ["evaluate_scalp", "evaluate_swing", "score_setup", "validate_entry"]
+
+        required = [
+            "evaluate_scalp",
+            "evaluate_swing",
+            "score_setup",
+            "validate_entry",
+        ]
+
         for name in required:
+
             with self.subTest(function=name):
-                self.assertTrue(callable(getattr(entry_engine, name, None)))
+
+                self.assertTrue(
+                    callable(
+                        getattr(entry_engine, name, None)
+                    )
+                )
 
     def test_only_approved_signal_classes(self):
+
+        approved = entry_engine.__dict__.get(
+            "APPROVED_CLASSIFICATIONS",
+            ["STRONG BUY", "EXCELLENT BUY"],
+        )
+
         self.assertIn(
             "STRONG BUY",
-            entry_engine.__dict__.get(
-                "APPROVED_CLASSIFICATIONS", ["STRONG BUY", "EXCELLENT BUY"]
-            ),
+            approved,
+        )
+
+        self.assertIn(
+            "EXCELLENT BUY",
+            approved,
         )
 
     def test_scalp_swing_configs_differ(self):
+
         self.assertNotEqual(
             entry_engine.SCALP_CONFIG["MIN_RVOL"],
             entry_engine.SWING_CONFIG["MIN_RVOL"],
         )
+
         self.assertNotEqual(
             entry_engine.SCALP_CONFIG["MIN_ADX"],
             entry_engine.SWING_CONFIG["MIN_ADX"],
         )
 
     def test_pump_protection_functions_exist(self):
+
         required = [
             "_has_consecutive_bullish_candles",
             "_has_rvol_collapse",
             "_has_insufficient_upside",
         ]
+
         for name in required:
+
             with self.subTest(function=name):
-                self.assertTrue(callable(getattr(entry_engine, name, None)))
+
+                self.assertTrue(
+                    callable(
+                        getattr(entry_engine, name, None)
+                    )
+                )
 
 
 # =========================================================
@@ -313,53 +552,107 @@ class EntryEngineTests(unittest.TestCase):
 class RiskManagerTests(unittest.TestCase):
 
     def test_required_functions_exist(self):
+
         required = [
-            "calculate_stop_loss", "calculate_targets",
-            "calculate_position_size", "validate_risk", "build_risk_plan",
+            "calculate_stop_loss",
+            "calculate_targets",
+            "calculate_position_size",
+            "validate_risk",
+            "build_risk_plan",
         ]
+
         for name in required:
+
             with self.subTest(function=name):
-                self.assertTrue(callable(getattr(risk_manager, name, None)))
+
+                self.assertTrue(
+                    callable(
+                        getattr(risk_manager, name, None)
+                    )
+                )
 
     def test_position_size_function(self):
+
         result = risk_manager.calculate_position_size(
-            capital=100, entry=10, stop_loss=9,
-            risk_percent=1, fee_rate=0.001, slippage_rate=0.001,
+            capital=100,
+            entry=10,
+            stop_loss=9,
+            risk_percent=1,
+            fee_rate=0.001,
+            slippage_rate=0.001,
         )
+
         self.assertIsInstance(result, dict)
-        self.assertGreater(result.get("quantity", 0), 0)
+
+        self.assertGreater(
+            result.get("quantity", 0),
+            0,
+        )
 
     def test_stop_loss_rejects_too_wide(self):
+
         with self.assertRaises(ValueError):
+
             risk_manager.calculate_stop_loss(
-                entry_price=100, support_level=85, atr=None,
+                entry_price=100,
+                support_level=85,
+                atr=None,
             )
 
     def test_stop_loss_bounds_configured(self):
-        self.assertGreater(risk_manager.MAX_STOP_LOSS_DISTANCE_PERCENT, 0)
-        self.assertLessEqual(risk_manager.MAX_STOP_LOSS_DISTANCE_PERCENT, 20)
-        self.assertGreater(risk_manager.MIN_STOP_LOSS_DISTANCE_PERCENT, 0)
+
+        self.assertGreater(
+            risk_manager.MAX_STOP_LOSS_DISTANCE_PERCENT,
+            0,
+        )
+
+        self.assertLessEqual(
+            risk_manager.MAX_STOP_LOSS_DISTANCE_PERCENT,
+            20,
+        )
+
+        self.assertGreater(
+            risk_manager.MIN_STOP_LOSS_DISTANCE_PERCENT,
+            0,
+        )
 
 
 # =========================================================
-# 8. TELEGRAM INTERFACE TESTS
+# 8. TELEGRAM TESTS
 # =========================================================
 
 class TelegramTests(unittest.TestCase):
 
     def test_required_functions_exist(self):
+
         required = [
-            "credentials_available", "send_message",
-            "send_connection_test", "format_signal", "send_signal",
+            "credentials_available",
+            "send_message",
+            "send_connection_test",
+            "format_signal",
+            "send_signal",
         ]
+
         for name in required:
+
             with self.subTest(function=name):
-                self.assertTrue(callable(getattr(telegram_bot, name, None)))
+
+                self.assertTrue(
+                    callable(
+                        getattr(telegram_bot, name, None)
+                    )
+                )
 
     def test_missing_credentials_do_not_expose_secrets(self):
+
         status = telegram_bot.get_telegram_status()
+
         self.assertIsInstance(status, dict)
-        self.assertNotIn("TELEGRAM_BOT_TOKEN_VALUE", status)
+
+        self.assertNotIn(
+            "TELEGRAM_BOT_TOKEN_VALUE",
+            status,
+        )
 
 
 # =========================================================
@@ -369,146 +662,421 @@ class TelegramTests(unittest.TestCase):
 class SignalTrackerTests(unittest.TestCase):
 
     def test_required_functions_exist(self):
+
         required = [
-            "load_history", "save_history", "register_signal",
-            "check_duplicate", "update_signal_status",
-            "expire_old_signals", "calculate_performance",
+            "load_history",
+            "save_history",
+            "register_signal",
+            "check_duplicate",
+            "update_signal_status",
+            "expire_old_signals",
+            "calculate_performance",
         ]
+
         for name in required:
+
             with self.subTest(function=name):
-                self.assertTrue(callable(getattr(signal_tracker, name, None)))
+
+                self.assertTrue(
+                    callable(
+                        getattr(signal_tracker, name, None)
+                    )
+                )
 
     def test_entry_expiry_function_exists(self):
-        self.assertTrue(callable(getattr(signal_tracker, "expire_unfilled_entries", None)))
+
+        self.assertTrue(
+            callable(
+                getattr(
+                    signal_tracker,
+                    "expire_unfilled_entries",
+                    None,
+                )
+            )
+        )
 
     def test_entry_validity_constants_present(self):
-        self.assertEqual(signal_tracker.SCALP_ENTRY_VALIDITY_MINUTES, 15)
-        self.assertEqual(signal_tracker.SWING_ENTRY_VALIDITY_MINUTES, 60)
+
+        self.assertEqual(
+            signal_tracker.SCALP_ENTRY_VALIDITY_MINUTES,
+            15,
+        )
+
+        self.assertEqual(
+            signal_tracker.SWING_ENTRY_VALIDITY_MINUTES,
+            60,
+        )
 
     def test_history_persistence(self):
+
         with tempfile.TemporaryDirectory() as directory:
-            file_path = os.path.join(directory, "test_history.json")
-            history = signal_tracker.load_history(file_path=file_path)
-            self.assertIsInstance(history, dict)
-            signal_tracker.save_history(history, file_path=file_path)
-            self.assertTrue(os.path.exists(file_path))
-            loaded = signal_tracker.load_history(file_path=file_path)
-            self.assertIsInstance(loaded, dict)
+
+            file_path = os.path.join(
+                directory,
+                "test_history.json",
+            )
+
+            history = signal_tracker.load_history(
+                file_path=file_path
+            )
+
+            self.assertIsInstance(
+                history,
+                dict,
+            )
+
+            signal_tracker.save_history(
+                history,
+                file_path=file_path,
+            )
+
+            self.assertTrue(
+                os.path.exists(file_path)
+            )
+
+            loaded = signal_tracker.load_history(
+                file_path=file_path
+            )
+
+            self.assertIsInstance(
+                loaded,
+                dict,
+            )
 
 
 # =========================================================
-# 10. SCANNER INTERFACE TESTS
+# 10. SCANNER TESTS
 # =========================================================
 
 class ScannerTests(unittest.TestCase):
 
     def test_scanner_functions_exist(self):
+
         required = [
-            "run_scanner", "fetch_market_context", "collect_candidates",
-            "evaluate_candidate", "attach_risk_plan", "deliver_signal",
+            "run_scanner",
+            "fetch_market_context",
+            "collect_candidates",
+            "evaluate_candidate",
+            "attach_risk_plan",
+            "deliver_signal",
         ]
+
         for name in required:
+
             with self.subTest(function=name):
-                self.assertTrue(callable(getattr(scanner, name, None)))
+
+                self.assertTrue(
+                    callable(
+                        getattr(scanner, name, None)
+                    )
+                )
 
     def test_non_usdt_signal_rejected(self):
-        signal = {"symbol": "BTCBTC", "classification": "STRONG BUY", "entry_price": 100}
-        self.assertFalse(scanner.is_eligible_signal(signal))
+
+        signal = {
+            "symbol": "BTCBTC",
+            "classification": "STRONG BUY",
+            "entry_price": 100,
+        }
+
+        self.assertFalse(
+            scanner.is_eligible_signal(signal)
+        )
 
     def test_unapproved_signal_rejected(self):
-        signal = {"symbol": "BTCUSDT", "classification": "WEAK BUY", "entry_price": 100}
-        self.assertFalse(scanner.is_eligible_signal(signal))
+
+        signal = {
+            "symbol": "BTCUSDT",
+            "classification": "WEAK BUY",
+            "entry_price": 100,
+        }
+
+        self.assertFalse(
+            scanner.is_eligible_signal(signal)
+        )
 
 
 # =========================================================
-# 11. BREAKOUT + RETEST LOGIC TESTS (SMART MULTI-CANDLE)
+# 11. BREAKOUT AND RETEST TESTS
 # =========================================================
 
 class EntryEngineBreakoutRetestTests(unittest.TestCase):
 
     def make_breakout_dataframe(self, retest_low=100.80):
+
         """
         Structure:
-        - 20 stable candles -> resistance at 101.0
-        - Breakout candle -> closes at 102.0
-        - Pullback candle -> still above resistance
-        - Retest candle -> low touches resistance zone, closes above
+        - 20 stable candles
+        - Resistance at 101.0
+        - Breakout candle closes at 102.0
+        - Pullback candle stays above resistance
+        - Retest candle touches resistance zone
         """
+
         rows = []
+
         for _ in range(20):
+
             rows.append({
-                "open": 100.0, "high": 101.0, "low": 99.5,
-                "close": 100.0, "volume": 1000.0,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.5,
+                "close": 100.0,
+                "volume": 1000.0,
             })
 
         # Breakout candle
         rows.append({
-            "open": 100.0, "high": 102.5, "low": 100.0,
-            "close": 102.0, "volume": 2500.0,
+            "open": 100.0,
+            "high": 102.5,
+            "low": 100.0,
+            "close": 102.0,
+            "volume": 2500.0,
         })
 
         # Pullback candle
         rows.append({
-            "open": 102.0, "high": 102.3, "low": 101.2,
-            "close": 101.8, "volume": 1500.0,
+            "open": 102.0,
+            "high": 102.3,
+            "low": 101.2,
+            "close": 101.8,
+            "volume": 1500.0,
         })
 
         # Retest candle
         rows.append({
-            "open": 101.8, "high": 102.1, "low": retest_low,
-            "close": 101.9, "volume": 1800.0,
+            "open": 101.8,
+            "high": 102.1,
+            "low": retest_low,
+            "close": 101.9,
+            "volume": 1800.0,
         })
 
         return pd.DataFrame(rows)
 
     def test_separate_candle_breakout_and_retest(self):
+
         df = self.make_breakout_dataframe()
+
         result = entry_engine._get_breakout_data(df)
-        self.assertTrue(result.get("breakout"))
-        self.assertTrue(result.get("retest"))
-        self.assertTrue(result.get("above_resistance"))
+
+        self.assertTrue(
+            result.get("breakout")
+        )
+
+        self.assertTrue(
+            result.get("retest")
+        )
+
+        self.assertTrue(
+            result.get("above_resistance")
+        )
 
     def test_failed_retest_is_rejected(self):
-        """If retest low falls WELL below resistance, it must be rejected."""
-        df = self.make_breakout_dataframe(retest_low=97.0)
+
+        df = self.make_breakout_dataframe(
+            retest_low=97.0
+        )
+
         result = entry_engine._get_breakout_data(df)
-        self.assertFalse(result.get("retest", False))
+
+        self.assertFalse(
+            result.get("retest", False)
+        )
 
     def test_breakout_without_separate_retest_is_rejected(self):
+
         rows = []
+
         for _ in range(20):
+
             rows.append({
-                "open": 100.0, "high": 101.0, "low": 99.5,
-                "close": 100.0, "volume": 1000.0,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.5,
+                "close": 100.0,
+                "volume": 1000.0,
             })
 
         # Latest candle itself is the breakout
         rows.append({
-            "open": 100.0, "high": 103.0, "low": 100.0,
-            "close": 102.5, "volume": 2500.0,
+            "open": 100.0,
+            "high": 103.0,
+            "low": 100.0,
+            "close": 102.5,
+            "volume": 2500.0,
         })
 
         df = pd.DataFrame(rows)
+
         result = entry_engine._get_breakout_data(df)
 
-        self.assertFalse(result.get("breakout", False))
-        self.assertFalse(result.get("retest", False))
+        self.assertFalse(
+            result.get("breakout", False)
+        )
+
+        self.assertFalse(
+            result.get("retest", False)
+        )
 
     def test_unknown_market_context_is_rejected(self):
+
         result = entry_engine._validate_market_context({
             "market_status": "UNKNOWN",
             "btc_trend": "UNKNOWN",
             "risk_level": "UNKNOWN",
         })
+
         self.assertFalse(result[0])
 
     def test_high_risk_market_is_rejected(self):
+
         result = entry_engine._validate_market_context({
             "market_status": "HIGH_RISK",
             "btc_trend": "BEARISH",
             "risk_level": "HIGH",
         })
+
         self.assertFalse(result[0])
+
+
+# =========================================================
+# 12. DATA PROVIDER VALIDATION TESTS
+# =========================================================
+
+class DataProviderValidationTests(unittest.TestCase):
+
+    def setUp(self):
+
+        self.df = create_test_dataframe()
+
+    def test_negative_taker_buy_base_volume_rejected(self):
+
+        df = self.df.copy()
+
+        df.loc[0, "taker_buy_base_volume"] = -1
+
+        with self.assertRaises(
+            data_provider.BinanceDataValidationError
+        ):
+
+            data_provider._validate_candle_rows(df)
+
+    def test_negative_taker_buy_quote_volume_rejected(self):
+
+        df = self.df.copy()
+
+        df.loc[0, "taker_buy_quote_volume"] = -1
+
+        with self.assertRaises(
+            data_provider.BinanceDataValidationError
+        ):
+
+            data_provider._validate_candle_rows(df)
+
+    def test_taker_base_volume_exceeding_total_rejected(self):
+
+        df = self.df.copy()
+
+        df.loc[0, "taker_buy_base_volume"] = (
+            df.loc[0, "volume"] * 1.01
+        )
+
+        with self.assertRaises(
+            data_provider.BinanceDataValidationError
+        ):
+
+            data_provider._validate_candle_rows(df)
+
+    def test_taker_quote_volume_exceeding_total_rejected(self):
+
+        df = self.df.copy()
+
+        df.loc[0, "taker_buy_quote_volume"] = (
+            df.loc[0, "quote_volume"] * 1.01
+        )
+
+        with self.assertRaises(
+            data_provider.BinanceDataValidationError
+        ):
+
+            data_provider._validate_candle_rows(df)
+
+    def test_close_time_before_open_time_rejected(self):
+
+        df = self.df.copy()
+
+        df.loc[0, "close_time"] = (
+            df.loc[0, "open_time"] - 1
+        )
+
+        with self.assertRaises(
+            data_provider.BinanceDataValidationError
+        ):
+
+            data_provider._validate_candle_rows(df)
+
+    def test_monthly_candle_35_days_old_accepted(self):
+
+        now_ms = 1_800_000_000_000
+
+        age_ms = (
+            35
+            * 24
+            * 60
+            * 60
+            * 1000
+        )
+
+        df = pd.DataFrame({
+            "close_time": [
+                now_ms - age_ms
+            ]
+        })
+
+        with patch.object(
+            data_provider,
+            "_utc_now_ms",
+            return_value=now_ms,
+        ):
+
+            data_provider._validate_candle_freshness(
+                df,
+                "1M",
+            )
+
+    def test_monthly_candle_41_days_old_rejected(self):
+
+        now_ms = 1_800_000_000_000
+
+        age_ms = (
+            41
+            * 24
+            * 60
+            * 60
+            * 1000
+        )
+
+        df = pd.DataFrame({
+            "close_time": [
+                now_ms - age_ms
+            ]
+        })
+
+        with patch.object(
+            data_provider,
+            "_utc_now_ms",
+            return_value=now_ms,
+        ):
+
+            with self.assertRaises(
+                data_provider.BinanceDataValidationError
+            ):
+
+                data_provider._validate_candle_freshness(
+                    df,
+                    "1M",
+                )
 
 
 # =========================================================
@@ -516,7 +1084,9 @@ class EntryEngineBreakoutRetestTests(unittest.TestCase):
 # =========================================================
 
 if __name__ == "__main__":
+
     print("=" * 60)
     print("BINANCE SPOT V3 SYSTEM TESTS")
     print("=" * 60)
+
     unittest.main(verbosity=2)

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-25T22:39:16.834693+00:00",
+  "updated_at": "2026-11-25T23:32:47.594572+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -660,7 +660,7 @@
         "t2": 0.330976284623,
         "t3": 0.337871541548
       },
-      "current_price": 0.3108,
+      "current_price": 0.3193,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -673,7 +673,7 @@
       "max_price_seen": 0.3198,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-25T22:39:16.819097+00:00"
+      "last_updated": "2026-11-25T23:32:47.590725+00:00"
     },
     {
       "signal_id": "SOLUSDT_SWING_20261125T194303.146889+0000",
@@ -750,7 +750,7 @@
         "t2": 3.110057039525,
         "t3": 3.14506844743
       },
-      "current_price": 3.033,
+      "current_price": 3.008,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -763,7 +763,7 @@
       "max_price_seen": 3.034,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-25T22:39:16.831464+00:00"
+      "last_updated": "2026-11-25T23:32:47.594534+00:00"
     },
     {
       "signal_id": "BTCUSDT_SWING_20261125T214221.040487+0000",
@@ -781,19 +781,19 @@
         "t3": 62725.25429392368
       },
       "current_price": 60220.72,
-      "status": "ACTIVE",
+      "status": "EXPIRED_BEFORE_ENTRY",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
       "entry_reached": false,
       "entry_expiry": "2026-11-25T22:42:21.040487+00:00",
-      "entry_window_expired": false,
+      "entry_window_expired": true,
       "entry_reached_at": null,
       "max_price_seen": 60335.29,
-      "result": null,
-      "closed_at": null,
-      "last_updated": "2026-11-25T22:39:16.833258+00:00"
+      "result": "ENTRY_WINDOW_EXPIRED",
+      "closed_at": "2026-11-25T23:32:47.586073+00:00",
+      "last_updated": "2026-11-25T23:32:47.586073+00:00"
     },
     {
       "signal_id": "XRPUSDT_SWING_20261125T214221.679238+0000",
@@ -811,19 +811,19 @@
         "t3": 0.985720456697
       },
       "current_price": 0.9387,
-      "status": "ACTIVE",
+      "status": "EXPIRED_BEFORE_ENTRY",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
       "entry_reached": false,
       "entry_expiry": "2026-11-25T22:42:21.679238+00:00",
-      "entry_window_expired": false,
+      "entry_window_expired": true,
       "entry_reached_at": null,
       "max_price_seen": 0.9457,
-      "result": null,
-      "closed_at": null,
-      "last_updated": "2026-11-25T22:39:16.834668+00:00"
+      "result": "ENTRY_WINDOW_EXPIRED",
+      "closed_at": "2026-11-25T23:32:47.586073+00:00",
+      "last_updated": "2026-11-25T23:32:47.586073+00:00"
     }
   ]
 }

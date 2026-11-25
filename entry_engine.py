@@ -2,16 +2,10 @@
 Binance Spot V3 Smart Signal Scanner
 Entry Signal Generation Engine
 
-TIME-FRAME AWARE BREAKOUT:
-- 5m: 20 candles (100 min)
-- 15m: 10 candles (150 min)
-- 30m: 8 candles (240 min)
-- 1h: 6 candles (360 min)
-
-DYNAMIC RVOL:
+TIME-FRAME AWARE BREAKOUT + DYNAMIC RVOL:
 - BULLISH: strict (1.2x / 1.3x)
 - NEUTRAL: moderate (0.5x / 0.6x)
-- BEARISH: moderately relaxed (0.6x / 0.7x)
+- BEARISH: very relaxed (0.4x / 0.5x)
 """
 
 import logging
@@ -84,13 +78,11 @@ SWING_CONFIG = {
     "MAX_EMA_EXTENSION_PCT": 4.0,
 }
 
-# Global safety limits
 MAX_RSI = 78
-BREAKOUT_LOOKBACK = 20  # Default for 5m
+BREAKOUT_LOOKBACK = 20
 RETEST_TOLERANCE_PCT = 1.5
 MAX_BREAKOUT_EXTENSION_PCT = 2.5
 
-# Pump Protection
 MAX_CONSECUTIVE_BULLISH = 4
 MIN_CANDLE_BODY_PCT = 2.0
 RVOL_SPIKE_THRESHOLD = 3.0
@@ -129,6 +121,11 @@ def _get_lookback(timeframe):
 def _get_dynamic_config(strategy, market_status):
     """
     Returns dynamic config based on market status.
+
+    - BULLISH: strict (base values)
+    - NEUTRAL: relaxed (RVOL -0.7, ADX -6)
+    - BEARISH: very relaxed (RVOL -0.8, ADX -8)
+    - UNKNOWN: treated as NEUTRAL
     """
     base_config = SCALP_CONFIG if strategy == "SCALP" else SWING_CONFIG
     config = dict(base_config)
@@ -136,15 +133,16 @@ def _get_dynamic_config(strategy, market_status):
     market_status = str(market_status).upper()
 
     if market_status == "BULLISH":
-        pass  # Strict - base values
+        pass
 
     elif market_status in ("NEUTRAL", "UNKNOWN"):
         config["MIN_RVOL"] = max(0.4, base_config["MIN_RVOL"] - 0.7)
         config["MIN_ADX"] = max(8.0, base_config["MIN_ADX"] - 6.0)
 
     elif market_status == "BEARISH":
-        config["MIN_RVOL"] = max(0.5, base_config["MIN_RVOL"] - 0.6)
-        config["MIN_ADX"] = max(10.0, base_config["MIN_ADX"] - 5.0)
+        # 🔥 VERY RELAXED - Not overly strict
+        config["MIN_RVOL"] = max(0.3, base_config["MIN_RVOL"] - 0.8)
+        config["MIN_ADX"] = max(6.0, base_config["MIN_ADX"] - 8.0)
 
     return config
 
@@ -383,23 +381,14 @@ def _has_insufficient_upside(df, current_price, breakout_resistance=None, min_up
 
 
 # =========================================================
-# TIMEFRAME-AWARE BREAKOUT DETECTION
+# TIMEFRAME-AWARE BREAKOUT
 # =========================================================
 
 def _get_breakout_data(df, timeframe="5m"):
-    """
-    Smart breakout detection with timeframe-aware lookback.
-
-    - 5m: 20 candles (100 min)
-    - 15m: 10 candles (150 min)
-    - 30m: 8 candles (240 min)
-    - 1h: 6 candles (360 min)
-    """
     if not isinstance(df, pd.DataFrame):
         return {}
 
     lookback = _get_lookback(timeframe)
-
     minimum = lookback + 3
     if len(df) < minimum:
         return {}
@@ -475,7 +464,7 @@ def _get_breakout_data(df, timeframe="5m"):
 
 
 # =========================================================
-# SUPPORT AND RESISTANCE
+# SUPPORT/RESISTANCE
 # =========================================================
 
 def _find_support(df, lookback=30):
@@ -665,7 +654,6 @@ def validate_entry(df, market_context, strategy="SCALP"):
     if extension_pct > config["MAX_EMA_EXTENSION_PCT"]:
         return {"valid": False, "reason": "ENTRY_TOO_LATE"}
 
-    # 🔥 Timeframe-aware breakout detection
     trigger_tf = "5m" if strategy == "SCALP" else "15m"
     breakout_data = _get_breakout_data(prepared, timeframe=trigger_tf)
 

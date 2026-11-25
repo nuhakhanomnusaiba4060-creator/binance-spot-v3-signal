@@ -1,3 +1,4 @@
+
 """
 Binance Spot V3 Smart Signal Scanner
 BTC Market Filter
@@ -7,6 +8,10 @@ Market: Binance Spot only
 
 Analyses BTC on 15m, 1h and 4h.
 Does not generate coin BUY/SELL signals.
+
+IMPORTANT:
+data_provider.py already returns closed candles only.
+Do not drop the latest candle again in this module.
 """
 
 import logging
@@ -75,6 +80,7 @@ def _find_in_config(config, target):
     for value in config.values():
         if isinstance(value, dict):
             result = _find_in_config(value, target)
+
             if result is not None:
                 return result
 
@@ -84,28 +90,41 @@ def _find_in_config(config, target):
 def _find_config_value(target):
     """
     Search order:
-    1. INDICATOR_CONFIG (contains RSI/ADX periods)
-    2. FILTER_CONFIG (contains volume thresholds)
-    3. MARKET_CONFIG (contains market-specific overrides)
+    1. INDICATOR_CONFIG
+    2. FILTER_CONFIG
+    3. MARKET_CONFIG
     """
-    for config in (INDICATOR_CONFIG, FILTER_CONFIG, MARKET_CONFIG):
+    for config in (
+        INDICATOR_CONFIG,
+        FILTER_CONFIG,
+        MARKET_CONFIG,
+    ):
         value = _find_in_config(config, target)
+
         if value is not None:
             return value
+
     return None
 
 
 def _get_setting(name, default):
     value = _find_config_value(name)
+
     return default if value is None else value
 
 
 RSI_PERIOD = int(
-    _get_setting("RSI_PERIOD", DEFAULT_CONFIG["RSI_PERIOD"])
+    _get_setting(
+        "RSI_PERIOD",
+        DEFAULT_CONFIG["RSI_PERIOD"],
+    )
 )
 
 ADX_PERIOD = int(
-    _get_setting("ADX_PERIOD", DEFAULT_CONFIG["ADX_PERIOD"])
+    _get_setting(
+        "ADX_PERIOD",
+        DEFAULT_CONFIG["ADX_PERIOD"],
+    )
 )
 
 MIN_CANDLES_FOR_MA200 = int(
@@ -143,7 +162,6 @@ STRONG_ADX_MIN = float(
     )
 )
 
-# 🔥 HIGH_VOLUME_RVOL now pulls from FILTER_CONFIG.PREFERRED_RELATIVE_VOLUME
 HIGH_VOLUME_RVOL = float(
     _get_setting(
         "PREFERRED_RELATIVE_VOLUME",
@@ -168,7 +186,7 @@ def _safe_float(value):
 
         return result
 
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -218,11 +236,10 @@ def analyze_btc_timeframe(df, timeframe):
         )
         return result
 
-    # 🔥 Defensive: Drop the latest unclosed candle if it exists.
-    # This ensures indicators on 1h/4h reflect only completed candles.
+    # data_provider.py already removes unclosed candles.
+    # Use the latest available closed candle.
+    # Do NOT drop the latest candle a second time.
     prepared = df.copy()
-    if len(prepared) > 2:
-        prepared = prepared.iloc[:-1]
 
     try:
         enriched = calculate_all_indicators(prepared)
@@ -239,7 +256,7 @@ def analyze_btc_timeframe(df, timeframe):
         )
         return result
 
-    if enriched.empty:
+    if not isinstance(enriched, pd.DataFrame) or enriched.empty:
         result["warnings"].append(
             f"{timeframe}: No valid indicator data."
         )
@@ -271,7 +288,7 @@ def analyze_btc_timeframe(df, timeframe):
             column,
         )
 
-    candle_count = len(enriched)
+    candle_count = len(prepared)
 
     if candle_count < MIN_CANDLES_FOR_MA200:
         result["warnings"].append(
@@ -322,7 +339,6 @@ def analyze_btc_timeframe(df, timeframe):
         and macd_histogram < 0
     )
 
-    # 🔥 Detailed diagnostic breakdown for tuning
     result["trend_conditions"] = {
         "bullish_structure": bool(bullish_structure),
         "bearish_structure": bool(bearish_structure),
@@ -353,15 +369,18 @@ def analyze_btc_timeframe(df, timeframe):
     else:
         result["volume_status"] = "LOW"
 
-    # 🔥 Explain WHY trend is NEUTRAL
     if result["trend"] == "NEUTRAL":
         reasons = []
+
         if not (bullish_structure or bearish_structure):
             reasons.append("MA structure mixed")
+
         if not (bullish_momentum or bearish_momentum):
             reasons.append("momentum mixed")
+
         result["warnings"].append(
-            f"{timeframe}: NEUTRAL trend — " + ", ".join(reasons)
+            f"{timeframe}: NEUTRAL trend — "
+            + ", ".join(reasons)
         )
 
     return result
@@ -796,21 +815,36 @@ def analyze_market(btc_data, external_data=None):
     if external_result["sentiment_status"] == "UNKNOWN":
         warnings.append("Fear and Greed data unavailable.")
 
-    # 🔥 Detailed diagnostic: explain 1h and 4h trend conditions
     logger.info(
         "BTC TREND BREAKDOWN | "
         "1h: bullish_structure=%s, bearish_structure=%s, "
         "bullish_momentum=%s, bearish_momentum=%s | "
         "4h: bullish_structure=%s, bearish_structure=%s, "
         "bullish_momentum=%s, bearish_momentum=%s",
-        timeframe_results["1h"]["trend_conditions"].get("bullish_structure"),
-        timeframe_results["1h"]["trend_conditions"].get("bearish_structure"),
-        timeframe_results["1h"]["trend_conditions"].get("bullish_momentum"),
-        timeframe_results["1h"]["trend_conditions"].get("bearish_momentum"),
-        timeframe_results["4h"]["trend_conditions"].get("bullish_structure"),
-        timeframe_results["4h"]["trend_conditions"].get("bearish_structure"),
-        timeframe_results["4h"]["trend_conditions"].get("bullish_momentum"),
-        timeframe_results["4h"]["trend_conditions"].get("bearish_momentum"),
+        timeframe_results["1h"]["trend_conditions"].get(
+            "bullish_structure"
+        ),
+        timeframe_results["1h"]["trend_conditions"].get(
+            "bearish_structure"
+        ),
+        timeframe_results["1h"]["trend_conditions"].get(
+            "bullish_momentum"
+        ),
+        timeframe_results["1h"]["trend_conditions"].get(
+            "bearish_momentum"
+        ),
+        timeframe_results["4h"]["trend_conditions"].get(
+            "bullish_structure"
+        ),
+        timeframe_results["4h"]["trend_conditions"].get(
+            "bearish_structure"
+        ),
+        timeframe_results["4h"]["trend_conditions"].get(
+            "bullish_momentum"
+        ),
+        timeframe_results["4h"]["trend_conditions"].get(
+            "bearish_momentum"
+        ),
     )
 
     return {

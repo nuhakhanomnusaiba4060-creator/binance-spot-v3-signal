@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-25T12:52:00.325438+00:00",
+  "updated_at": "2026-11-25T14:09:56.055002+00:00",
   "retention_days": 7,
   "summary": {
     "total_signals": 19,
@@ -10,13 +10,13 @@
     "t1_hits": 7,
     "t2_hits": 4,
     "t3_hits": 1,
-    "pending": 1,
-    "completed_results": 1,
-    "wins": 1,
+    "pending": 0,
+    "completed_results": 2,
+    "wins": 2,
     "losses": 0,
     "win_rate_pct": 100.0,
-    "average_return_pct": 3.7137,
-    "average_profit_pct": 3.7137,
+    "average_return_pct": 2.5765,
+    "average_profit_pct": 2.5765,
     "average_loss_pct": null
   },
   "signals": {
@@ -390,12 +390,12 @@
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
-      "outcome": "PENDING",
+      "outcome": "EXPIRED_AFTER_ENTRY",
       "entry_expired": false,
-      "exit_price": null,
-      "exit_at": null,
-      "return_pct": null,
-      "last_checked_at": "2026-11-25T12:51:00+00:00",
+      "exit_price": 0.311824303099,
+      "exit_at": "2026-11-25T13:19:20.927441+00:00",
+      "return_pct": 1.4393,
+      "last_checked_at": "2026-11-25T13:18:00+00:00",
       "data_error": null
     },
     "LTCUSDT_SWING_20261123T131921.717495+0000": {

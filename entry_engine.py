@@ -211,9 +211,6 @@ def _prepare_dataframe(df):
     if len(result) < minimum:
         return None
 
-    if len(result) > 1:
-        result = result.iloc[:-1]
-
     numeric_values = result[list(required)].to_numpy(dtype=float)
     if not all(math.isfinite(float(v)) for v in numeric_values.ravel()):
         return None

@@ -112,9 +112,31 @@ TIMEFRAME_LOOKBACK_MAP = {
     "1d": 4,
 }
 
+# Maximum age of a breakout event.
+# These limits allow valid retests/holds without accepting
+# excessively old breakout events.
+TIMEFRAME_MAX_BREAKOUT_AGE = {
+    "1m": 30,
+    "3m": 24,
+    "5m": 24,
+    "15m": 16,
+    "30m": 12,
+    "1h": 10,
+    "2h": 8,
+    "4h": 6,
+    "1d": 4,
+}
+
 
 def _get_lookback(timeframe):
     return TIMEFRAME_LOOKBACK_MAP.get(str(timeframe).lower(), 20)
+
+
+def _get_max_breakout_age(timeframe):
+    return TIMEFRAME_MAX_BREAKOUT_AGE.get(
+        str(timeframe).lower(),
+        16,
+    )
 
 
 # =========================================================
@@ -540,61 +562,82 @@ def _has_insufficient_upside(
 
 
 # =========================================================
-# TIMEFRAME-AWARE BREAKOUT
+# TIMEFRAME-AWARE BREAKOUT — REVISED
 # =========================================================
 
 def _get_breakout_data(df, timeframe="5m"):
     """
-    Detect recent confirmed breakout.
+    Detect a recent confirmed breakout using closed candles.
 
     Accepted setups:
-    1. Fresh breakout on latest closed candle.
-    2. Retest of resistance followed by a hold.
-    3. Early hold above broken resistance.
+    1. Fresh breakout on latest candle.
+    2. Retest of previously broken resistance.
+    3. Early hold above previously broken resistance.
 
-    The latest row must be a CLOSED candle.
+    A breakout event is searched over a wider, timeframe-aware
+    window. Old events outside the maximum age are rejected.
+
+    Resistance is calculated only from candles BEFORE the
+    candidate breakout candle. No future-candle leakage.
     """
 
     if not isinstance(df, pd.DataFrame):
-        return {}
+        return {
+            "available": False,
+            "breakout": False,
+            "reason": "INVALID_BREAKOUT_DATA",
+        }
 
+    timeframe = str(timeframe).lower()
     lookback = _get_lookback(timeframe)
-    minimum = lookback + 3
+    max_age = _get_max_breakout_age(timeframe)
 
-    required_columns = {
-        "high",
-        "low",
-        "close",
-    }
+    required_columns = {"high", "low", "close"}
 
-    if (
-        len(df) < minimum
-        or not required_columns.issubset(df.columns)
-    ):
-        return {}
+    if not required_columns.issubset(df.columns):
+        return {
+            "available": False,
+            "breakout": False,
+            "reason": "MISSING_BREAKOUT_COLUMNS",
+        }
+
+    if len(df) < lookback + 3:
+        return {
+            "available": False,
+            "breakout": False,
+            "reason": "INSUFFICIENT_BREAKOUT_CANDLES",
+        }
 
     latest_index = len(df) - 1
     latest = df.iloc[latest_index]
 
     latest_close = _number(latest["close"])
     latest_low = _number(latest["low"])
+    latest_high = _number(latest["high"])
 
     if (
         latest_close is None
         or latest_low is None
+        or latest_high is None
         or latest_close <= 0
+        or latest_low <= 0
+        or latest_high <= 0
     ):
-        return {}
+        return {
+            "available": False,
+            "breakout": False,
+            "reason": "INVALID_LATEST_BREAKOUT_CANDLE",
+        }
 
-    breakout_index = None
-    resistance = None
-
+    # Search a bounded recent window. The candidate breakout
+    # must have enough preceding candles to calculate resistance.
     first_index = max(
         lookback,
-        len(df) - 10,
+        latest_index - max_age,
     )
 
-    # Search recent closed candles for a genuine breakout.
+    breakout_candidates = []
+
     for b_idx in range(
         latest_index,
         first_index - 1,
@@ -611,9 +654,12 @@ def _get_breakout_data(df, timeframe="5m"):
         if (
             previous_close is None
             or breakout_close is None
+            or previous_close <= 0
+            or breakout_close <= 0
         ):
             continue
 
+        # Resistance uses only candles before the breakout candle.
         resistance_data = df.iloc[
             b_idx - lookback:b_idx
         ]
@@ -628,45 +674,103 @@ def _get_breakout_data(df, timeframe="5m"):
         ):
             continue
 
+        # Confirmed close-based breakout.
         if (
             previous_close <= resistance_level
             and breakout_close > resistance_level
         ):
-            breakout_index = b_idx
-            resistance = resistance_level
-            break
+            breakout_candidates.append({
+                "index": b_idx,
+                "resistance": resistance_level,
+                "breakout_close": breakout_close,
+            })
 
-    if (
-        breakout_index is None
-        or resistance is None
-    ):
-        return {}
+    if not breakout_candidates:
+        return {
+            "available": True,
+            "breakout": False,
+            "reason": "NO_RECENT_CONFIRMED_BREAKOUT",
+            "lookback_used": lookback,
+            "max_breakout_age": max_age,
+        }
 
-    lower_boundary = resistance * (
-        1 - RETEST_TOLERANCE_PCT / 100
+    # Candidates are searched newest-first. Select the most
+    # recent breakout that has not been invalidated.
+    selected = None
+
+    for candidate in breakout_candidates:
+        candidate_index = candidate["index"]
+        candidate_resistance = candidate["resistance"]
+
+        candles_since = latest_index - candidate_index
+
+        if candles_since > max_age:
+            continue
+
+        # A close materially below resistance invalidates this
+        # breakout event. A small retest wick is allowed.
+        invalidation_level = candidate_resistance * 0.985
+
+        closes_after_breakout = pd.to_numeric(
+            df.iloc[candidate_index + 1:]["close"],
+            errors="coerce",
+        )
+
+        if not closes_after_breakout.empty:
+            if (closes_after_breakout < invalidation_level).any():
+                continue
+
+        selected = candidate
+        break
+
+    if selected is None:
+        return {
+            "available": True,
+            "breakout": False,
+            "reason": "BREAKOUT_INVALIDATED_OR_EXPIRED",
+            "lookback_used": lookback,
+            "max_breakout_age": max_age,
+        }
+
+    breakout_index = selected["index"]
+    resistance = selected["resistance"]
+    breakout_close = selected["breakout_close"]
+
+    candles_since = latest_index - breakout_index
+
+    # Retest allows a modest wick below resistance, provided
+    # the candle closes close to or above the breakout level.
+    retest_lower = resistance * (
+        1 - (RETEST_TOLERANCE_PCT * 2) / 100
     )
 
-    upper_boundary = resistance * (
+    retest_upper = resistance * (
         1 + RETEST_TOLERANCE_PCT / 100
     )
 
     retest_valid = (
-        lower_boundary <= latest_low <= upper_boundary
+        candles_since >= 1
+        and latest_low >= retest_lower
+        and latest_low <= retest_upper
         and latest_close >= resistance * 0.995
     )
 
     fresh_breakout = (
         breakout_index == latest_index
+        and latest_close > resistance
     )
 
+    # Early hold: price remains above resistance after the
+    # breakout, with no material close-based breakdown.
     breakout_hold = (
-        latest_close >= resistance
-        and latest_low >= resistance * 0.99
+        candles_since >= 1
+        and latest_close >= resistance
+        and latest_low >= resistance * 0.985
     )
 
     valid_breakout = (
-        retest_valid
-        or fresh_breakout
+        fresh_breakout
+        or retest_valid
         or breakout_hold
     )
 
@@ -676,7 +780,19 @@ def _get_breakout_data(df, timeframe="5m"):
         * 100
     )
 
+    if retest_valid:
+        setup_type = "RETEST"
+    elif fresh_breakout:
+        setup_type = "FRESH_BREAKOUT"
+    elif breakout_hold:
+        setup_type = "EARLY_HOLD"
+    else:
+        setup_type = "NO_VALID_SETUP"
+
     return {
+        "available": True,
+        "reason": None if valid_breakout else "NO_VALID_BREAKOUT_SETUP",
+
         "resistance": resistance,
 
         "breakout": bool(valid_breakout),
@@ -684,13 +800,13 @@ def _get_breakout_data(df, timeframe="5m"):
         "breakout_hold": bool(breakout_hold),
         "fresh_breakout": bool(fresh_breakout),
 
+        "setup_type": setup_type,
+
         "above_resistance": (
             latest_close >= resistance * 0.995
         ),
 
-        "breakout_close": _number(
-            df.iloc[breakout_index]["close"]
-        ),
+        "breakout_close": breakout_close,
 
         "retest_close": latest_close,
         "retest_low": latest_low,
@@ -700,11 +816,10 @@ def _get_breakout_data(df, timeframe="5m"):
         "breakout_index": breakout_index,
         "retest_index": latest_index,
 
-        "candles_since_breakout": (
-            latest_index - breakout_index
-        ),
+        "candles_since_breakout": candles_since,
 
         "lookback_used": lookback,
+        "max_breakout_age": max_age,
     }
 
 
@@ -1175,16 +1290,22 @@ def validate_entry(
         timeframe=trigger_tf,
     )
 
-    if not breakout_data:
+    if not breakout_data.get("available", False):
         return {
             "valid": False,
-            "reason": "BREAKOUT_DATA_UNAVAILABLE",
+            "reason": breakout_data.get(
+                "reason",
+                "INVALID_BREAKOUT_DATA",
+            ),
         }
 
-    if not breakout_data["breakout"]:
+    if not breakout_data.get("breakout", False):
         return {
             "valid": False,
-            "reason": "NO_FRESH_BREAKOUT",
+            "reason": breakout_data.get(
+                "reason",
+                "NO_RECENT_CONFIRMED_BREAKOUT",
+            ),
         }
 
     if not breakout_data["above_resistance"]:
@@ -1240,6 +1361,14 @@ def validate_entry(
 
         "fresh_breakout": bool(
             breakout_data.get("fresh_breakout")
+        ),
+
+        "breakout_setup_type": breakout_data.get(
+            "setup_type"
+        ),
+
+        "breakout_age": breakout_data.get(
+            "candles_since_breakout"
         ),
 
         "buyer_confirmation": True,

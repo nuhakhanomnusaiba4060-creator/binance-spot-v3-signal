@@ -119,7 +119,6 @@ def is_eligible_spot_usdt_symbol(symbol: Any) -> bool:
     if not base_asset or base_asset in EXCLUDED_BASE_ASSETS:
         return False
 
-    # Tokenized stock tickers commonly carry a 'B' suffix on 5+ char base tickers (e.g. NVDAB)
     if len(base_asset) >= 5 and base_asset.endswith("B"):
         return False
 
@@ -165,8 +164,8 @@ def _request_json(path: str, params: dict[str, Any] | None = None) -> Any:
     raise RuntimeError(f"Request failed for {path}: {last_error}")
 
 
-def validate_klines_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Validate kline timestamps and volume invariants, raising BinanceDataValidationError."""
+def _validate_candle_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Validate individual kline rows for timestamp ordering and volume bounds."""
     if not isinstance(df, pd.DataFrame):
         raise BinanceDataValidationError("Klines must be a DataFrame.")
 
@@ -215,6 +214,11 @@ def validate_klines_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             raise BinanceDataValidationError("Taker buy quote volume exceeds total quote volume.")
 
     return result
+
+
+def validate_klines_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Validate klines DataFrame integrity."""
+    return _validate_candle_rows(df)
 
 
 def get_usdt_symbols(force_refresh: bool = False) -> list[str]:
@@ -285,7 +289,7 @@ def get_klines(symbol: str, interval: str, limit: int = 300) -> pd.DataFrame:
         return pd.DataFrame(columns=KLINE_COLUMNS)
 
     df = pd.DataFrame(raw, columns=KLINE_COLUMNS)
-    df = validate_klines_dataframe(df)
+    df = _validate_candle_rows(df)
     df = df.dropna(subset=["open_time", "open", "high", "low", "close", "volume", "close_time"])
     df = df.sort_values("open_time", kind="stable").drop_duplicates(subset=["open_time"], keep="last")
     df = _drop_unclosed_klines(df, interval)

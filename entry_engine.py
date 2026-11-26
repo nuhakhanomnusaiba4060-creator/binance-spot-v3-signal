@@ -107,8 +107,25 @@ def _validate_market_context(market_context: dict[str, Any] | None) -> tuple[boo
     if market_context is None or not isinstance(market_context, dict):
         return False, "INVALID_MARKET_CONTEXT"
 
-    status = str(market_context.get("market_status", "UNKNOWN")).upper()
-    if status in ("HIGH_RISK", "UNKNOWN"):
+    raw_values = [
+        str(market_context.get("market_status", "")).upper(),
+        str(market_context.get("status", "")).upper(),
+        str(market_context.get("risk_level", "")).upper(),
+        str(market_context.get("risk", "")).upper(),
+        str(market_context.get("regime", "")).upper(),
+    ]
+
+    if bool(market_context.get("is_high_risk", False)):
+        return False, "MARKET_HIGH_RISK"
+
+    for val in raw_values:
+        if val in ("HIGH_RISK", "HIGH", "EXTREME", "CRITICAL"):
+            return False, "MARKET_HIGH_RISK"
+        if val in ("UNKNOWN", "INVALID", "NONE", ""):
+            continue
+
+    status = next((v for v in raw_values if v), "UNKNOWN")
+    if status in ("UNKNOWN", "INVALID"):
         return False, f"MARKET_{status}"
 
     allow_bearish = bool(MARKET_FILTER_CONFIG.get("ALLOW_BEARISH_SIGNALS", False))
@@ -259,34 +276,68 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return {
             "timeframe": timeframe,
-            "close": None,
-            "support": None,
-            "resistance": None,
+            "close": 0.0,
+            "support": 0.0,
+            "resistance": 0.0,
+            "breakout": False,
+            "retest": False,
             "breakout_confirmed": False,
             "retest_confirmed": False,
         }
 
     latest = df.iloc[-1]
-    close = _safe_float(latest.get("close"))
-    levels = support_resistance(df)
-    support = _safe_float(levels.get("support"))
-    resistance = _safe_float(levels.get("resistance"))
+    close = _safe_float(latest.get("close"), 0.0)
+    levels = support_resistance(df) if len(df) >= 5 else {}
+    support = _safe_float(levels.get("support") if isinstance(levels, dict) else None)
+    resistance = _safe_float(levels.get("resistance") if isinstance(levels, dict) else None)
+
+    prior = df.iloc[:-1] if len(df) > 1 else df
+    prior_highs = pd.to_numeric(prior.get("high"), errors="coerce").dropna() if "high" in prior.columns else pd.Series(dtype=float)
+    prior_lows = pd.to_numeric(prior.get("low"), errors="coerce").dropna() if "low" in prior.columns else pd.Series(dtype=float)
+
+    if not (_is_valid_num(resistance) and resistance > 0):
+        resistance = float(prior_highs.max()) if not prior_highs.empty else max(close * 1.02, 1.0)
+    if not (_is_valid_num(support) and support > 0):
+        support = float(prior_lows.min()) if not prior_lows.empty else max(close * 0.98, 0.5)
+
     retest_tol = _safe_float(INDICATOR_CONFIG.get("RETEST_TOLERANCE_PERCENT"), 0.5) / 100.0
+    if not _is_valid_num(retest_tol) or retest_tol <= 0:
+        retest_tol = 0.005
 
-    has_res = _is_valid_num(resistance) and resistance > 0
-    has_sup = _is_valid_num(support) and support > 0
+    breakout_confirmed = bool(
+        _is_valid_num(close)
+        and close > 0
+        and _is_valid_num(resistance)
+        and resistance > 0
+        and close >= resistance * (1.0 - retest_tol * 0.5)
+    )
 
-    breakout_confirmed = bool(has_res and close >= resistance * (1.0 - retest_tol * 0.5))
     retest_confirmed = bool(
-        (has_res and abs(close - resistance) / resistance <= retest_tol * 1.5 and close >= resistance * (1.0 - retest_tol))
-        or (has_sup and abs(close - support) / support <= retest_tol * 1.5 and close >= support * (1.0 - retest_tol))
+        _is_valid_num(close)
+        and close > 0
+        and (
+            (
+                _is_valid_num(resistance)
+                and resistance > 0
+                and abs(close - resistance) / resistance <= retest_tol * 2.0
+                and close >= resistance * (1.0 - retest_tol)
+            )
+            or (
+                _is_valid_num(support)
+                and support > 0
+                and abs(close - support) / support <= retest_tol * 2.0
+                and close >= support * (1.0 - retest_tol)
+            )
+        )
     )
 
     return {
         "timeframe": timeframe,
-        "close": close if _is_valid_num(close) else None,
-        "support": support if has_sup else None,
-        "resistance": resistance if has_res else None,
+        "close": float(close) if _is_valid_num(close) else 0.0,
+        "support": float(support) if _is_valid_num(support) and support > 0 else 0.0,
+        "resistance": float(resistance) if _is_valid_num(resistance) and resistance > 0 else 0.0,
+        "breakout": breakout_confirmed,
+        "retest": retest_confirmed,
         "breakout_confirmed": breakout_confirmed,
         "retest_confirmed": retest_confirmed,
     }
@@ -372,8 +423,8 @@ def score_setup(
         prev = trigger_source
         obv_rising = _safe_float(latest.get("obv_slope"), 0.0) > 0
         b_info = {
-            "breakout_confirmed": bool(latest.get("breakout_confirmed", False)),
-            "retest_confirmed": bool(latest.get("retest_confirmed", False)),
+            "breakout_confirmed": bool(latest.get("breakout_confirmed", latest.get("breakout", False))),
+            "retest_confirmed": bool(latest.get("retest_confirmed", latest.get("retest", False))),
         }
         buyer_ok = _buyer_confirmation(latest)
     else:
@@ -414,33 +465,42 @@ def score_setup(
     vol_accel_min = _safe_float(INDICATOR_CONFIG.get("VOLUME_ACCELERATION_MIN"), 1.2)
 
     m_ctx = market_context if isinstance(market_context, dict) else {}
-    market_status = str(m_ctx.get("market_status", "BULLISH")).upper()
-    btc_trend = str(m_ctx.get("btc_trend", "UNKNOWN")).upper()
+    market_status = str(m_ctx.get("market_status", "NEUTRAL")).upper()
+    btc_trend = str(m_ctx.get("btc_trend", "NEUTRAL")).upper()
 
     breakdown: dict[str, int] = {
         "market_condition": 1 if market_status == "BULLISH" else 0,
         "btc_context": 1 if ("BULL" in btc_trend or market_status == "BULLISH") else 0,
         "mtf_trend": 0,
-        "ema_trend": 1 if (_is_valid_num(ema_9) and _is_valid_num(ema_20) and ema_9 >= ema_20 and _is_valid_num(close) and close >= ema_20 * 0.997) else 0,
+        "ema_trend": 1 if (
+            _is_valid_num(ema_9)
+            and _is_valid_num(ema_20)
+            and _is_valid_num(close)
+            and close > 0
+            and ema_9 >= ema_20
+            and close >= ema_20 * 0.997
+        ) else 0,
         "ma_trend": 0,
-        "rsi_momentum": 1 if (_is_valid_num(rsi) and rsi_min <= rsi <= rsi_max) else 0,
+        "rsi_momentum": 1 if (_is_valid_num(rsi) and rsi > 0 and rsi_min <= rsi <= rsi_max) else 0,
         "macd_momentum": 1 if (
             _is_valid_num(macd)
             and _is_valid_num(macd_sig)
+            and (macd > 0 or macd_sig > 0)
             and (macd >= macd_sig or (_is_valid_num(macd_hist) and _is_valid_num(prev_hist) and macd_hist > prev_hist))
         ) else 0,
         "adx_strength": 1 if (
             _is_valid_num(adx)
+            and adx > 0
             and adx >= min_adx * 0.9
             and (not _is_valid_num(plus_di) or not _is_valid_num(minus_di) or plus_di >= minus_di * 0.9)
         ) else 0,
-        "relative_volume": 1 if (_is_valid_num(rvol) and rvol >= min_rvol * 0.95) else 0,
-        "vwap_confirmation": 1 if (_is_valid_num(vwap) and _is_valid_num(close) and close >= vwap * 0.998) else 0,
+        "relative_volume": 1 if (_is_valid_num(rvol) and rvol > 0 and rvol >= min_rvol * 0.95) else 0,
+        "vwap_confirmation": 1 if (_is_valid_num(vwap) and _is_valid_num(close) and close > 0 and vwap > 0 and close >= vwap * 0.998) else 0,
         "obv_cmf_flow": 1 if (obv_rising or (_is_valid_num(cmf) and cmf > 0.0)) else 0,
         "breakout_retest_quality": 0,
-        "bb_squeeze": 1 if (_is_valid_num(bb_width) and bb_width <= squeeze_max * 1.25) else 0,
-        "early_momentum_roc": 1 if (_is_valid_num(roc) and roc_min * 0.6 <= roc <= roc_max * 1.2) else 0,
-        "volume_acceleration": 1 if (_is_valid_num(vol_mom) and vol_mom >= vol_accel_min * 0.9) else 0,
+        "bb_squeeze": 1 if (_is_valid_num(bb_width) and 0 < bb_width <= squeeze_max * 1.25) else 0,
+        "early_momentum_roc": 1 if (_is_valid_num(roc) and roc > 0 and roc_min * 0.6 <= roc <= roc_max * 1.2) else 0,
+        "volume_acceleration": 1 if (_is_valid_num(vol_mom) and vol_mom > 0 and vol_mom >= vol_accel_min * 0.9) else 0,
     }
 
     mtf_bull_count = 0
@@ -449,18 +509,18 @@ def score_setup(
             crow = cdf.iloc[-1]
             c_close = _safe_float(crow.get("close"))
             c_ema20 = _safe_float(crow.get("ema_20"))
-            if _is_valid_num(c_close) and _is_valid_num(c_ema20) and c_close >= c_ema20 * 0.996:
+            if _is_valid_num(c_close) and _is_valid_num(c_ema20) and c_close > 0 and c_close >= c_ema20 * 0.996:
                 mtf_bull_count += 1
     if conf_list and mtf_bull_count >= 1:
         breakdown["mtf_trend"] = 1
 
     ma_ok = False
-    if _is_valid_num(close):
-        if _is_valid_num(sma_20) and close >= sma_20 * 0.996:
+    if _is_valid_num(close) and close > 0:
+        if _is_valid_num(sma_20) and sma_20 > 0 and close >= sma_20 * 0.996:
             ma_ok = True
-        if _is_valid_num(sma_50) and close >= sma_50 * 0.99:
+        if _is_valid_num(sma_50) and sma_50 > 0 and close >= sma_50 * 0.99:
             ma_ok = True
-        if _is_valid_num(sma_200) and close >= sma_200 * 0.985:
+        if _is_valid_num(sma_200) and sma_200 > 0 and close >= sma_200 * 0.985:
             ma_ok = True
     if ma_ok:
         breakdown["ma_trend"] = 1
@@ -494,6 +554,7 @@ def score_setup(
     return {
         "score": final_score,
         "max_score": max_score,
+        "required_score": strong_min,
         "classification": classification,
         "breakdown": breakdown,
         "confirmations": reasons,

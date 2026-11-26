@@ -1,11 +1,6 @@
 """
 Binance Spot V3 Smart Signal Scanner
 Coin Selection & Liquidity Validator
-
-Design principles:
-- Reject clearly ineligible/non-ASCII/pegged symbols early
-- Keep liquidity & spread checks balanced so valid scalping/short-term
-  breakout and retest candidates are not over-filtered
 """
 
 from __future__ import annotations
@@ -43,6 +38,10 @@ def _get_threshold(names: tuple[str, ...], default: float) -> float:
         if key in COIN_SELECTION_CONFIG and COIN_SELECTION_CONFIG[key] is not None:
             return _safe_float(COIN_SELECTION_CONFIG[key], default)
     return default
+
+
+def _is_valid_symbol(symbol: Any) -> bool:
+    return is_eligible_spot_usdt_symbol(symbol)
 
 
 def compute_spread_percent(order_book: dict[str, Any] | None, fallback_price: float = 0.0) -> float:
@@ -89,6 +88,54 @@ def compute_top_depth_usdt(order_book: dict[str, Any] | None, levels: int = 10) 
     return bid_usdt, ask_usdt
 
 
+def analyze_order_book(order_book: dict[str, Any] | None, fallback_price: float = 0.0) -> dict[str, Any]:
+    if not isinstance(order_book, dict):
+        return {
+            "valid": False,
+            "spread_percent": 0.0,
+            "bid_depth_usdt": 0.0,
+            "ask_depth_usdt": 0.0,
+            "top_depth_usdt": 0.0,
+        }
+
+    bids = order_book.get("bids") or []
+    asks = order_book.get("asks") or []
+
+    if not bids or not asks:
+        return {
+            "valid": False,
+            "spread_percent": 0.0,
+            "bid_depth_usdt": 0.0,
+            "ask_depth_usdt": 0.0,
+            "top_depth_usdt": 0.0,
+        }
+
+    best_bid = _safe_float(bids[0][0]) if isinstance(bids[0], (list, tuple)) and len(bids[0]) >= 2 else 0.0
+    best_bid_qty = _safe_float(bids[0][1]) if isinstance(bids[0], (list, tuple)) and len(bids[0]) >= 2 else 0.0
+    best_ask = _safe_float(asks[0][0]) if isinstance(asks[0], (list, tuple)) and len(asks[0]) >= 2 else 0.0
+    best_ask_qty = _safe_float(asks[0][1]) if isinstance(asks[0], (list, tuple)) and len(asks[0]) >= 2 else 0.0
+
+    if best_bid <= 0 or best_ask <= 0 or best_bid_qty <= 0 or best_ask_qty <= 0 or best_ask < best_bid:
+        return {
+            "valid": False,
+            "spread_percent": 0.0,
+            "bid_depth_usdt": 0.0,
+            "ask_depth_usdt": 0.0,
+            "top_depth_usdt": 0.0,
+        }
+
+    spread_pct = compute_spread_percent(order_book, fallback_price=fallback_price)
+    bid_depth, ask_depth = compute_top_depth_usdt(order_book, levels=10)
+
+    return {
+        "valid": True,
+        "spread_percent": round(spread_pct, 5),
+        "bid_depth_usdt": round(bid_depth, 2),
+        "ask_depth_usdt": round(ask_depth, 2),
+        "top_depth_usdt": round(bid_depth + ask_depth, 2),
+    }
+
+
 def select_coins(
     symbols: list[str],
     ticker_data: dict[str, Any],
@@ -121,8 +168,7 @@ def select_coins(
         if not symbol or symbol in seen:
             continue
 
-        if not is_eligible_spot_usdt_symbol(symbol):
-            logger.debug("Skipping ineligible symbol in coin_selector: %s", symbol)
+        if not _is_valid_symbol(symbol):
             continue
 
         ticker = ticker_data.get(symbol)
@@ -141,12 +187,6 @@ def select_coins(
         ob = order_books.get(symbol)
         spread_pct = compute_spread_percent(ob, fallback_price=last_price)
         if spread_pct > max_spread_pct:
-            logger.debug(
-                "Skipping %s due to wide spread: %.4f%% > %.4f%%",
-                symbol,
-                spread_pct,
-                max_spread_pct,
-            )
             continue
 
         bid_depth_usdt, ask_depth_usdt = compute_top_depth_usdt(ob, levels=10)
@@ -175,7 +215,7 @@ def validate_candidate(candidate: Any) -> bool:
         return False
 
     symbol = str(candidate.get("symbol", "")).strip().upper()
-    if not is_eligible_spot_usdt_symbol(symbol):
+    if not _is_valid_symbol(symbol):
         return False
 
     last_price = _safe_float(candidate.get("last_price"))

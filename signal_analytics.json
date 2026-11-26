@@ -1,16 +1,16 @@
 {
   "version": 1,
-  "updated_at": "2026-11-26T05:40:26.627477+00:00",
+  "updated_at": "2026-11-26T06:41:51.664242+00:00",
   "retention_days": 7,
   "summary": {
-    "total_signals": 35,
-    "entry_reached": 17,
+    "total_signals": 37,
+    "entry_reached": 19,
     "entry_not_reached_expired": 18,
     "stop_loss_hits": 8,
     "t1_hits": 11,
     "t2_hits": 7,
     "t3_hits": 3,
-    "pending": 5,
+    "pending": 7,
     "completed_results": 4,
     "wins": 4,
     "losses": 0,
@@ -719,7 +719,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T05:39:00+00:00",
+      "last_checked_at": "2026-11-26T06:40:00+00:00",
       "data_error": null
     },
     "BTCUSDT_SWING_20261125T214221.040487+0000": {
@@ -746,7 +746,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T05:39:00+00:00",
+      "last_checked_at": "2026-11-26T06:40:00+00:00",
       "data_error": null
     },
     "XRPUSDT_SWING_20261125T214221.679238+0000": {
@@ -800,7 +800,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T05:39:00+00:00",
+      "last_checked_at": "2026-11-26T06:40:00+00:00",
       "data_error": null
     },
     "MMTUSDT_SWING_20261126T015707.193555+0000": {
@@ -908,7 +908,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T05:39:00+00:00",
+      "last_checked_at": "2026-11-26T06:40:00+00:00",
       "data_error": null
     },
     "XRPUSDT_SWING_20261126T035101.586796+0000": {
@@ -935,7 +935,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T05:39:00+00:00",
+      "last_checked_at": "2026-11-26T06:40:00+00:00",
       "data_error": null
     },
     "ETHUSDT_SCALP_20261126T045525.062801+0000": {
@@ -963,6 +963,60 @@
       "exit_at": null,
       "return_pct": null,
       "last_checked_at": "2026-11-26T05:09:00+00:00",
+      "data_error": null
+    },
+    "XRPUSDT_SWING_20261126T055612.284060+0000": {
+      "signal_id": "XRPUSDT_SWING_20261126T055612.284060+0000",
+      "symbol": "XRPUSDT",
+      "strategy": "SWING",
+      "classification": "STRONG BUY",
+      "created_at": "2026-11-26T05:56:12.284060+00:00",
+      "entry_price": 0.96,
+      "stop_loss": 0.9325,
+      "targets": {
+        "t1": 1.0176,
+        "t2": null,
+        "t3": null
+      },
+      "entry_reached": true,
+      "entry_reached_at": "2026-11-26T05:57:00+00:00",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "outcome": "PENDING",
+      "entry_expired": false,
+      "exit_price": null,
+      "exit_at": null,
+      "return_pct": null,
+      "last_checked_at": "2026-11-26T06:40:00+00:00",
+      "data_error": null
+    },
+    "NEARUSDT_SWING_20261126T055612.888385+0000": {
+      "signal_id": "NEARUSDT_SWING_20261126T055612.888385+0000",
+      "symbol": "NEARUSDT",
+      "strategy": "SWING",
+      "classification": "STRONG BUY",
+      "created_at": "2026-11-26T05:56:12.888385+00:00",
+      "entry_price": 3.082,
+      "stop_loss": 3.006,
+      "targets": {
+        "t1": 3.235078377015,
+        "t2": 3.286104502687,
+        "t3": 3.337130628359
+      },
+      "entry_reached": true,
+      "entry_reached_at": "2026-11-26T06:31:00+00:00",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "outcome": "PENDING",
+      "entry_expired": false,
+      "exit_price": null,
+      "exit_at": null,
+      "return_pct": null,
+      "last_checked_at": "2026-11-26T06:40:00+00:00",
       "data_error": null
     }
   }

@@ -15,10 +15,10 @@ Responsibilities:
 
 import json
 import logging
+import math
 import os
-
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
 
 from config import TRACKING_CONFIG
 
@@ -62,18 +62,11 @@ HISTORY_FILE = Path(
     os.getenv("SIGNAL_HISTORY_FILE", "signal_history.json")
 )
 
-TRACK_HOURS = int(
-    _setting("MAX_TRACK_HOURS", 48)
-)
-
-COOLDOWN_HOURS = int(
-    _setting("COOLDOWN_HOURS", 6)
-)
-
+TRACK_HOURS = int(_setting("MAX_TRACK_HOURS", 48))
+COOLDOWN_HOURS = int(_setting("COOLDOWN_HOURS", 6))
 SCALP_ENTRY_VALIDITY_MINUTES = int(
     _setting("SCALP_ENTRY_VALIDITY_MINUTES", 15)
 )
-
 SWING_ENTRY_VALIDITY_MINUTES = int(
     _setting("SWING_ENTRY_VALIDITY_MINUTES", 60)
 )
@@ -82,11 +75,24 @@ HISTORY_VERSION = 1
 
 
 # ---------------------------------------------------------
-# TIME HELPERS
+# TIME & NUMBER HELPERS
 # ---------------------------------------------------------
 
 def _utc_now():
     return datetime.now(timezone.utc)
+
+
+def _parse_time(value):
+    if not value:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
 def _to_iso(value=None):
@@ -105,28 +111,13 @@ def _to_iso(value=None):
     return value.astimezone(timezone.utc).isoformat()
 
 
-def _parse_time(value):
-    if not value:
-        return None
-
-    try:
-        parsed = datetime.fromisoformat(
-            str(value).replace("Z", "+00:00")
-        )
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-    except (TypeError, ValueError):
-        return None
-
-
 def _number(value):
     try:
         number = float(value)
-        if number != number or number in (float("inf"), float("-inf")):
+        if not math.isfinite(number):
             return None
         return number
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -159,7 +150,6 @@ def load_history(file_path=None):
 
         data.setdefault("version", HISTORY_VERSION)
         data.setdefault("updated_at", _to_iso())
-
         return data
 
     except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
@@ -176,7 +166,6 @@ def save_history(history, file_path=None):
         raise ValueError("History signals must be a list")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-
     history["version"] = HISTORY_VERSION
     history["updated_at"] = _to_iso()
 
@@ -257,16 +246,18 @@ def check_duplicate(symbol, strategy=None, current_time=None, history=None):
     data = history if isinstance(history, dict) else load_history()
     cutoff = current - timedelta(hours=COOLDOWN_HOURS)
 
-    normalized_symbol = str(symbol).upper()
-    normalized_strategy = str(strategy).upper() if strategy is not None else None
+    normalized_symbol = str(symbol).upper().strip()
+    normalized_strategy = (
+        str(strategy).upper().strip() if strategy is not None else None
+    )
 
     for signal in data.get("signals", []):
-        if str(signal.get("symbol", "")).upper() != normalized_symbol:
+        if str(signal.get("symbol", "")).upper().strip() != normalized_symbol:
             continue
 
         if (
             normalized_strategy is not None
-            and str(signal.get("strategy", "")).upper() != normalized_strategy
+            and str(signal.get("strategy", "")).upper().strip() != normalized_strategy
         ):
             continue
 
@@ -294,7 +285,7 @@ def register_signal(signal, file_path=None):
 
     classification = str(
         signal.get("classification") or signal.get("signal") or ""
-    ).upper()
+    ).upper().strip()
 
     if classification not in ("STRONG BUY", "EXCELLENT BUY"):
         raise ValueError("Only approved BUY signals can be tracked")
@@ -310,7 +301,7 @@ def register_signal(signal, file_path=None):
     path = Path(file_path) if file_path else HISTORY_FILE
     history = load_history(path)
 
-    strategy = str(signal.get("strategy", "UNKNOWN")).upper()
+    strategy = str(signal.get("strategy", "UNKNOWN")).upper().strip()
 
     if check_duplicate(symbol=symbol, strategy=strategy, history=history):
         return {"success": False, "reason": "DUPLICATE_COOLDOWN"}
@@ -341,7 +332,6 @@ def register_signal(signal, file_path=None):
         )
 
     created_at = _to_iso(now)
-    
     entry_validity_minutes = (
         SCALP_ENTRY_VALIDITY_MINUTES
         if strategy == "SCALP"
@@ -366,14 +356,10 @@ def register_signal(signal, file_path=None):
         "t3_hit": False,
         "stop_loss_hit": False,
         "entry_reached": False,
-        
         "entry_expiry": _to_iso(now + timedelta(minutes=entry_validity_minutes)),
         "entry_window_expired": False,
         "entry_reached_at": None,
-        
-        # 🔥 Track max price reached (for real high tracking)
         "max_price_seen": entry_price,
-        
         "result": None,
         "closed_at": None,
         "last_updated": created_at,
@@ -417,10 +403,11 @@ def update_signal_status(signal_id, current_price, file_path=None):
     now = _utc_now()
     expires_at = _parse_time(signal.get("expires_at"))
 
-    # 1. Overall 48h tracking expiry
     if expires_at is not None and now >= expires_at:
         signal["status"] = "EXPIRED"
-        signal["result"] = "EXPIRED"
+        signal["result"] = (
+            "EXPIRED_AFTER_ENTRY" if signal.get("entry_reached") else "EXPIRED_BEFORE_ENTRY"
+        )
         signal["closed_at"] = _to_iso(now)
         signal["last_updated"] = _to_iso(now)
         save_history(history, path)
@@ -434,17 +421,26 @@ def update_signal_status(signal_id, current_price, file_path=None):
 
     signal["current_price"] = price
     signal["last_updated"] = _to_iso(now)
-    
-    # 🔥 Track max price seen (in case price spiked and came back)
+
     max_seen = _number(signal.get("max_price_seen"))
     if max_seen is None or price > max_seen:
         signal["max_price_seen"] = price
         max_seen = price
-    
-    # 2. Entry window logic
-    if not signal.get("entry_reached"):
-        entry_expiry = _parse_time(signal.get("entry_expiry"))
 
+    # Before entry is reached: invalidate if price drops to/below stop loss before reaching entry
+    if not signal.get("entry_reached"):
+        if price <= stop:
+            signal["status"] = "EXPIRED_BEFORE_ENTRY"
+            signal["result"] = "INVALIDATED_BEFORE_ENTRY"
+            signal["closed_at"] = _to_iso(now)
+            save_history(history, path)
+            return {
+                "success": True,
+                "status": "EXPIRED_BEFORE_ENTRY",
+                "entry_reached": False,
+            }
+
+        entry_expiry = _parse_time(signal.get("entry_expiry"))
         if entry_expiry is not None and now >= entry_expiry:
             signal["status"] = "EXPIRED_BEFORE_ENTRY"
             signal["result"] = "ENTRY_WINDOW_EXPIRED"
@@ -457,9 +453,6 @@ def update_signal_status(signal_id, current_price, file_path=None):
                 "entry_window_expired": True,
             }
 
-        # Entry is reached only when price drops to or below entry (for BUY)
-        # But our logic: entry is when price touches entry_price
-        # For long: entry hit when price <= entry_price (or >= entry for breakout continuation)
         if price >= entry:
             signal["entry_reached"] = True
             signal["entry_reached_at"] = _to_iso(now)
@@ -471,35 +464,41 @@ def update_signal_status(signal_id, current_price, file_path=None):
                 "entry_reached": False,
             }
 
-    # 3. Stop Loss takes priority after entry
-    if price <= stop:
+    # After entry is reached: check targets first using max_seen, then stop loss
+    targets = signal.get("targets", {})
+    t1 = _number(targets.get("t1")) if isinstance(targets, dict) else None
+    t2 = _number(targets.get("t2")) if isinstance(targets, dict) else None
+    t3 = _number(targets.get("t3")) if isinstance(targets, dict) else None
+
+    check_price = max(price, max_seen if max_seen is not None else price)
+
+    if t1 is not None and check_price >= t1:
+        signal["t1_hit"] = True
+    if t2 is not None and check_price >= t2:
+        signal["t2_hit"] = True
+    if t3 is not None and check_price >= t3:
+        signal["t3_hit"] = True
+        signal["status"] = "TARGET_3_HIT"
+        signal["result"] = "TARGET_3"
+        signal["closed_at"] = _to_iso(now)
+    elif price <= stop:
         signal["stop_loss_hit"] = True
         signal["status"] = "STOP_LOSS_HIT"
-        signal["result"] = "LOSS"
+        if signal.get("t2_hit"):
+            signal["result"] = "T2_THEN_STOP"
+        elif signal.get("t1_hit"):
+            signal["result"] = "T1_THEN_STOP"
+        else:
+            signal["result"] = "LOSS"
         signal["closed_at"] = _to_iso(now)
-
-    else:
-        targets = signal.get("targets", {})
-        t1 = _number(targets.get("t1"))
-        t2 = _number(targets.get("t2"))
-        t3 = _number(targets.get("t3"))
-
-        # 🔥 Use max_price_seen to catch intra-scan spikes
-        check_price = max(price, max_seen if max_seen else price)
-        
-        if t1 is not None and check_price >= t1:
-            signal["t1_hit"] = True
-        if t2 is not None and check_price >= t2:
-            signal["t2_hit"] = True
-        if t3 is not None and check_price >= t3:
-            signal["t3_hit"] = True
-            signal["status"] = "TARGET_3_HIT"
-            signal["result"] = "TARGET_3"
-            signal["closed_at"] = _to_iso(now)
-        elif signal["t2_hit"]:
-            signal["status"] = "TARGET_2_HIT"
-        elif signal["t1_hit"]:
-            signal["status"] = "TARGET_1_HIT"
+    elif signal.get("t2_hit"):
+        signal["status"] = "TARGET_2_HIT"
+        if signal.get("result") is None:
+            signal["result"] = "TARGET_2"
+    elif signal.get("t1_hit"):
+        signal["status"] = "TARGET_1_HIT"
+        if signal.get("result") is None:
+            signal["result"] = "TARGET_1"
 
     if not save_history(history, path):
         return {"success": False, "reason": "HISTORY_SAVE_FAILED"}
@@ -538,7 +537,8 @@ def expire_old_signals(file_path=None, current_time=None):
 
         if signal.get("entry_reached"):
             signal["status"] = "EXPIRED"
-            signal["result"] = "EXPIRED_AFTER_ENTRY"
+            if signal.get("result") is None:
+                signal["result"] = "EXPIRED_AFTER_ENTRY"
         else:
             signal["status"] = "EXPIRED_BEFORE_ENTRY"
             signal["result"] = "EXPIRED_BEFORE_ENTRY"
@@ -587,18 +587,10 @@ def expire_unfilled_entries(file_path=None, current_time=None):
 
 
 # ---------------------------------------------------------
-# PERFORMANCE (FIXED)
+# PERFORMANCE
 # ---------------------------------------------------------
 
 def calculate_performance(file_path=None):
-    """
-    Calculate performance with FIXED win rate calculation.
-    
-    🔥 Key fixes:
-    - Win Rate now includes T1, T2, T3 hits (not just T3)
-    - Tracks avg return per signal
-    - Includes entry window expiries
-    """
     path = Path(file_path) if file_path else HISTORY_FILE
     history = load_history(path)
     signals = history.get("signals", [])
@@ -608,42 +600,35 @@ def calculate_performance(file_path=None):
     t2_hits = sum(bool(s.get("t2_hit")) for s in signals)
     t3_hits = sum(bool(s.get("t3_hit")) for s in signals)
     stop_hits = sum(bool(s.get("stop_loss_hit")) for s in signals)
-    
-    # 🔥 Any positive outcome (T1/T2/T3 hit) counts as a win
+
     any_win = sum(
         bool(s.get("t1_hit")) or bool(s.get("t2_hit")) or bool(s.get("t3_hit"))
         for s in signals
     )
-    
-    expired_before_entry = sum(
-        s.get("status") == "EXPIRED_BEFORE_ENTRY" for s in signals
-    )
-    
-    entry_window_expiries = sum(
-        bool(s.get("entry_window_expired")) for s in signals
-    )
 
-    active = sum(_signal_is_active(s) for s in signals)
-
-    completed = sum(
-        s.get("result") in ("LOSS", "TARGET_3", "EXPIRED_AFTER_ENTRY")
+    clean_losses = sum(
+        bool(s.get("stop_loss_hit"))
+        and not (bool(s.get("t1_hit")) or bool(s.get("t2_hit")) or bool(s.get("t3_hit")))
         for s in signals
     )
 
-    # 🔥 FIXED: Win rate counts any positive hit
-    total_decided = any_win + stop_hits
-    win_rate = (
-        (any_win / total_decided) * 100
-        if total_decided > 0
-        else None
+    expired_before_entry = sum(
+        s.get("status") == "EXPIRED_BEFORE_ENTRY" for s in signals
     )
-    
-    # 🔥 T3-only win rate (for reference)
-    t3_win_rate = (
-        (t3_hits / (t3_hits + stop_hits)) * 100
-        if (t3_hits + stop_hits) > 0
-        else None
+    entry_window_expiries = sum(
+        bool(s.get("entry_window_expired")) for s in signals
     )
+    active = sum(_signal_is_active(s) for s in signals)
+    completed = sum(
+        s.get("result") in ("LOSS", "TARGET_1", "TARGET_2", "TARGET_3", "EXPIRED_AFTER_ENTRY")
+        for s in signals
+    )
+
+    total_decided = any_win + clean_losses
+    win_rate = ((any_win / total_decided) * 100.0) if total_decided > 0 else None
+
+    t3_decided = t3_hits + clean_losses
+    t3_win_rate = ((t3_hits / t3_decided) * 100.0) if t3_decided > 0 else None
 
     return {
         "total_signals": total,
@@ -656,21 +641,14 @@ def calculate_performance(file_path=None):
         "any_positive_outcome": any_win,
         "expired_before_entry": expired_before_entry,
         "entry_window_expiries": entry_window_expiries,
-        # 🔥 Win rate now includes T1/T2/T3
-        "win_rate_overall_pct": (
-            round(win_rate, 2) if win_rate is not None else None
-        ),
-        "win_rate_t3_only_pct": (
-            round(t3_win_rate, 2) if t3_win_rate is not None else None
-        ),
+        "win_rate_overall_pct": round(win_rate, 2) if win_rate is not None else None,
+        "win_rate_t3_only_pct": round(t3_win_rate, 2) if t3_win_rate is not None else None,
         "tracking_hours": TRACK_HOURS,
         "cooldown_hours": COOLDOWN_HOURS,
     }
 
+
 def generate_daily_report(file_path=None, hours=24):
-    """
-    Generate a report of all signals in the last N hours.
-    """
     path = Path(file_path) if file_path else HISTORY_FILE
     history = load_history(path)
 
@@ -696,8 +674,13 @@ def generate_daily_report(file_path=None, hours=24):
         bool(s.get("t1_hit")) or bool(s.get("t2_hit")) or bool(s.get("t3_hit"))
         for s in recent_signals
     )
-    total_decided = any_win + stop_hits
-    win_rate = ((any_win / total_decided) * 100 if total_decided > 0 else None)
+    clean_losses = sum(
+        bool(s.get("stop_loss_hit"))
+        and not (bool(s.get("t1_hit")) or bool(s.get("t2_hit")) or bool(s.get("t3_hit")))
+        for s in recent_signals
+    )
+    total_decided = any_win + clean_losses
+    win_rate = ((any_win / total_decided) * 100.0) if total_decided > 0 else None
 
     return {
         "period_hours": hours,
@@ -725,4 +708,3 @@ def generate_daily_report(file_path=None, hours=24):
             for s in recent_signals
         ],
     }
-    

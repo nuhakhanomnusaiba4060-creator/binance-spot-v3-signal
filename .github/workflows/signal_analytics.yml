@@ -1,56 +1,105 @@
 
-name: V3 Signal Performance Analytics
+name: Binance Spot V3 Smart Signal Scanner
 
 on:
   schedule:
     - cron: "*/5 * * * *"
+
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: v3-signal-analytics
+  group: binance-spot-v3-scanner
   cancel-in-progress: false
 
 jobs:
-  analytics:
+  scanner:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    env:
+      DRY_RUN: "false"
+      SCANNER_CAPITAL_USDT: ${{ vars.SCANNER_CAPITAL_USDT }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ github.ref_name }}
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
-      - name: Install dependency
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "requests>=2.31.0,<3.0.0"
+          pip install -r requirements.txt
 
-      - name: Run signal analytics
-        run: python signal_analytics.py
-
-      - name: Save analytics data
+      - name: Validate live configuration
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python - <<'PY'
+          import os
+          import sys
 
-          git add signal_analytics.json
+          required = [
+              "TELEGRAM_BOT_TOKEN",
+              "TELEGRAM_CHAT_ID",
+              "SCANNER_CAPITAL_USDT",
+          ]
 
-          if git diff --cached --quiet; then
-            echo "No analytics changes to commit."
-            exit 0
+          missing = [
+              name for name in required
+              if not os.getenv(name, "").strip()
+          ]
+
+          if missing:
+              print("ERROR: Missing GitHub Secrets/Variables:")
+              for name in missing:
+                  print(f"- {name}")
+              sys.exit(1)
+
+          try:
+              capital = float(os.environ["SCANNER_CAPITAL_USDT"])
+          except (TypeError, ValueError):
+              print("ERROR: SCANNER_CAPITAL_USDT is invalid.")
+              sys.exit(1)
+
+          if capital <= 0:
+              print("ERROR: Capital must be greater than zero.")
+              sys.exit(1)
+
+          if os.getenv("DRY_RUN", "").lower() != "false":
+              print("ERROR: Live mode is not enabled.")
+              sys.exit(1)
+
+          print("Live configuration validation successful.")
+          print(f"Capital: {capital:.2f} USDT")
+          print("Dry Run: DISABLED")
+          PY
+
+      - name: Run Binance Spot V3 Scanner
+        run: |
+          python scanner.py
+
+      - name: Persist signal history
+        if: ${{ success() }}
+        run: |
+          if [ -f signal_history.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            git add -f signal_history.json
+
+            if ! git diff --cached --quiet; then
+              git commit -m "Update V3 signal history"
+              git push
+            fi
           fi
-
-          git commit -m "Update 7-day signal performance analytics"
-
-          BRANCH="${GITHUB_REF_NAME}"
-          git pull --rebase origin "$BRANCH"
-          git push origin "HEAD:$BRANCH"

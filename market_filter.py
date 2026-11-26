@@ -1,4 +1,3 @@
-
 """
 Binance Spot V3 Smart Signal Scanner
 BTC Market Filter
@@ -21,11 +20,10 @@ import numpy as np
 import pandas as pd
 
 from config import (
-    MARKET_CONFIG,
-    INDICATOR_CONFIG,
     FILTER_CONFIG,
+    INDICATOR_CONFIG,
+    MARKET_CONFIG,
 )
-
 from indicators import calculate_all_indicators
 
 
@@ -54,7 +52,7 @@ DEFAULT_CONFIG = {
     "BEARISH_RSI_MAX": 45.0,
     "HIGH_RISK_RSI_MAX": 40.0,
     "STRONG_ADX_MIN": 25.0,
-    "HIGH_VOLUME_RVOL": 1.5,
+    "HIGH_VOLUME_RVOL": 1.35,
 }
 
 
@@ -66,21 +64,20 @@ def _normalise_key(value):
     )
 
 
-def _find_in_config(config, target):
+def _find_in_config(config_obj, target):
     """Search for a normalised key inside a config dict (recursive)."""
-    if not isinstance(config, dict):
+    if not isinstance(config_obj, dict):
         return None
 
     target_key = _normalise_key(target)
 
-    for key, value in config.items():
+    for key, value in config_obj.items():
         if _normalise_key(key) == target_key:
             return value
 
-    for value in config.values():
+    for value in config_obj.values():
         if isinstance(value, dict):
             result = _find_in_config(value, target)
-
             if result is not None:
                 return result
 
@@ -94,13 +91,12 @@ def _find_config_value(target):
     2. FILTER_CONFIG
     3. MARKET_CONFIG
     """
-    for config in (
+    for cfg in (
         INDICATOR_CONFIG,
         FILTER_CONFIG,
         MARKET_CONFIG,
     ):
-        value = _find_in_config(config, target)
-
+        value = _find_in_config(cfg, target)
         if value is not None:
             return value
 
@@ -109,22 +105,24 @@ def _find_config_value(target):
 
 def _get_setting(name, default):
     value = _find_config_value(name)
-
     return default if value is None else value
 
 
+def _get_bool_setting(name, default):
+    value = _find_config_value(name)
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 RSI_PERIOD = int(
-    _get_setting(
-        "RSI_PERIOD",
-        DEFAULT_CONFIG["RSI_PERIOD"],
-    )
+    _get_setting("RSI_PERIOD", DEFAULT_CONFIG["RSI_PERIOD"])
 )
 
 ADX_PERIOD = int(
-    _get_setting(
-        "ADX_PERIOD",
-        DEFAULT_CONFIG["ADX_PERIOD"],
-    )
+    _get_setting("ADX_PERIOD", DEFAULT_CONFIG["ADX_PERIOD"])
 )
 
 MIN_CANDLES_FOR_MA200 = int(
@@ -169,6 +167,11 @@ HIGH_VOLUME_RVOL = float(
     )
 )
 
+ALLOW_SELECTIVE_SIGNALS_ON_BEARISH = _get_bool_setting(
+    "ALLOW_SELECTIVE_SIGNALS_ON_BEARISH",
+    False,
+)
+
 
 # ==================================================
 # 2. SAFE VALUE HELPERS
@@ -180,12 +183,9 @@ def _safe_float(value):
 
     try:
         result = float(value)
-
         if not np.isfinite(result):
             return None
-
         return result
-
     except (TypeError, ValueError, OverflowError):
         return None
 
@@ -195,10 +195,7 @@ def _get_latest_value(row, column):
 
 
 def _is_valid_dataframe(df):
-    return (
-        isinstance(df, pd.DataFrame)
-        and not df.empty
-    )
+    return isinstance(df, pd.DataFrame) and not df.empty
 
 
 # ==================================================
@@ -236,20 +233,15 @@ def analyze_btc_timeframe(df, timeframe):
         )
         return result
 
-    # data_provider.py already removes unclosed candles.
-    # Use the latest available closed candle.
-    # Do NOT drop the latest candle a second time.
     prepared = df.copy()
 
     try:
         enriched = calculate_all_indicators(prepared)
-
     except Exception as exc:
         logger.exception(
             "BTC indicator calculation failed for %s",
             timeframe,
         )
-
         result["warnings"].append(
             f"{timeframe}: Indicator calculation failed: "
             f"{type(exc).__name__}"
@@ -283,10 +275,7 @@ def analyze_btc_timeframe(df, timeframe):
     )
 
     for column in columns:
-        result[column] = _get_latest_value(
-            latest,
-            column,
-        )
+        result[column] = _get_latest_value(latest, column)
 
     candle_count = len(prepared)
 
@@ -306,7 +295,6 @@ def analyze_btc_timeframe(df, timeframe):
 
     if any(value is None for value in required_values):
         result["data_quality"] = "INCOMPLETE"
-
         result["warnings"].append(
             f"{timeframe}: Required BTC indicators unavailable."
         )
@@ -321,23 +309,11 @@ def analyze_btc_timeframe(df, timeframe):
     rsi = result["rsi"]
     macd_histogram = result["macd_histogram"]
 
-    bullish_structure = (
-        close > sma20 > sma50 > sma200
-    )
+    bullish_structure = close > sma20 > sma50 > sma200
+    bearish_structure = close < sma20 < sma50 < sma200
 
-    bearish_structure = (
-        close < sma20 < sma50 < sma200
-    )
-
-    bullish_momentum = (
-        rsi >= BULLISH_RSI_MIN
-        and macd_histogram > 0
-    )
-
-    bearish_momentum = (
-        rsi <= BEARISH_RSI_MAX
-        and macd_histogram < 0
-    )
+    bullish_momentum = rsi >= BULLISH_RSI_MIN and macd_histogram > 0
+    bearish_momentum = rsi <= BEARISH_RSI_MAX and macd_histogram < 0
 
     result["trend_conditions"] = {
         "bullish_structure": bool(bullish_structure),
@@ -348,10 +324,8 @@ def analyze_btc_timeframe(df, timeframe):
 
     if bullish_structure and bullish_momentum:
         result["trend"] = "BULLISH"
-
     elif bearish_structure and bearish_momentum:
         result["trend"] = "BEARISH"
-
     else:
         result["trend"] = "NEUTRAL"
 
@@ -359,28 +333,22 @@ def analyze_btc_timeframe(df, timeframe):
 
     if rvol is None:
         result["volume_status"] = "UNKNOWN"
-
     elif rvol >= HIGH_VOLUME_RVOL:
         result["volume_status"] = "HIGH"
-
     elif rvol >= 1.0:
         result["volume_status"] = "NORMAL"
-
     else:
         result["volume_status"] = "LOW"
 
     if result["trend"] == "NEUTRAL":
         reasons = []
-
         if not (bullish_structure or bearish_structure):
             reasons.append("MA structure mixed")
-
         if not (bullish_momentum or bearish_momentum):
             reasons.append("momentum mixed")
 
         result["warnings"].append(
-            f"{timeframe}: NEUTRAL trend — "
-            + ", ".join(reasons)
+            f"{timeframe}: NEUTRAL trend — " + ", ".join(reasons)
         )
 
     return result
@@ -429,16 +397,10 @@ def determine_btc_trend(timeframe_results):
     if "UNKNOWN" in (trend_1h, trend_4h):
         return "UNKNOWN"
 
-    if (
-        trend_1h == "BULLISH"
-        and trend_4h == "BULLISH"
-    ):
+    if trend_1h == "BULLISH" and trend_4h == "BULLISH":
         return "BULLISH"
 
-    if (
-        trend_1h == "BEARISH"
-        and trend_4h == "BEARISH"
-    ):
+    if trend_1h == "BEARISH" and trend_4h == "BEARISH":
         return "BEARISH"
 
     return "NEUTRAL"
@@ -466,13 +428,8 @@ def detect_high_risk(timeframe_results):
 
     warnings = []
 
-    one_hour_bearish = (
-        one_hour.get("trend") == "BEARISH"
-    )
-
-    four_hour_bearish = (
-        four_hour.get("trend") == "BEARISH"
-    )
+    one_hour_bearish = one_hour.get("trend") == "BEARISH"
+    four_hour_bearish = four_hour.get("trend") == "BEARISH"
 
     one_hour_rsi = one_hour.get("rsi")
     four_hour_rsi = four_hour.get("rsi")
@@ -480,10 +437,7 @@ def detect_high_risk(timeframe_results):
     one_hour_adx = one_hour.get("adx")
     four_hour_adx = four_hour.get("adx")
 
-    strong_downtrend = (
-        one_hour_bearish
-        and four_hour_bearish
-    )
+    strong_downtrend = one_hour_bearish and four_hour_bearish
 
     oversold_confirmation = (
         one_hour_rsi is not None
@@ -493,14 +447,8 @@ def detect_high_risk(timeframe_results):
     )
 
     adx_confirmation = (
-        (
-            one_hour_adx is not None
-            and one_hour_adx >= STRONG_ADX_MIN
-        )
-        or (
-            four_hour_adx is not None
-            and four_hour_adx >= STRONG_ADX_MIN
-        )
+        (one_hour_adx is not None and one_hour_adx >= STRONG_ADX_MIN)
+        or (four_hour_adx is not None and four_hour_adx >= STRONG_ADX_MIN)
     )
 
     logger.info(
@@ -540,13 +488,7 @@ def detect_high_risk(timeframe_results):
         STRONG_ADX_MIN,
     )
 
-    if (
-        strong_downtrend
-        and (
-            oversold_confirmation
-            or adx_confirmation
-        )
-    ):
+    if strong_downtrend and (oversold_confirmation or adx_confirmation):
         if oversold_confirmation:
             warnings.append(
                 "HIGH_RISK triggered by oversold RSI "
@@ -563,14 +505,10 @@ def detect_high_risk(timeframe_results):
             "on both 1h and 4h."
         )
 
-        logger.warning(
-            "BTC MARKET HIGH_RISK CONFIRMED."
-        )
-
+        logger.warning("BTC MARKET HIGH_RISK CONFIRMED.")
         return True, warnings
 
     logger.info("BTC HIGH_RISK NOT CONFIRMED.")
-
     return False, warnings
 
 
@@ -591,26 +529,15 @@ def analyze_external_data(external_data=None):
     if not isinstance(external_data, dict):
         return result
 
-    dominance = _safe_float(
-        external_data.get("btc_dominance")
-    )
-
+    dominance = _safe_float(external_data.get("btc_dominance"))
     market_change = _safe_float(
-        external_data.get(
-            "total_market_cap_change_24h_pct"
-        )
+        external_data.get("total_market_cap_change_24h_pct")
     )
-
-    fear_greed = _safe_float(
-        external_data.get("fear_greed_index")
-    )
+    fear_greed = _safe_float(external_data.get("fear_greed_index"))
 
     if dominance is not None and 0 <= dominance <= 100:
         result["btc_dominance"] = dominance
-
-        dominance_trend = external_data.get(
-            "btc_dominance_trend"
-        )
+        dominance_trend = external_data.get("btc_dominance_trend")
 
         if dominance_trend in ("RISING", "FALLING"):
             result["btc_dominance_status"] = dominance_trend
@@ -622,10 +549,8 @@ def analyze_external_data(external_data=None):
 
         if market_change > 2:
             result["total_market_status"] = "BULLISH"
-
         elif market_change < -2:
             result["total_market_status"] = "BEARISH"
-
         else:
             result["total_market_status"] = "NEUTRAL"
 
@@ -634,16 +559,12 @@ def analyze_external_data(external_data=None):
 
         if fear_greed <= 24:
             result["sentiment_status"] = "EXTREME_FEAR"
-
         elif fear_greed <= 44:
             result["sentiment_status"] = "FEAR"
-
         elif fear_greed <= 55:
             result["sentiment_status"] = "NEUTRAL"
-
         elif fear_greed <= 74:
             result["sentiment_status"] = "GREED"
-
         else:
             result["sentiment_status"] = "EXTREME_GREED"
 
@@ -659,17 +580,13 @@ def classify_market(
     timeframe_results,
     external_result,
 ):
-    high_risk, risk_warnings = detect_high_risk(
-        timeframe_results
-    )
+    high_risk, risk_warnings = detect_high_risk(timeframe_results)
 
     if high_risk:
         return "HIGH_RISK", risk_warnings
 
     if btc_trend == "UNKNOWN":
-        return "UNKNOWN", [
-            "Insufficient BTC trend data."
-        ]
+        return "UNKNOWN", ["Insufficient BTC trend data."]
 
     one_hour = timeframe_results.get("1h", {})
     four_hour = timeframe_results.get("4h", {})
@@ -692,7 +609,6 @@ def classify_market(
             return "NEUTRAL", [
                 "BTC is bullish but total market cap is falling."
             ]
-
         return "BULLISH", []
 
     if btc_trend == "BEARISH":
@@ -717,7 +633,6 @@ def determine_risk_level(market_status):
         "HIGH_RISK": "VERY_HIGH",
         "UNKNOWN": "UNKNOWN",
     }
-
     return mapping.get(market_status, "UNKNOWN")
 
 
@@ -755,52 +670,35 @@ def analyze_market(btc_data, external_data=None):
 
     for timeframe in REQUIRED_TIMEFRAMES:
         timeframe_df = btc_data.get(timeframe)
-
         timeframe_results[timeframe] = analyze_btc_timeframe(
             timeframe_df,
             timeframe,
         )
+        warnings.extend(timeframe_results[timeframe]["warnings"])
 
-        warnings.extend(
-            timeframe_results[timeframe]["warnings"]
-        )
-
-    btc_trend = determine_btc_trend(
-        timeframe_results
-    )
-
-    external_result = analyze_external_data(
-        external_data
-    )
+    btc_trend = determine_btc_trend(timeframe_results)
+    external_result = analyze_external_data(external_data)
 
     market_status, classification_warnings = classify_market(
         btc_trend,
         timeframe_results,
         external_result,
     )
-
     warnings.extend(classification_warnings)
 
-    btc_volume_status = analyze_btc_volume(
-        timeframe_results
-    )
-
-    one_hour_rsi = timeframe_results.get(
-        "1h", {}
-    ).get("rsi")
+    btc_volume_status = analyze_btc_volume(timeframe_results)
+    one_hour_rsi = timeframe_results.get("1h", {}).get("rsi")
 
     if all(
         timeframe_results[tf]["data_quality"] == "VALID"
         for tf in REQUIRED_TIMEFRAMES
     ):
         data_quality = "VALID"
-
     elif any(
         timeframe_results[tf]["data_quality"] == "VALID"
         for tf in REQUIRED_TIMEFRAMES
     ):
         data_quality = "PARTIAL"
-
     else:
         data_quality = "INVALID"
 
@@ -821,30 +719,18 @@ def analyze_market(btc_data, external_data=None):
         "bullish_momentum=%s, bearish_momentum=%s | "
         "4h: bullish_structure=%s, bearish_structure=%s, "
         "bullish_momentum=%s, bearish_momentum=%s",
-        timeframe_results["1h"]["trend_conditions"].get(
-            "bullish_structure"
-        ),
-        timeframe_results["1h"]["trend_conditions"].get(
-            "bearish_structure"
-        ),
-        timeframe_results["1h"]["trend_conditions"].get(
-            "bullish_momentum"
-        ),
-        timeframe_results["1h"]["trend_conditions"].get(
-            "bearish_momentum"
-        ),
-        timeframe_results["4h"]["trend_conditions"].get(
-            "bullish_structure"
-        ),
-        timeframe_results["4h"]["trend_conditions"].get(
-            "bearish_structure"
-        ),
-        timeframe_results["4h"]["trend_conditions"].get(
-            "bullish_momentum"
-        ),
-        timeframe_results["4h"]["trend_conditions"].get(
-            "bearish_momentum"
-        ),
+        timeframe_results["1h"]["trend_conditions"].get("bullish_structure"),
+        timeframe_results["1h"]["trend_conditions"].get("bearish_structure"),
+        timeframe_results["1h"]["trend_conditions"].get("bullish_momentum"),
+        timeframe_results["1h"]["trend_conditions"].get("bearish_momentum"),
+        timeframe_results["4h"]["trend_conditions"].get("bullish_structure"),
+        timeframe_results["4h"]["trend_conditions"].get("bearish_structure"),
+        timeframe_results["4h"]["trend_conditions"].get("bullish_momentum"),
+        timeframe_results["4h"]["trend_conditions"].get("bearish_momentum"),
+    )
+
+    allow_new_signals = market_status not in ("HIGH_RISK", "UNKNOWN") and (
+        market_status != "BEARISH" or ALLOW_SELECTIVE_SIGNALS_ON_BEARISH
     )
 
     return {
@@ -852,32 +738,21 @@ def analyze_market(btc_data, external_data=None):
         "btc_trend": btc_trend,
         "btc_rsi": one_hour_rsi,
         "btc_volume_status": btc_volume_status,
-
         "btc_dominance": external_result["btc_dominance"],
         "btc_dominance_status": external_result["btc_dominance_status"],
-
         "total_market_cap_change_24h_pct": (
             external_result["total_market_cap_change_24h_pct"]
         ),
         "total_market_status": external_result["total_market_status"],
-
         "fear_greed_index": external_result["fear_greed_index"],
         "sentiment_status": external_result["sentiment_status"],
-
         "risk_level": risk_level,
         "warnings": list(dict.fromkeys(warnings)),
         "data_quality": data_quality,
         "timeframes": timeframe_results,
-
         "signal_policy": {
-            "allow_new_signals": market_status not in (
-                "HIGH_RISK",
-                "UNKNOWN",
-            ),
-            "market_caution": market_status in (
-                "BEARISH",
-                "NEUTRAL",
-            ),
+            "allow_new_signals": allow_new_signals,
+            "market_caution": market_status in ("BEARISH", "NEUTRAL"),
         },
     }
 
@@ -891,7 +766,6 @@ def validate_market_context(market_context):
         return False
 
     status = market_context.get("market_status")
-
     if status not in VALID_MARKET_STATUSES:
         return False
 
@@ -910,12 +784,10 @@ def validate_market_context(market_context):
     }
 
     expected_risk = expected_risk_levels.get(status)
-
     if market_context.get("risk_level") != expected_risk:
         return False
 
     signal_policy = market_context.get("signal_policy")
-
     if not isinstance(signal_policy, dict):
         return False
 
@@ -923,7 +795,6 @@ def validate_market_context(market_context):
         return False
 
     expected_caution = status in ("BEARISH", "NEUTRAL")
-
     if signal_policy.get("market_caution") is not expected_caution:
         return False
 

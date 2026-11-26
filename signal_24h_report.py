@@ -5,8 +5,9 @@ import logging
 import math
 import os
 import sys
+import time
 
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -23,12 +24,19 @@ DHAKA = ZoneInfo("Asia/Dhaka")
 REQUEST_TIMEOUT = 20
 MESSAGE_LIMIT = 3900
 
-# Only these outcomes represent a terminal result.
+TELEGRAM_MAX_ATTEMPTS = 3
+RETRY_BASE_SECONDS = 2
+MAX_RETRY_AFTER_SECONDS = 30
+
+# Analytics-এর নির্ধারিত terminal outcomes.
 COMPLETED_OUTCOMES = {
     "STOP_LOSS",
     "T3",
     "EXPIRED_AFTER_ENTRY",
 }
+
+# Analytics Snapshot এই সময়ের বেশি পুরোনো হলে সতর্কতা দেখাবে।
+STALE_SNAPSHOT_MINUTES = 15
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,7 +49,7 @@ def parse_time(value):
         return None
 
     try:
-        result = __import__("datetime").datetime.fromisoformat(
+        result = datetime.fromisoformat(
             str(value).replace("Z", "+00:00")
         )
 
@@ -92,15 +100,19 @@ def fmt_pct(value):
 
 def safe_text(value, default="N/A"):
     if value is None:
-        return default
+        return html.escape(str(default))
 
     return html.escape(str(value))
 
 
-def status_label(record):
-    outcome = str(
+def normalize_outcome(record):
+    return str(
         record.get("outcome", "PENDING")
-    ).upper()
+    ).strip().upper()
+
+
+def status_label(record):
+    outcome = normalize_outcome(record)
 
     labels = {
         "PENDING": "চলমান",
@@ -112,13 +124,13 @@ def status_label(record):
         "ENTRY_WINDOW_EXPIRED": "Entry হয়নি - Expired",
     }
 
-    return labels.get(outcome, outcome)
+    return safe_text(labels.get(outcome, outcome))
 
 
 def get_snapshot_time(analytics):
     """
-    Use the analytics update timestamp as the report snapshot.
-    Never silently substitute the current time.
+    Analytics updated_at-কে Report Snapshot হিসেবে ব্যবহার করে।
+    Invalid timestamp হলে বর্তমান সময় দিয়ে প্রতিস্থাপন করা হবে না।
     """
 
     snapshot = parse_time(analytics.get("updated_at"))
@@ -130,6 +142,29 @@ def get_snapshot_time(analytics):
         )
 
     return snapshot
+
+
+def get_snapshot_warning(snapshot):
+    """
+    Snapshot পুরোনো হলে সতর্কতা দেখায়।
+    Report cutoff পরিবর্তন করে না।
+    """
+
+    now = datetime.now(timezone.utc)
+    age_seconds = (now - snapshot).total_seconds()
+
+    if age_seconds < 0:
+        return "⚠️ Analytics Snapshot ভবিষ্যতের সময় দেখাচ্ছে।"
+
+    age_minutes = age_seconds / 60
+
+    if age_minutes > STALE_SNAPSHOT_MINUTES:
+        return (
+            "⚠️ Analytics Data পুরোনো: "
+            f"প্রায় {age_minutes:.0f} মিনিট আগে আপডেট হয়েছে।"
+        )
+
+    return None
 
 
 def get_recent_signals(analytics, history, snapshot):
@@ -153,7 +188,7 @@ def get_recent_signals(analytics, history, snapshot):
         signal_id = item.get("signal_id")
 
         if signal_id:
-            score_map[signal_id] = item.get("score")
+            score_map[str(signal_id)] = item.get("score")
 
     start = snapshot - timedelta(hours=24)
 
@@ -174,17 +209,18 @@ def get_recent_signals(analytics, history, snapshot):
 
         item = dict(record)
 
-        item["_signal_id"] = signal_id
+        item["_signal_id"] = str(signal_id)
         item["_created"] = created
-        item["_score"] = score_map.get(signal_id)
-
-        item["_outcome"] = str(
-            item.get("outcome", "PENDING")
-        ).upper()
+        item["_score"] = score_map.get(str(signal_id))
+        item["_outcome"] = normalize_outcome(item)
 
         item["_return"] = safe_float(
             item.get("return_pct")
         )
+
+        item["_strategy"] = str(
+            item.get("strategy", "UNKNOWN")
+        ).strip().upper() or "UNKNOWN"
 
         recent.append(item)
 
@@ -193,6 +229,27 @@ def get_recent_signals(analytics, history, snapshot):
     )
 
     return recent, start
+
+
+def is_entry_expired(item):
+    """
+    Entry expiry-কে Final Loss হিসেবে গণনা করা হবে না।
+    """
+
+    if item["_outcome"] == "ENTRY_WINDOW_EXPIRED":
+        return True
+
+    return (
+        item.get("entry_expired") is True
+        and item.get("entry_reached") is not True
+    )
+
+
+def is_completed(item):
+    return (
+        item["_outcome"] in COMPLETED_OUTCOMES
+        and item["_return"] is not None
+    )
 
 
 def calculate_statistics(recent):
@@ -204,7 +261,12 @@ def calculate_statistics(recent):
     )
 
     expired = sum(
-        item["_outcome"] == "ENTRY_WINDOW_EXPIRED"
+        is_entry_expired(item)
+        for item in recent
+    )
+
+    expired_after_entry = sum(
+        item["_outcome"] == "EXPIRED_AFTER_ENTRY"
         for item in recent
     )
 
@@ -233,14 +295,14 @@ def calculate_statistics(recent):
         for item in recent
     )
 
-    # A signal is completed only when its outcome is terminal
-    # and a valid return percentage is available.
+    data_errors = sum(
+        bool(item.get("data_error"))
+        for item in recent
+    )
+
     completed = [
         item for item in recent
-        if (
-            item["_outcome"] in COMPLETED_OUTCOMES
-            and item["_return"] is not None
-        )
+        if is_completed(item)
     ]
 
     wins = [
@@ -297,11 +359,13 @@ def calculate_statistics(recent):
         "total": total,
         "entered": entered,
         "expired": expired,
+        "expired_after_entry": expired_after_entry,
         "pending": pending,
         "sl_hits": sl_hits,
         "t1_hits": t1_hits,
         "t2_hits": t2_hits,
         "t3_hits": t3_hits,
+        "data_errors": data_errors,
         "completed": completed,
         "wins": wins,
         "losses": losses,
@@ -313,6 +377,26 @@ def calculate_statistics(recent):
         "best": best,
         "worst": worst,
     }
+
+
+def calculate_strategy_statistics(recent):
+    """
+    SCALP, SWING এবং UNKNOWN আলাদা করে হিসাব করে।
+    """
+
+    strategies = {}
+
+    for item in recent:
+        strategy = item["_strategy"]
+
+        strategies.setdefault(strategy, []).append(item)
+
+    result = {}
+
+    for strategy, items in sorted(strategies.items()):
+        result[strategy] = calculate_statistics(items)
+
+    return result
 
 
 def signal_result_text(item):
@@ -341,6 +425,10 @@ def signal_block(index, item):
 
     strategy = safe_text(
         item.get("strategy")
+    )
+
+    signal_id = safe_text(
+        item.get("_signal_id")
     )
 
     created = item["_created"].astimezone(DHAKA)
@@ -375,7 +463,7 @@ def signal_block(index, item):
     if item.get("entry_reached") is True:
         entry_status = "ENTRY HIT"
 
-    elif item.get("entry_expired") is True:
+    elif is_entry_expired(item):
         entry_status = "ENTRY EXPIRED"
 
     else:
@@ -383,6 +471,7 @@ def signal_block(index, item):
 
     lines = [
         f"<b>{index}. {symbol}</b>",
+        f"Signal ID: {signal_id}",
         f"Signal: {classification}",
         f"Strategy: {strategy} | Score: {score_text}",
         f"সময়: {created:%H:%M:%S %d-%m-%Y}",
@@ -395,7 +484,7 @@ def signal_block(index, item):
         "",
         f"Entry Status: <b>{entry_status}</b>",
         f"Target Status: {safe_text(milestone_text)}",
-        f"Final Result: <b>{safe_text(status_label(item))}</b>",
+        f"Final Result: <b>{status_label(item)}</b>",
         f"Win/Loss: <b>{signal_result_text(item)}</b>",
         f"Return: <b>{fmt_pct(item.get('return_pct'))}</b>",
     ]
@@ -405,6 +494,52 @@ def signal_block(index, item):
             "⚠️ Data Error: "
             + safe_text(str(item["data_error"])[:150])
         )
+
+    return "\n".join(lines)
+
+
+def strategy_summary_block(strategy_stats):
+    lines = [
+        "━━━━━━━━━━━━━━━━",
+        "📊 <b>STRATEGY-WISE PERFORMANCE</b>",
+        "━━━━━━━━━━━━━━━━",
+    ]
+
+    if not strategy_stats:
+        lines.append("Strategy Data পাওয়া যায়নি।")
+        return "\n".join(lines)
+
+    for strategy, stats in strategy_stats.items():
+
+        completed_count = len(stats["completed"])
+
+        if completed_count:
+            win_rate = (
+                len(stats["wins"])
+                / completed_count
+                * 100
+            )
+            win_rate_text = f"{win_rate:.2f}%"
+        else:
+            win_rate_text = "N/A"
+
+        lines.extend([
+            "",
+            f"<b>{safe_text(strategy)}</b>",
+            f"মোট Signal: {stats['total']}",
+            f"Entry Hit: {stats['entered']}",
+            f"Entry Expired: {stats['expired']}",
+            f"SL Hit: {stats['sl_hits']}",
+            f"T1/T2/T3: "
+            f"{stats['t1_hits']}/{stats['t2_hits']}/{stats['t3_hits']}",
+            f"Completed: {completed_count}",
+            f"Win/Loss/BE: "
+            f"{len(stats['wins'])}/"
+            f"{len(stats['losses'])}/"
+            f"{len(stats['breakeven'])}",
+            f"Win Rate: {win_rate_text}",
+            f"Average Return: {fmt_pct(stats['average_return'])}",
+        ])
 
     return "\n".join(lines)
 
@@ -420,8 +555,12 @@ def build_report(analytics, history):
 
     stats = calculate_statistics(recent)
 
+    strategy_stats = calculate_strategy_statistics(recent)
+
     start_local = start.astimezone(DHAKA)
     end_local = snapshot.astimezone(DHAKA)
+
+    snapshot_warning = get_snapshot_warning(snapshot)
 
     blocks = []
 
@@ -433,15 +572,26 @@ def build_report(analytics, history):
         f"থেকে: {end_local:%d-%m-%Y %H:%M:%S}",
         "(বাংলাদেশ সময়)",
         "",
+    ]
+
+    if snapshot_warning:
+        header.extend([
+            safe_text(snapshot_warning),
+            "",
+        ])
+
+    header.extend([
         "━━━━━━━━━━━━━━━━",
         "📈 <b>সার্বিক পরিসংখ্যান</b>",
         "━━━━━━━━━━━━━━━━",
         f"মোট সিগন্যাল: <b>{stats['total']}</b>",
         f"Entry Hit: <b>{stats['entered']}</b>",
         f"Entry Expired: <b>{stats['expired']}</b>",
+        f"Entry-এর পর Expired: <b>{stats['expired_after_entry']}</b>",
         f"Pending: <b>{stats['pending']}</b>",
-        f"Stop Loss Hit: <b>{stats['sl_hits']}</b>",
+        f"Data Error: <b>{stats['data_errors']}</b>",
         "",
+        f"Stop Loss Hit: <b>{stats['sl_hits']}</b>",
         f"T1 Hit: <b>{stats['t1_hits']}</b>",
         f"T2 Hit: <b>{stats['t2_hits']}</b>",
         f"T3 Hit: <b>{stats['t3_hits']}</b>",
@@ -450,7 +600,7 @@ def build_report(analytics, history):
         f"Win: <b>{len(stats['wins'])}</b>",
         f"Loss: <b>{len(stats['losses'])}</b>",
         f"Break Even: <b>{len(stats['breakeven'])}</b>",
-    ]
+    ])
 
     if stats["completed"]:
 
@@ -504,14 +654,19 @@ def build_report(analytics, history):
     else:
         header.append("Completed ফলাফল নেই।")
 
-    header.extend([
-        "",
-        "━━━━━━━━━━━━━━━━",
-        "🪙 <b>COIN-WISE SIGNAL DETAILS</b>",
-        "━━━━━━━━━━━━━━━━",
-    ])
-
     blocks.append("\n".join(header))
+
+    blocks.append(
+        strategy_summary_block(strategy_stats)
+    )
+
+    blocks.append(
+        "\n".join([
+            "━━━━━━━━━━━━━━━━",
+            "🪙 <b>COIN-WISE SIGNAL DETAILS</b>",
+            "━━━━━━━━━━━━━━━━",
+        ])
+    )
 
     if not recent:
         blocks.append(
@@ -532,12 +687,16 @@ def build_report(analytics, history):
         "Entry Hit মানে Binance-এর বন্ধ ১-মিনিটের Candle-এ Entry Price স্পর্শ করেছে।",
         "এটি বাস্তবে Buy Order সম্পন্ন হওয়ার প্রমাণ নয়।",
         "",
-        "T1/T2/T3 Hit আলাদা হিসাব করা হয়েছে।",
-        "Pending সিগন্যালকে Win বা Loss ধরা হয়নি।",
+        "T1/T2/T3 ও SL Hit আলাদা Price Touch হিসাব।",
+        "একটি Signal Target Hit করার পরেও Stop Loss Hit করতে পারে।",
         "",
-        "Completed বলতে চূড়ান্ত ফলাফল ও বৈধ Return-সহ সিগন্যাল বোঝায়।",
+        "Win Rate = Win ÷ Completed × 100।",
+        "এই হিসাবে Break-even Completed-এর মধ্যে অন্তর্ভুক্ত।",
         "",
-        "USDT Net PNL দেখানো হয়নি, কারণ প্রকৃত বিনিয়োগের পরিমাণ ও ফি সংরক্ষিত নেই।",
+        "Entry Expired-কে Loss হিসেবে গণনা করা হয়নি।",
+        "Expired After Entry-এর Return একটি হিসাবভিত্তিক ফল; প্রকৃত Sell Order নয়।",
+        "",
+        "USDT Net PNL দেখানো হয়নি, কারণ প্রকৃত বিনিয়োগের পরিমাণ, Quantity ও Fee সংরক্ষিত নেই।",
         "",
         "Report cutoff: Analytics Snapshot-এর updated_at।",
     ]
@@ -549,7 +708,8 @@ def build_report(analytics, history):
 
 def split_message(blocks):
     """
-    Split at paragraph boundaries to avoid breaking HTML tags.
+    Paragraph boundary-তে Message ভাগ করে।
+    HTML tag ভেঙে পাঠানো হবে না।
     """
 
     chunks = []
@@ -603,42 +763,116 @@ def send_telegram(blocks):
 
     chunks = split_message(blocks)
 
-    for index, chunk in enumerate(chunks, 1):
+    with requests.Session() as session:
 
-        response = requests.post(
-            url,
-            json={
-                "chat_id": chat_id,
-                "text": chunk,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
+        for index, chunk in enumerate(chunks, 1):
 
-        response.raise_for_status()
+            sent = False
 
-        try:
-            result = response.json()
+            for attempt in range(1, TELEGRAM_MAX_ATTEMPTS + 1):
 
-        except ValueError as exc:
-            raise RuntimeError(
-                "Telegram returned invalid JSON"
-            ) from exc
+                try:
+                    response = session.post(
+                        url,
+                        json={
+                            "chat_id": chat_id,
+                            "text": chunk,
+                            "parse_mode": "HTML",
+                            "disable_web_page_preview": True,
+                        },
+                        timeout=REQUEST_TIMEOUT,
+                    )
 
-        if (
-            not isinstance(result, dict)
-            or result.get("ok") is not True
-        ):
-            raise RuntimeError(
-                f"Telegram rejected message part {index}"
+                    if (
+                        response.status_code == 429
+                        or response.status_code >= 500
+                    ):
+                        if attempt == TELEGRAM_MAX_ATTEMPTS:
+                            response.raise_for_status()
+
+                        retry_after = None
+
+                        try:
+                            body = response.json()
+                            retry_after = safe_float(
+                                body.get("parameters", {}).get(
+                                    "retry_after"
+                                )
+                            )
+                        except (ValueError, AttributeError):
+                            pass
+
+                        if retry_after is None:
+                            retry_after = (
+                                RETRY_BASE_SECONDS ** attempt
+                            )
+
+                        retry_after = min(
+                            max(retry_after, 1),
+                            MAX_RETRY_AFTER_SECONDS,
+                        )
+
+                        logging.warning(
+                            "Telegram temporary error on part %s. "
+                            "Retry %s/%s after %.1f seconds.",
+                            index,
+                            attempt,
+                            TELEGRAM_MAX_ATTEMPTS,
+                            retry_after,
+                        )
+
+                        time.sleep(retry_after)
+                        continue
+
+                    response.raise_for_status()
+
+                    try:
+                        result = response.json()
+
+                    except ValueError as exc:
+                        raise RuntimeError(
+                            "Telegram returned invalid JSON"
+                        ) from exc
+
+                    if (
+                        not isinstance(result, dict)
+                        or result.get("ok") is not True
+                    ):
+                        raise RuntimeError(
+                            f"Telegram rejected message part {index}"
+                        )
+
+                    sent = True
+                    break
+
+                except requests.RequestException:
+
+                    if attempt == TELEGRAM_MAX_ATTEMPTS:
+                        raise
+
+                    delay = RETRY_BASE_SECONDS ** attempt
+
+                    logging.warning(
+                        "Telegram network error on part %s. "
+                        "Retry %s/%s after %s seconds.",
+                        index,
+                        attempt,
+                        TELEGRAM_MAX_ATTEMPTS,
+                        delay,
+                    )
+
+                    time.sleep(delay)
+
+            if not sent:
+                raise RuntimeError(
+                    f"Telegram message part {index} was not sent"
+                )
+
+            logging.info(
+                "Telegram report part %s/%s sent",
+                index,
+                len(chunks),
             )
-
-        logging.info(
-            "Telegram report part %s/%s sent",
-            index,
-            len(chunks),
-        )
 
 
 def main():

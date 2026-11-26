@@ -1,16 +1,15 @@
-
 """
 Binance Spot V3 Smart Signal Scanner
 Central Configuration Module
 
-Version: 3.2.0
+Version: 3.2.1
 Python: 3.11
 Market: Binance Spot Only
 
 Balanced signal sensitivity:
-- Avoid excessive filtering.
-- Preserve liquidity and risk controls.
-- Allow confirmed breakout without mandatory retest.
+- Avoid excessive filtering that starves valid setups.
+- Reduce false entries in weak/bearish conditions.
+- Preserve liquidity, fee, and risk controls.
 """
 
 from copy import deepcopy
@@ -22,7 +21,7 @@ import math
 # ============================================================
 
 CONFIG = {
-    "VERSION": "3.2.0",
+    "VERSION": "3.2.1",
     "EXCHANGE": "BINANCE",
     "MARKET_TYPE": "SPOT",
     "QUOTE_ASSET": "USDT",
@@ -133,7 +132,7 @@ STRATEGIES = {
 
     "REJECT_LATE_ENTRY": True,
 
-    "MAX_ENTRY_EXTENSION_PERCENT": 3.0,
+    "MAX_ENTRY_EXTENSION_PERCENT": 2.5,
     "RETEST_TOLERANCE_PERCENT": 0.5,
     "BREAKOUT_LOOKBACK_CANDLES": 20,
 }
@@ -191,8 +190,9 @@ FILTER_CONFIG = {
     "MIN_QUOTE_VOLUME_USDT": 3_000_000,
     "MIN_QUOTE_VOLUME": 3_000_000,
 
-    "MIN_RELATIVE_VOLUME": 1.05,
-    "PREFERRED_RELATIVE_VOLUME": 1.2,
+    # Balanced volume filter: avoids noise without starving setups.
+    "MIN_RELATIVE_VOLUME": 1.15,
+    "PREFERRED_RELATIVE_VOLUME": 1.35,
 
     "MAX_SPREAD_PERCENT": 0.15,
 
@@ -240,7 +240,7 @@ FILTER_CONFIG = {
 
         "REJECT_STALE_DATA": True,
 
-        "MAX_ROC_PERCENT": 4.0,
+        "MAX_ROC_PERCENT": 3.5,
         "MAX_BB_WIDTH": 0.20,
     },
 }
@@ -292,7 +292,7 @@ INDICATOR_CONFIG = {
     },
 
     "RELATIVE_VOLUME": {
-        "BASELINE_CANDLES": 10,
+        "BASELINE_CANDLES": 20,
     },
 
     "OBV": {
@@ -359,7 +359,8 @@ MARKET_CONFIG = {
         "UNKNOWN",
     ],
 
-    "ALLOW_SELECTIVE_SIGNALS_ON_BEARISH": True,
+    # Spot long signals perform poorly in bearish regimes.
+    "ALLOW_SELECTIVE_SIGNALS_ON_BEARISH": False,
 
     "REQUIRE_COMPLETE_BTC_DATA": True,
 }
@@ -731,6 +732,11 @@ def validate_config():
             "Risk per trade must be above 0 and at most 1%."
         )
 
+    if RISK_CONFIG["MAX_RISK_PERCENT"] != max_risk:
+        raise ValueError(
+            "Risk percentage compatibility settings do not match."
+        )
+
     if (
         not isinstance(min_rr, (int, float))
         or not math.isfinite(min_rr)
@@ -775,11 +781,20 @@ def validate_config():
             "Only USDT quote assets are allowed."
         )
 
+    if (
+        FILTER_CONFIG["MIN_24H_QUOTE_VOLUME_USDT"]
+        != FILTER_CONFIG["MIN_QUOTE_VOLUME_USDT"]
+    ):
+        raise ValueError(
+            "Quote volume configuration settings do not match."
+        )
+
     positive_filter_keys = (
         "MIN_24H_QUOTE_VOLUME_USDT",
         "MIN_24H_TRADE_COUNT",
         "MAX_SPREAD_PERCENT",
         "MIN_RELATIVE_VOLUME",
+        "PREFERRED_RELATIVE_VOLUME",
     )
 
     for key in positive_filter_keys:
@@ -797,6 +812,11 @@ def validate_config():
     if FILTER_CONFIG["MIN_RELATIVE_VOLUME"] < 0.5:
         raise ValueError(
             "Minimum relative volume is too low."
+        )
+
+    if FILTER_CONFIG["PREFERRED_RELATIVE_VOLUME"] < FILTER_CONFIG["MIN_RELATIVE_VOLUME"]:
+        raise ValueError(
+            "Preferred relative volume must be at least minimum relative volume."
         )
 
     if FILTER_CONFIG["MAX_SPREAD_PERCENT"] > 1.0:

@@ -92,6 +92,8 @@ def analyze_order_book(order_book: dict[str, Any] | None, fallback_price: float 
     if not isinstance(order_book, dict):
         return {
             "valid": False,
+            "best_bid": 0.0,
+            "best_ask": 0.0,
             "spread_percent": 0.0,
             "bid_depth_usdt": 0.0,
             "ask_depth_usdt": 0.0,
@@ -104,6 +106,8 @@ def analyze_order_book(order_book: dict[str, Any] | None, fallback_price: float 
     if not bids or not asks:
         return {
             "valid": False,
+            "best_bid": 0.0,
+            "best_ask": 0.0,
             "spread_percent": 0.0,
             "bid_depth_usdt": 0.0,
             "ask_depth_usdt": 0.0,
@@ -118,6 +122,8 @@ def analyze_order_book(order_book: dict[str, Any] | None, fallback_price: float 
     if best_bid <= 0 or best_ask <= 0 or best_bid_qty <= 0 or best_ask_qty <= 0 or best_ask < best_bid:
         return {
             "valid": False,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
             "spread_percent": 0.0,
             "bid_depth_usdt": 0.0,
             "ask_depth_usdt": 0.0,
@@ -129,6 +135,8 @@ def analyze_order_book(order_book: dict[str, Any] | None, fallback_price: float 
 
     return {
         "valid": True,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
         "spread_percent": round(spread_pct, 5),
         "bid_depth_usdt": round(bid_depth, 2),
         "ask_depth_usdt": round(ask_depth, 2),

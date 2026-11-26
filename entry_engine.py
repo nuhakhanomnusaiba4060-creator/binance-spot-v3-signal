@@ -288,25 +288,45 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
     latest = df.iloc[-1]
     close = _safe_float(latest.get("close"), 0.0)
     open_p = _safe_float(latest.get("open"), close)
+    high_p = _safe_float(latest.get("high"), close)
     low_p = _safe_float(latest.get("low"), close)
 
-    levels = support_resistance(df) if len(df) >= 5 else {}
+    prior = df.iloc[:-1] if len(df) > 1 else df
+    prior_highs = (
+        pd.to_numeric(prior.get("high"), errors="coerce").dropna()
+        if "high" in prior.columns
+        else pd.Series(dtype=float)
+    )
+    prior_closes = (
+        pd.to_numeric(prior.get("close"), errors="coerce").dropna()
+        if "close" in prior.columns
+        else pd.Series(dtype=float)
+    )
+    prior_lows = (
+        pd.to_numeric(prior.get("low"), errors="coerce").dropna()
+        if "low" in prior.columns
+        else pd.Series(dtype=float)
+    )
+
+    levels = support_resistance(prior if len(prior) >= 5 else df)
     support = _safe_float(levels.get("support") if isinstance(levels, dict) else None)
     resistance = _safe_float(levels.get("resistance") if isinstance(levels, dict) else None)
 
-    prior = df.iloc[:-1] if len(df) > 1 else df
-    prior_highs = pd.to_numeric(prior.get("high"), errors="coerce").dropna() if "high" in prior.columns else pd.Series(dtype=float)
-    prior_closes = pd.to_numeric(prior.get("close"), errors="coerce").dropna() if "close" in prior.columns else pd.Series(dtype=float)
-    prior_lows = pd.to_numeric(prior.get("low"), errors="coerce").dropna() if "low" in prior.columns else pd.Series(dtype=float)
-
     if not (_is_valid_num(resistance) and resistance > 0):
-        resistance = float(prior_highs.max()) if not prior_highs.empty else max(close * 1.02, 1.0)
+        if len(prior_highs) >= 3:
+            resistance = float(prior_highs.iloc[:-1].max())
+        elif not prior_highs.empty:
+            resistance = float(prior_highs.max())
+        else:
+            resistance = max(close * 1.02, 1.0)
+
     if not (_is_valid_num(support) and support > 0):
         support = float(prior_lows.min()) if not prior_lows.empty else max(close * 0.98, 0.5)
 
     retest_tol = _safe_float(INDICATOR_CONFIG.get("RETEST_TOLERANCE_PERCENT"), 0.5) / 100.0
     if not _is_valid_num(retest_tol) or retest_tol <= 0:
         retest_tol = 0.005
+    band_tol = max(retest_tol * 2.0, 0.01)
 
     above_res = bool(
         _is_valid_num(close)
@@ -331,34 +351,38 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
         and float(prior_closes.max()) >= resistance * (1.0 - retest_tol * 0.25)
     )
 
-    # Failed retest: close drops clearly below resistance and fails to hold above open
+    # A valid retest must hold at/near the broken level without breaking down or closing weak below it
+    near_resistance = bool(
+        _is_valid_num(resistance)
+        and resistance > 0
+        and abs(close - resistance) / resistance <= band_tol
+        and close >= resistance * (1.0 - retest_tol)
+        and (_is_valid_num(open_p) and close >= open_p * 0.999)
+    )
+
+    near_support_after_breakout = bool(
+        prior_broke_out
+        and _is_valid_num(support)
+        and support > 0
+        and abs(low_p - support) / support <= band_tol
+        and close >= support
+        and (_is_valid_num(open_p) and close >= open_p * 0.999)
+    )
+
+    retest_confirmed = bool(near_resistance or near_support_after_breakout)
+
+    # Failed retest: close drops below resistance band or rejects downward
     failed_retest = bool(
         _is_valid_num(resistance)
         and resistance > 0
-        and close < resistance * (1.0 - max(retest_tol * 1.5, 0.01))
-        and (_is_valid_num(open_p) and close < open_p)
-    )
-
-    # Valid retest: either holding near broken resistance or holding near support on a separate bar
-    retest_confirmed = bool(
-        not failed_retest
-        and _is_valid_num(close)
-        and close > 0
         and (
-            (
-                _is_valid_num(resistance)
-                and resistance > 0
-                and abs(close - resistance) / resistance <= max(retest_tol * 6.0, 0.04)
-                and close >= resistance * (1.0 - max(retest_tol * 2.0, 0.02))
-            )
-            or (
-                _is_valid_num(support)
-                and support > 0
-                and abs(low_p - support) / support <= max(retest_tol * 4.0, 0.025)
-                and close >= support
-            )
+            close < resistance * (1.0 - retest_tol)
+            or (_is_valid_num(open_p) and close < open_p and abs(high_p - resistance) / resistance <= band_tol * 1.5)
         )
     )
+
+    if failed_retest:
+        retest_confirmed = False
 
     breakout_confirmed = bool(
         (current_at_or_above_res and not failed_retest)

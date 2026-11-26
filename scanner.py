@@ -1,4 +1,3 @@
-
 """
 Binance Spot V3 Smart Signal Scanner
 Main Scanner Controller
@@ -7,56 +6,48 @@ Integration fixes:
 - Validate dictionary responses from register_signal() and send_signal().
 - Do not count failed Telegram deliveries as sent.
 - Refresh history after successful registration.
-- Preserve existing signal generation and strategy logic.
+- Prioritize higher-score setups and block entries during HIGH_RISK regimes.
 """
 
-import os
-import math
 import logging
+import math
+import os
 from datetime import datetime, timezone
 from typing import Any
-
-from config import (
-    CONFIG,
-    FILTER_CONFIG,
-    RISK_CONFIG,
-    API_CONFIG,
-)
-
-from data_provider import (
-    get_usdt_symbols,
-    get_klines,
-    get_24h_ticker,
-    get_order_book,
-)
-
-from market_filter import analyze_market
 
 from coin_selector import (
     select_coins,
     validate_candidate,
 )
-
+from config import (
+    API_CONFIG,
+    CONFIG,
+    FILTER_CONFIG,
+    RISK_CONFIG,
+)
+from data_provider import (
+    get_24h_ticker,
+    get_klines,
+    get_order_book,
+    get_usdt_symbols,
+)
 from entry_engine import (
     evaluate_scalp,
     evaluate_swing,
 )
-
+from market_filter import analyze_market
 from risk_manager import build_risk_plan
-
-from telegram_bot import (
-    send_connection_test,
-    send_signal,
-    credentials_available,
-)
-
 from signal_tracker import (
-    load_history,
     check_duplicate,
-    register_signal,
     expire_old_signals,
     expire_unfilled_entries,
+    load_history,
+    register_signal,
     update_signal_status,
+)
+from telegram_bot import (
+    credentials_available,
+    send_signal,
 )
 
 
@@ -159,12 +150,11 @@ def _normalize_key(value: str) -> str:
 
 
 def _find_config_value(
-    config: Any,
+    config_obj: Any,
     names: tuple,
     default: Any,
 ) -> Any:
-
-    if not isinstance(config, dict):
+    if not isinstance(config_obj, dict):
         return default
 
     wanted = {
@@ -172,18 +162,17 @@ def _find_config_value(
         for name in names
     }
 
-    for key, value in config.items():
+    for key, value in config_obj.items():
         if _normalize_key(key) in wanted:
             return value
 
-    for value in config.values():
+    for value in config_obj.values():
         if isinstance(value, dict):
             result = _find_config_value(
                 value,
                 names,
                 None,
             )
-
             if result is not None:
                 return result
 
@@ -194,15 +183,11 @@ def _safe_float(
     value: Any,
     default: float = 0.0,
 ) -> float:
-
     try:
         result = float(value)
-
         if not math.isfinite(result):
             return default
-
         return result
-
     except (TypeError, ValueError, OverflowError):
         return default
 
@@ -212,7 +197,6 @@ def _get_field(
     *names: str,
     default=None,
 ):
-
     if not isinstance(data, dict):
         return default
 
@@ -223,7 +207,6 @@ def _get_field(
 
     for name in names:
         key = _normalize_key(name)
-
         if key in normalized:
             return normalized[key]
 
@@ -237,7 +220,6 @@ def _operation_succeeded(result: Any) -> bool:
     A non-empty dictionary is truthy in Python.
     Therefore, bool(result) is not sufficient.
     """
-
     return (
         isinstance(result, dict)
         and result.get("success") is True
@@ -249,11 +231,8 @@ def _operation_succeeded(result: Any) -> bool:
 # ============================================================
 
 def validate_scanner_configuration() -> None:
-
     if not math.isfinite(CAPITAL_USDT):
-        raise ValueError(
-            "Capital must be finite."
-        )
+        raise ValueError("Capital must be finite.")
 
     if CAPITAL_USDT < 0:
         raise ValueError(
@@ -282,15 +261,11 @@ def validate_scanner_configuration() -> None:
             "KLINE_LIMIT must be at least 220."
         )
 
-    logger.info(
-        "Scanner configuration validated."
-    )
-
+    logger.info("Scanner configuration validated.")
     logger.info(
         "Mode: %s",
         "DRY RUN" if DRY_RUN else "LIVE",
     )
-
     logger.info(
         "Capital: %.2f USDT",
         CAPITAL_USDT,
@@ -302,30 +277,23 @@ def validate_scanner_configuration() -> None:
 # ============================================================
 
 def fetch_btc_market_data() -> dict:
-
-    logger.info(
-        "Fetching BTC market data."
-    )
+    logger.info("Fetching BTC market data.")
 
     btc_data = {}
 
     for timeframe in ("15m", "1h", "4h"):
-
         try:
             btc_data[timeframe] = get_klines(
                 "BTCUSDT",
                 timeframe,
                 limit=KLINE_LIMIT,
             )
-
         except Exception as exc:
-
             logger.error(
                 "BTC %s data failed: %s",
                 timeframe,
                 exc,
             )
-
             btc_data[timeframe] = None
 
     if any(
@@ -333,7 +301,6 @@ def fetch_btc_market_data() -> dict:
         or btc_data[tf].empty
         for tf in ("15m", "1h", "4h")
     ):
-
         raise RuntimeError(
             "Required BTC market data is incomplete."
         )
@@ -342,7 +309,6 @@ def fetch_btc_market_data() -> dict:
 
 
 def fetch_market_context() -> dict:
-
     btc_data = fetch_btc_market_data()
 
     market_context = analyze_market(
@@ -373,7 +339,6 @@ def get_ticker_value(
     ticker: dict,
     *names,
 ) -> float:
-
     return _safe_float(
         _get_field(ticker, *names)
     )
@@ -383,7 +348,6 @@ def prefilter_symbols(
     symbols: list,
     ticker_data: Any,
 ) -> list:
-
     min_volume = _safe_float(
         _find_config_value(
             FILTER_CONFIG,
@@ -416,9 +380,7 @@ def prefilter_symbols(
     eligible = []
 
     for symbol in symbols:
-
         ticker = ticker_data.get(symbol)
-
         if not isinstance(ticker, dict):
             continue
 
@@ -440,10 +402,7 @@ def prefilter_symbols(
             quote_volume >= min_volume
             and trade_count >= min_trades
         ):
-
-            eligible.append(
-                (symbol, quote_volume)
-            )
+            eligible.append((symbol, quote_volume))
 
     eligible.sort(
         key=lambda item: item[1],
@@ -452,14 +411,11 @@ def prefilter_symbols(
 
     return [
         symbol
-        for symbol, _ in eligible[
-            :MAX_ORDERBOOK_CANDIDATES
-        ]
+        for symbol, _ in eligible[:MAX_ORDERBOOK_CANDIDATES]
     ]
 
 
 def fetch_order_books(symbols: list) -> dict:
-
     order_books = {}
 
     logger.info(
@@ -468,15 +424,12 @@ def fetch_order_books(symbols: list) -> dict:
     )
 
     for symbol in symbols:
-
         try:
             order_books[symbol] = get_order_book(
                 symbol,
                 limit=ORDER_BOOK_LIMIT,
             )
-
         except Exception as exc:
-
             logger.warning(
                 "Order book failed for %s: %s",
                 symbol,
@@ -487,10 +440,7 @@ def fetch_order_books(symbols: list) -> dict:
 
 
 def collect_candidates() -> list:
-
-    logger.info(
-        "Loading Binance Spot USDT symbols."
-    )
+    logger.info("Loading Binance Spot USDT symbols.")
 
     symbols = get_usdt_symbols()
 
@@ -524,9 +474,7 @@ def collect_candidates() -> list:
     if not shortlisted:
         return []
 
-    order_books = fetch_order_books(
-        shortlisted
-    )
+    order_books = fetch_order_books(shortlisted)
 
     candidates = select_coins(
         shortlisted,
@@ -555,7 +503,6 @@ def collect_candidates() -> list:
 def fetch_symbol_market_data(
     symbol: str,
 ) -> dict:
-
     market_data = {}
 
     timeframes = (
@@ -566,7 +513,6 @@ def fetch_symbol_market_data(
     )
 
     for timeframe in timeframes:
-
         market_data[timeframe] = get_klines(
             symbol,
             timeframe,
@@ -577,7 +523,6 @@ def fetch_symbol_market_data(
             market_data[timeframe] is None
             or market_data[timeframe].empty
         ):
-
             raise RuntimeError(
                 f"Missing {timeframe} candles for {symbol}"
             )
@@ -592,7 +537,6 @@ def fetch_symbol_market_data(
 def is_eligible_signal(
     signal: Any,
 ) -> bool:
-
     if not isinstance(signal, dict):
         return False
 
@@ -613,9 +557,7 @@ def is_eligible_signal(
     if not symbol.endswith("USDT"):
         return False
 
-    if _safe_float(
-        signal.get("entry_price")
-    ) <= 0:
+    if _safe_float(signal.get("entry_price")) <= 0:
         return False
 
     return True
@@ -626,7 +568,6 @@ def is_eligible_signal(
 # ============================================================
 
 def get_signal_support(signal: dict):
-
     return (
         signal.get("support_level")
         or signal.get("nearest_support")
@@ -635,7 +576,6 @@ def get_signal_support(signal: dict):
 
 
 def get_signal_atr(signal: dict):
-
     return (
         signal.get("atr_value")
         or signal.get("atr")
@@ -645,11 +585,7 @@ def get_signal_atr(signal: dict):
 def get_signal_resistances(
     signal: dict,
 ) -> list:
-
-    levels = signal.get(
-        "resistance_levels",
-        [],
-    )
+    levels = signal.get("resistance_levels", [])
 
     if not isinstance(levels, list):
         return []
@@ -664,15 +600,10 @@ def get_signal_resistances(
 def attach_risk_plan(
     signal: dict,
 ) -> dict:
-
-    entry_price = _safe_float(
-        signal.get("entry_price")
-    )
+    entry_price = _safe_float(signal.get("entry_price"))
 
     if entry_price <= 0:
-        raise ValueError(
-            "Invalid signal entry price."
-        )
+        raise ValueError("Invalid signal entry price.")
 
     risk_percent = _safe_float(
         _find_config_value(
@@ -709,50 +640,29 @@ def attach_risk_plan(
         entry_price=entry_price,
         support_level=get_signal_support(signal),
         atr=get_signal_atr(signal),
-        resistance_levels=get_signal_resistances(
-            signal
-        ),
+        resistance_levels=get_signal_resistances(signal),
         risk_percent=risk_percent,
         fee_rate=fee_rate,
         slippage_rate=slippage_rate,
     )
 
     if not isinstance(risk_plan, dict):
-        raise ValueError(
-            "Invalid risk plan response."
-        )
+        raise ValueError("Invalid risk plan response.")
 
     signal["risk_plan"] = risk_plan
-
-    signal["risk_status"] = risk_plan.get(
-        "status",
-        "REJECT",
-    )
-
-    signal["strategy"] = signal.get(
-        "strategy",
-        "UNKNOWN",
-    )
+    signal["risk_status"] = risk_plan.get("status", "REJECT")
+    signal["strategy"] = signal.get("strategy", "UNKNOWN")
 
     if risk_plan.get("status") != "VALID":
-        raise ValueError(
-            "Risk manager rejected the setup."
-        )
+        raise ValueError("Risk manager rejected the setup.")
 
-    validation = risk_plan.get(
-        "validation",
-        {},
-    )
+    validation = risk_plan.get("validation", {})
 
     if not isinstance(validation, dict):
-        raise ValueError(
-            "Missing risk validation."
-        )
+        raise ValueError("Missing risk validation.")
 
     if validation.get("valid") is not True:
-        raise ValueError(
-            "Risk validation failed."
-        )
+        raise ValueError("Risk validation failed.")
 
     return signal
 
@@ -766,9 +676,7 @@ def is_duplicate_signal(
     strategy: str,
     history: dict,
 ) -> bool:
-
     try:
-
         return bool(
             check_duplicate(
                 symbol,
@@ -776,17 +684,12 @@ def is_duplicate_signal(
                 history=history,
             )
         )
-
     except Exception as exc:
-
         logger.error(
             "Duplicate check failed for %s: %s",
             symbol,
             exc,
         )
-
-        # Fail closed: do not send if duplicate
-        # validation itself fails.
         return True
 
 
@@ -797,9 +700,7 @@ def is_duplicate_signal(
 def update_existing_signals(
     ticker_data: dict,
 ) -> None:
-
     try:
-
         expire_old_signals()
         expire_unfilled_entries()
 
@@ -808,22 +709,16 @@ def update_existing_signals(
         if not isinstance(history, dict):
             return
 
-        signals = history.get(
-            "signals",
-            [],
-        )
+        signals = history.get("signals", [])
 
         if not isinstance(signals, list):
             return
 
         for item in signals:
-
             if not isinstance(item, dict):
                 continue
 
-            status = str(
-                item.get("status", "")
-            ).upper()
+            status = str(item.get("status", "")).upper()
 
             if status not in (
                 "ACTIVE",
@@ -833,12 +728,10 @@ def update_existing_signals(
                 continue
 
             symbol = item.get("symbol")
-
             if not symbol:
                 continue
 
             ticker = ticker_data.get(symbol)
-
             if not isinstance(ticker, dict):
                 continue
 
@@ -851,11 +744,7 @@ def update_existing_signals(
             if current_price <= 0:
                 continue
 
-            signal_id = (
-                item.get("signal_id")
-                or item.get("id")
-            )
-
+            signal_id = item.get("signal_id") or item.get("id")
             if not signal_id:
                 continue
 
@@ -865,7 +754,6 @@ def update_existing_signals(
             )
 
             if not _operation_succeeded(result):
-
                 logger.warning(
                     "Signal tracking update failed for %s: %s",
                     symbol,
@@ -873,7 +761,6 @@ def update_existing_signals(
                 )
 
     except Exception as exc:
-
         logger.error(
             "Signal tracking update failed: %s",
             exc,
@@ -888,44 +775,28 @@ def deliver_signal(
     signal: dict,
     history: dict,
 ) -> bool:
-
     if not is_eligible_signal(signal):
-        logger.warning(
-            "Ineligible signal rejected."
-        )
+        logger.warning("Ineligible signal rejected.")
         return False
 
     symbol = signal["symbol"]
+    strategy = str(signal.get("strategy", "")).upper()
 
-    strategy = str(
-        signal.get("strategy", "")
-    ).upper()
-
-    # Duplicate protection
-    if is_duplicate_signal(
-        symbol,
-        strategy,
-        history,
-    ):
-
+    if is_duplicate_signal(symbol, strategy, history):
         logger.info(
             "Duplicate signal skipped: %s %s",
             symbol,
             strategy,
         )
-
         return False
 
-    # DRY RUN: no history registration and no Telegram delivery
     if DRY_RUN:
-
         logger.info(
             "[DRY RUN] Valid signal: %s | %s | Score %s",
             symbol,
             signal.get("classification"),
             signal.get("score"),
         )
-
         return False
 
     # --------------------------------------------------------
@@ -933,33 +804,21 @@ def deliver_signal(
     # --------------------------------------------------------
 
     try:
-
-        registration = register_signal(
-            signal
-        )
-
+        registration = register_signal(signal)
     except Exception as exc:
-
         logger.exception(
             "Signal registration exception for %s: %s",
             symbol,
             exc,
         )
-
         return False
 
-    # IMPORTANT:
-    # Do not use `if not registration`.
-    # Failure dictionaries are also truthy in Python.
-
     if not _operation_succeeded(registration):
-
         logger.error(
             "Signal registration failed: %s | Result: %s",
             symbol,
             registration,
         )
-
         return False
 
     logger.info(
@@ -968,18 +827,12 @@ def deliver_signal(
         registration.get("signal_id"),
     )
 
-    # Refresh in-memory history so that another signal
-    # in this same scanner run cannot bypass duplicate checks.
     try:
-
         refreshed_history = load_history()
-
         if isinstance(refreshed_history, dict):
             history.clear()
             history.update(refreshed_history)
-
     except Exception as exc:
-
         logger.warning(
             "History refresh failed after registration: %s",
             exc,
@@ -990,35 +843,21 @@ def deliver_signal(
     # --------------------------------------------------------
 
     try:
-
-        telegram_result = send_signal(
-            signal
-        )
-
+        telegram_result = send_signal(signal)
     except Exception as exc:
-
         logger.exception(
             "Telegram delivery exception for %s: %s",
             symbol,
             exc,
         )
-
         return False
 
-    # IMPORTANT:
-    # send_signal() returns a dictionary.
-    # Validate its success field explicitly.
-
-    if not _operation_succeeded(
-        telegram_result
-    ):
-
+    if not _operation_succeeded(telegram_result):
         logger.error(
             "Telegram delivery failed: %s | Result: %s",
             symbol,
             telegram_result,
         )
-
         return False
 
     logger.info(
@@ -1037,31 +876,22 @@ def evaluate_candidate(
     candidate: dict,
     market_context: dict,
 ) -> list:
-
     symbol = candidate["symbol"]
-
     results = []
 
     try:
-
-        market_data = fetch_symbol_market_data(
-            symbol
-        )
-
+        market_data = fetch_symbol_market_data(symbol)
     except Exception as exc:
-
         logger.warning(
             "Candle data failed for %s: %s",
             symbol,
             exc,
         )
-
         return results
 
     strategies = []
 
     if STRATEGIES_ENABLED["SCALP"]:
-
         strategies.append(
             (
                 "SCALP",
@@ -1075,7 +905,6 @@ def evaluate_candidate(
         )
 
     if STRATEGIES_ENABLED["SWING"]:
-
         strategies.append(
             (
                 "SWING",
@@ -1088,14 +917,8 @@ def evaluate_candidate(
             )
         )
 
-    for (
-        strategy_name,
-        evaluator,
-        strategy_data,
-    ) in strategies:
-
+    for strategy_name, evaluator, strategy_data in strategies:
         try:
-
             signal = evaluator(
                 symbol,
                 strategy_data,
@@ -1104,69 +927,32 @@ def evaluate_candidate(
             )
 
             if not is_eligible_signal(signal):
-
                 reason = (
-                    signal.get(
-                        "reason",
-                        "UNKNOWN_REASON",
-                    )
+                    signal.get("reason", "UNKNOWN_REASON")
                     if isinstance(signal, dict)
                     else "INVALID_RESPONSE"
                 )
-
                 logger.info(
                     "%s evaluation rejected for %s: %s",
                     strategy_name,
                     symbol,
                     reason,
                 )
-
                 continue
 
             signal["strategy"] = strategy_name
+            signal["current_price"] = candidate["last_price"]
+            signal["last_price"] = candidate["last_price"]
+            signal["quote_volume_24h"] = candidate["quote_volume_24h"]
+            signal["spread_percent"] = candidate["spread_percent"]
+            signal["market_status"] = market_context.get("market_status")
+            signal["btc_trend"] = market_context.get("btc_trend")
+            signal["generated_at"] = datetime.now(timezone.utc).isoformat()
 
-            signal["current_price"] = (
-                candidate["last_price"]
-            )
-
-            signal["last_price"] = (
-                candidate["last_price"]
-            )
-
-            signal["quote_volume_24h"] = (
-                candidate["quote_volume_24h"]
-            )
-
-            signal["spread_percent"] = (
-                candidate["spread_percent"]
-            )
-
-            signal["market_status"] = (
-                market_context.get(
-                    "market_status"
-                )
-            )
-
-            signal["btc_trend"] = (
-                market_context.get(
-                    "btc_trend"
-                )
-            )
-
-            signal["generated_at"] = (
-                datetime.now(
-                    timezone.utc
-                ).isoformat()
-            )
-
-            signal = attach_risk_plan(
-                signal
-            )
-
+            signal = attach_risk_plan(signal)
             results.append(signal)
 
         except Exception as exc:
-
             logger.info(
                 "%s evaluation rejected for %s: %s",
                 strategy_name,
@@ -1182,18 +968,11 @@ def evaluate_candidate(
 # ============================================================
 
 def run_scanner() -> dict:
-
-    started_at = datetime.now(
-        timezone.utc
-    )
+    started_at = datetime.now(timezone.utc)
 
     report = {
         "started_at": started_at.isoformat(),
-        "mode": (
-            "DRY_RUN"
-            if DRY_RUN
-            else "LIVE"
-        ),
+        "mode": "DRY_RUN" if DRY_RUN else "LIVE",
         "market_status": "UNKNOWN",
         "btc_trend": "UNKNOWN",
         "symbols_scanned": 0,
@@ -1204,66 +983,46 @@ def run_scanner() -> dict:
     }
 
     logger.info("=" * 55)
-    logger.info(
-        "BINANCE SPOT V3 SCANNER STARTED"
-    )
+    logger.info("BINANCE SPOT V3 SCANNER STARTED")
     logger.info("=" * 55)
 
     try:
-
         validate_scanner_configuration()
 
         market_context = fetch_market_context()
 
-        report["market_status"] = (
-            market_context.get(
-                "market_status",
-                "UNKNOWN",
-            )
+        report["market_status"] = market_context.get(
+            "market_status",
+            "UNKNOWN",
+        )
+        report["btc_trend"] = market_context.get(
+            "btc_trend",
+            "UNKNOWN",
         )
 
-        report["btc_trend"] = (
-            market_context.get(
-                "btc_trend",
-                "UNKNOWN",
-            )
-        )
-
-        market_status = report[
-            "market_status"
-        ]
+        market_status = report["market_status"]
 
         if market_status == "UNKNOWN":
-
             logger.warning(
                 "Market filter rejected scanning: UNKNOWN"
             )
-
             return report
 
         if market_status == "HIGH_RISK":
-
             logger.warning(
-                "BTC HIGH_RISK: Continuing candidate scan "
-                "with strict entry and risk validation."
+                "Market filter in HIGH_RISK: Skipping new spot entries."
             )
+            return report
 
         # ----------------------------------------------------
         # COLLECT CANDIDATES
         # ----------------------------------------------------
 
         candidates = collect_candidates()
-
-        report["candidates_selected"] = len(
-            candidates
-        )
+        report["candidates_selected"] = len(candidates)
 
         if not candidates:
-
-            logger.info(
-                "No eligible candidates found."
-            )
-
+            logger.info("No eligible candidates found.")
             return report
 
         # ----------------------------------------------------
@@ -1271,108 +1030,70 @@ def run_scanner() -> dict:
         # ----------------------------------------------------
 
         if not DRY_RUN:
-
             ticker_data = get_24h_ticker()
-
             if not isinstance(ticker_data, dict):
                 ticker_data = {}
-
-            update_existing_signals(
-                ticker_data
-            )
+            update_existing_signals(ticker_data)
 
         # ----------------------------------------------------
         # LOAD HISTORY
         # ----------------------------------------------------
 
         history = load_history()
-
         if not isinstance(history, dict):
-            history = {
-                "signals": [],
-            }
+            history = {"signals": []}
 
         # ----------------------------------------------------
         # EVALUATE CANDIDATES
         # ----------------------------------------------------
 
-        signals = []
+        all_signals = []
 
         for candidate in candidates:
-
-            if len(signals) >= MAX_SIGNALS_PER_RUN:
-                break
-
             report["symbols_scanned"] += 1
 
             candidate_signals = evaluate_candidate(
                 candidate,
                 market_context,
             )
+            all_signals.extend(candidate_signals)
 
-            for signal in candidate_signals:
-
-                if len(signals) >= MAX_SIGNALS_PER_RUN:
-                    break
-
-                signals.append(signal)
-
-        report["signals_generated"] = len(
-            signals
+        # Rank highest-score setups first before capping per run.
+        all_signals.sort(
+            key=lambda item: _safe_float(item.get("score"), 0.0),
+            reverse=True,
         )
+
+        signals = all_signals[:MAX_SIGNALS_PER_RUN]
+        report["signals_generated"] = len(signals)
 
         # ----------------------------------------------------
         # DELIVER SIGNALS
         # ----------------------------------------------------
 
         for signal in signals:
-
             try:
-
-                sent = deliver_signal(
-                    signal,
-                    history,
-                )
-
+                sent = deliver_signal(signal, history)
                 if sent is True:
-
                     report["signals_sent"] += 1
-
             except Exception as exc:
-
                 logger.exception(
                     "Unexpected delivery error for %s: %s",
                     signal.get("symbol", "UNKNOWN"),
                     exc,
                 )
-
-                report["errors"].append(
-                    str(exc)
-                )
+                report["errors"].append(str(exc))
 
         return report
 
     except Exception as exc:
-
-        logger.exception(
-            "Scanner execution failed."
-        )
-
-        report["errors"].append(
-            str(exc)
-        )
-
+        logger.exception("Scanner execution failed.")
+        report["errors"].append(str(exc))
         return report
 
     finally:
-
-        finished_at = datetime.now(
-            timezone.utc
-        )
-
-        report["finished_at"] = (
-            finished_at.isoformat()
-        )
+        finished_at = datetime.now(timezone.utc)
+        report["finished_at"] = finished_at.isoformat()
 
         logger.info(
             "Scanner finished | Candidates: %s | "
@@ -1389,10 +1110,5 @@ def run_scanner() -> dict:
 # ============================================================
 
 if __name__ == "__main__":
-
     result = run_scanner()
-
-    logger.info(
-        "FINAL SCAN REPORT: %s",
-        result,
-    )
+    logger.info("FINAL SCAN REPORT: %s", result)

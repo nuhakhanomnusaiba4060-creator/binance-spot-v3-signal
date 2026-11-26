@@ -3,10 +3,8 @@
 Binance Spot V3 Smart Signal Scanner
 Entry Signal Generation Engine
 
-TIME-FRAME AWARE BREAKOUT + DYNAMIC RVOL:
-- BULLISH: strict (1.2x / 1.3x)
-- NEUTRAL: moderate (0.5x / 0.6x)
-- BEARISH: very relaxed (0.4x / 0.5x)
+Balanced breakout + retest + early breakout hold.
+Spot market only.
 """
 
 import logging
@@ -53,9 +51,9 @@ def _setting(key, default):
     return default if value is None else value
 
 
-MIN_SCORE = int(_setting("MIN_SCORE", 10))
-STRONG_MIN_SCORE = int(_setting("STRONG_MIN_SCORE", 10))
-EXCELLENT_MIN_SCORE = int(_setting("EXCELLENT_MIN_SCORE", 13))
+MIN_SCORE = int(_setting("MIN_SCORE", 9))
+STRONG_MIN_SCORE = int(_setting("STRONG_MIN_SCORE", 9))
+EXCELLENT_MIN_SCORE = int(_setting("EXCELLENT_MIN_SCORE", 12))
 MAX_SCORE = int(_setting("MAX_SCORE", 15))
 
 
@@ -64,28 +62,28 @@ MAX_SCORE = int(_setting("MAX_SCORE", 15))
 # =========================================================
 
 SCALP_CONFIG = {
-    "MIN_RVOL": 1.2,
-    "MIN_ADX": 18.0,
-    "RSI_MIN": 48.0,
+    "MIN_RVOL": 1.0,
+    "MIN_ADX": 14.0,
+    "RSI_MIN": 45.0,
     "RSI_MAX": 72.0,
     "MAX_ROC": 4.0,
-    "MAX_BB_WIDTH": 0.22,
+    "MAX_BB_WIDTH": 0.25,
     "MAX_EMA_EXTENSION_PCT": 3.5,
 }
 
 SWING_CONFIG = {
-    "MIN_RVOL": 1.3,
-    "MIN_ADX": 22.0,
-    "RSI_MIN": 50.0,
+    "MIN_RVOL": 1.1,
+    "MIN_ADX": 16.0,
+    "RSI_MIN": 47.0,
     "RSI_MAX": 74.0,
     "MAX_ROC": 5.0,
-    "MAX_BB_WIDTH": 0.25,
+    "MAX_BB_WIDTH": 0.28,
     "MAX_EMA_EXTENSION_PCT": 4.0,
 }
 
-MAX_RSI = 78
+MAX_RSI = 76
 BREAKOUT_LOOKBACK = 20
-RETEST_TOLERANCE_PCT = 1.5
+RETEST_TOLERANCE_PCT = 0.5
 MAX_BREAKOUT_EXTENSION_PCT = 2.5
 
 MAX_CONSECUTIVE_BULLISH = 4
@@ -125,41 +123,40 @@ def _get_lookback(timeframe):
 
 def _get_dynamic_config(strategy, market_status):
     """
-    Returns dynamic config based on market status.
-
-    BULLISH: strict base values
-    NEUTRAL: moderate RVOL and ADX relaxation
-    BEARISH: additional RVOL and ADX relaxation
-    UNKNOWN: treated as NEUTRAL
+    Balanced thresholds:
+    BULLISH: normal confirmation.
+    NEUTRAL: moderately relaxed.
+    BEARISH: selective, but not excessively restrictive.
     """
 
     base_config = SCALP_CONFIG if strategy == "SCALP" else SWING_CONFIG
     config = dict(base_config)
-
     market_status = str(market_status).upper()
 
     if market_status == "BULLISH":
-        pass
+        return config
 
-    elif market_status in ("NEUTRAL", "UNKNOWN"):
+    if market_status == "NEUTRAL":
         config["MIN_RVOL"] = max(
-            0.4,
-            base_config["MIN_RVOL"] - 0.7,
+            0.85,
+            base_config["MIN_RVOL"] - 0.15,
         )
         config["MIN_ADX"] = max(
-            8.0,
-            base_config["MIN_ADX"] - 6.0,
+            12.0,
+            base_config["MIN_ADX"] - 2.0,
         )
+        return config
 
-    elif market_status == "BEARISH":
+    if market_status == "BEARISH":
         config["MIN_RVOL"] = max(
-            0.3,
-            base_config["MIN_RVOL"] - 0.8,
+            1.0,
+            base_config["MIN_RVOL"],
         )
         config["MIN_ADX"] = max(
-            6.0,
-            base_config["MIN_ADX"] - 8.0,
+            16.0,
+            base_config["MIN_ADX"],
         )
+        return config
 
     return config
 
@@ -234,7 +231,14 @@ def _prepare_dataframe(df):
     if not isinstance(df, pd.DataFrame):
         return None
 
-    required = ("open", "high", "low", "close", "volume")
+    required = (
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    )
+
     minimum = max(30, BREAKOUT_LOOKBACK + 3)
 
     if len(df) < minimum:
@@ -348,6 +352,7 @@ def _indicator_snapshot(df):
         "sma_200": _value_from_columns(df, ["sma_200"]),
 
         "rsi": _value_from_columns(df, ["rsi"]),
+
         "macd_histogram": _value_from_columns(
             df,
             ["macd_histogram"],
@@ -357,8 +362,16 @@ def _indicator_snapshot(df):
         "atr": _value_from_columns(df, ["atr"]),
         "vwap": _value_from_columns(df, ["vwap"]),
 
-        "rvol": _value_from_columns(df, ["relative_volume"]),
-        "bb_width": _value_from_columns(df, ["bb_width"]),
+        "rvol": _value_from_columns(
+            df,
+            ["relative_volume"],
+        ),
+
+        "bb_width": _value_from_columns(
+            df,
+            ["bb_width"],
+        ),
+
         "roc": _value_from_columns(df, ["roc"]),
 
         "volume_momentum": _value_from_columns(
@@ -420,7 +433,10 @@ def _has_consecutive_bullish_candles(
     max_count=MAX_CONSECUTIVE_BULLISH,
     min_body_pct=MIN_CANDLE_BODY_PCT,
 ):
-    if not isinstance(df, pd.DataFrame) or len(df) < max_count + 2:
+    if (
+        not isinstance(df, pd.DataFrame)
+        or len(df) < max_count + 2
+    ):
         return False
 
     candles = df.iloc[-(max_count + 2):-1]
@@ -528,73 +544,102 @@ def _has_insufficient_upside(
 # =========================================================
 
 def _get_breakout_data(df, timeframe="5m"):
+    """
+    Detect recent confirmed breakout.
+
+    Accepted setups:
+    1. Fresh breakout on latest closed candle.
+    2. Retest of resistance followed by a hold.
+    3. Early hold above broken resistance.
+
+    The latest row must be a CLOSED candle.
+    """
+
     if not isinstance(df, pd.DataFrame):
         return {}
 
     lookback = _get_lookback(timeframe)
     minimum = lookback + 3
 
-    if len(df) < minimum:
+    required_columns = {
+        "high",
+        "low",
+        "close",
+    }
+
+    if (
+        len(df) < minimum
+        or not required_columns.issubset(df.columns)
+    ):
         return {}
 
-    required_columns = {"high", "low", "close"}
+    latest_index = len(df) - 1
+    latest = df.iloc[latest_index]
 
-    if not required_columns.issubset(df.columns):
+    latest_close = _number(latest["close"])
+    latest_low = _number(latest["low"])
+
+    if (
+        latest_close is None
+        or latest_low is None
+        or latest_close <= 0
+    ):
         return {}
 
-    retest_index = len(df) - 1
-
-    retest_close = _number(
-        df.iloc[retest_index]["close"]
-    )
-
-    retest_low = _number(
-        df.iloc[retest_index]["low"]
-    )
-
-    if None in (retest_close, retest_low):
-        return {}
-
-    breakout_found = False
-    breakout_index = -1
+    breakout_index = None
     resistance = None
 
-    for i in range(2, 12):
-        b_idx = len(df) - i
+    first_index = max(
+        lookback,
+        len(df) - 10,
+    )
 
-        if b_idx < lookback:
-            continue
-
-        b_candle = df.iloc[b_idx]
-
-        pre_b_close = _number(
+    # Search recent closed candles for a genuine breakout.
+    for b_idx in range(
+        latest_index,
+        first_index - 1,
+        -1,
+    ):
+        previous_close = _number(
             df.iloc[b_idx - 1]["close"]
         )
 
-        b_close = _number(
-            b_candle["close"]
+        breakout_close = _number(
+            df.iloc[b_idx]["close"]
         )
 
-        if None in (pre_b_close, b_close):
+        if (
+            previous_close is None
+            or breakout_close is None
+        ):
             continue
 
-        res_start = b_idx - lookback
-        res_data = df.iloc[res_start:b_idx]
+        resistance_data = df.iloc[
+            b_idx - lookback:b_idx
+        ]
 
-        res_level = _number(
-            res_data["close"].max()
+        resistance_level = _number(
+            resistance_data["high"].max()
         )
 
-        if res_level is None or res_level <= 0:
+        if (
+            resistance_level is None
+            or resistance_level <= 0
+        ):
             continue
 
-        if pre_b_close <= res_level and b_close > res_level:
-            breakout_found = True
+        if (
+            previous_close <= resistance_level
+            and breakout_close > resistance_level
+        ):
             breakout_index = b_idx
-            resistance = res_level
+            resistance = resistance_level
             break
 
-    if not breakout_found:
+    if (
+        breakout_index is None
+        or resistance is None
+    ):
         return {}
 
     lower_boundary = resistance * (
@@ -606,37 +651,57 @@ def _get_breakout_data(df, timeframe="5m"):
     )
 
     retest_valid = (
-        retest_low >= lower_boundary
-        and retest_low <= upper_boundary
-        and retest_close >= resistance * 0.995
+        lower_boundary <= latest_low <= upper_boundary
+        and latest_close >= resistance * 0.995
+    )
+
+    fresh_breakout = (
+        breakout_index == latest_index
+    )
+
+    breakout_hold = (
+        latest_close >= resistance
+        and latest_low >= resistance * 0.99
+    )
+
+    valid_breakout = (
+        retest_valid
+        or fresh_breakout
+        or breakout_hold
     )
 
     distance_pct = (
-        (retest_close - resistance)
+        (latest_close - resistance)
         / resistance
         * 100
     )
 
     return {
         "resistance": resistance,
-        "breakout": retest_valid,
-        "retest": retest_valid,
-        "above_resistance": retest_close >= resistance * 0.995,
+
+        "breakout": bool(valid_breakout),
+        "retest": bool(retest_valid),
+        "breakout_hold": bool(breakout_hold),
+        "fresh_breakout": bool(fresh_breakout),
+
+        "above_resistance": (
+            latest_close >= resistance * 0.995
+        ),
 
         "breakout_close": _number(
             df.iloc[breakout_index]["close"]
         ),
 
-        "retest_close": retest_close,
-        "retest_low": retest_low,
+        "retest_close": latest_close,
+        "retest_low": latest_low,
 
         "distance_from_resistance_pct": distance_pct,
 
         "breakout_index": breakout_index,
-        "retest_index": retest_index,
+        "retest_index": latest_index,
 
         "candles_since_breakout": (
-            retest_index - breakout_index
+            latest_index - breakout_index
         ),
 
         "lookback_used": lookback,
@@ -648,7 +713,10 @@ def _get_breakout_data(df, timeframe="5m"):
 # =========================================================
 
 def _find_support(df, lookback=30):
-    if not isinstance(df, pd.DataFrame) or len(df) < 5:
+    if (
+        not isinstance(df, pd.DataFrame)
+        or len(df) < 5
+    ):
         return None
 
     recent = df.iloc[-lookback:]
@@ -664,7 +732,10 @@ def _find_support(df, lookback=30):
 
 
 def _find_resistance_levels(df, lookback=100):
-    if not isinstance(df, pd.DataFrame) or len(df) < 20:
+    if (
+        not isinstance(df, pd.DataFrame)
+        or len(df) < 20
+    ):
         return []
 
     recent = df.iloc[-(lookback + 1):-1]
@@ -681,7 +752,10 @@ def _find_resistance_levels(df, lookback=100):
         else None
     )
 
-    if current_price is None or current_price <= 0:
+    if (
+        current_price is None
+        or current_price <= 0
+    ):
         return []
 
     levels = []
@@ -713,7 +787,11 @@ def _find_resistance_levels(df, lookback=100):
                 levels.append(current)
 
     return sorted(
-        set(level for level in levels if level > 0)
+        set(
+            level
+            for level in levels
+            if level > 0
+        )
     )
 
 
@@ -724,27 +802,43 @@ def _find_resistance_levels(df, lookback=100):
 def _buyer_confirmation(snapshot):
     close = snapshot.get("close")
     open_price = snapshot.get("open")
+    high = snapshot.get("high")
+    low = snapshot.get("low")
     volume = snapshot.get("volume")
     previous_volume = snapshot.get("previous_volume")
 
     if None in (
         close,
         open_price,
+        high,
+        low,
         volume,
         previous_volume,
     ):
         return False
 
-    if close > open_price:
-        return True
+    candle_range = high - low
 
     if (
-        previous_volume > 0
-        and volume >= previous_volume * 0.6
+        candle_range <= 0
+        or close <= open_price
     ):
-        return True
+        return False
 
-    return False
+    close_position = (
+        (close - low) / candle_range
+    )
+
+    volume_confirmed = (
+        previous_volume > 0
+        and volume >= previous_volume * 0.75
+    )
+
+    strong_close = close_position >= 0.65
+
+    return bool(
+        volume_confirmed or strong_close
+    )
 
 
 # =========================================================
@@ -756,15 +850,24 @@ def _validate_market_context(market_context):
         return False, "MISSING_MARKET_CONTEXT"
 
     market_status = str(
-        market_context.get("market_status", "UNKNOWN")
+        market_context.get(
+            "market_status",
+            "UNKNOWN",
+        )
     ).upper()
 
     risk_level = str(
-        market_context.get("risk_level", "UNKNOWN")
+        market_context.get(
+            "risk_level",
+            "UNKNOWN",
+        )
     ).upper()
 
     btc_trend = str(
-        market_context.get("btc_trend", "UNKNOWN")
+        market_context.get(
+            "btc_trend",
+            "UNKNOWN",
+        )
     ).upper()
 
     if market_status not in (
@@ -786,19 +889,15 @@ def _validate_market_context(market_context):
 
     if risk_level in (
         "UNKNOWN",
+        "HIGH",
         "EXTREME",
         "VERY_HIGH",
     ):
         return False, "MARKET_RISK_" + risk_level
 
-    if risk_level == "HIGH":
-        if (
-            market_status != "BEARISH"
-            or btc_trend != "BEARISH"
-        ):
-            return False, "MARKET_RISK_HIGH"
-
-    signal_policy = market_context.get("signal_policy")
+    signal_policy = market_context.get(
+        "signal_policy"
+    )
 
     if not isinstance(signal_policy, dict):
         return False, "MISSING_SIGNAL_POLICY"
@@ -811,7 +910,10 @@ def _validate_market_context(market_context):
         "NEUTRAL",
     )
 
-    if signal_policy.get("market_caution") is not expected_caution:
+    if (
+        signal_policy.get("market_caution")
+        is not expected_caution
+    ):
         return False, "MARKET_CAUTION_MISMATCH"
 
     return True, None
@@ -831,7 +933,10 @@ def score_setup(setup_data):
             "components": {},
         }
 
-    components = setup_data.get("components", {})
+    components = setup_data.get(
+        "components",
+        {},
+    )
 
     if not isinstance(components, dict):
         components = {}
@@ -842,14 +947,23 @@ def score_setup(setup_data):
         if value is True
     )
 
-    score = min(score, MAX_SCORE)
+    score = min(
+        score,
+        MAX_SCORE,
+    )
 
     btc_trend = str(
-        setup_data.get("btc_trend", "UNKNOWN")
+        setup_data.get(
+            "btc_trend",
+            "UNKNOWN",
+        )
     ).upper()
 
     market_status = str(
-        setup_data.get("market_status", "UNKNOWN")
+        setup_data.get(
+            "market_status",
+            "UNKNOWN",
+        )
     ).upper()
 
     required_score = MIN_SCORE
@@ -907,8 +1021,17 @@ def validate_entry(
             "reason": "INVALID_STRATEGY",
         }
 
+    if not isinstance(market_context, dict):
+        return {
+            "valid": False,
+            "reason": "MISSING_MARKET_CONTEXT",
+        }
+
     market_status = str(
-        market_context.get("market_status", "UNKNOWN")
+        market_context.get(
+            "market_status",
+            "UNKNOWN",
+        )
     ).upper()
 
     config = _get_dynamic_config(
@@ -959,7 +1082,10 @@ def validate_entry(
     rsi = snapshot["rsi"]
     rvol = snapshot["rvol"]
 
-    if snapshot["atr"] <= 0 or ema_20 <= 0:
+    if (
+        snapshot["atr"] <= 0
+        or ema_20 <= 0
+    ):
         return {
             "valid": False,
             "reason": "INVALID_ATR_OR_EMA",
@@ -1061,16 +1187,10 @@ def validate_entry(
             "reason": "NO_FRESH_BREAKOUT",
         }
 
-    if not breakout_data["retest"]:
-        return {
-            "valid": False,
-            "reason": "SEPARATE_CANDLE_RETEST_NOT_CONFIRMED",
-        }
-
     if not breakout_data["above_resistance"]:
         return {
             "valid": False,
-            "reason": "RETEST_CLOSE_BELOW_RESISTANCE",
+            "reason": "PRICE_BELOW_BREAKOUT_LEVEL",
         }
 
     if (
@@ -1110,13 +1230,27 @@ def validate_entry(
         "resistance": breakout_data["resistance"],
 
         "breakout": True,
-        "retest": True,
+        "retest": bool(
+            breakout_data.get("retest")
+        ),
+
+        "breakout_hold": bool(
+            breakout_data.get("breakout_hold")
+        ),
+
+        "fresh_breakout": bool(
+            breakout_data.get("fresh_breakout")
+        ),
+
         "buyer_confirmation": True,
 
         "breakout_close": breakout_data["breakout_close"],
         "retest_close": breakout_data["retest_close"],
 
-        "extension_pct": round(extension_pct, 4),
+        "extension_pct": round(
+            extension_pct,
+            4,
+        ),
 
         "atr": snapshot["atr"],
         "rsi": rsi,
@@ -1147,7 +1281,10 @@ def _build_components_scalp(
         "multi_timeframe_trend": trend_ok,
 
         "ema_trend": _trend_is_bullish(trigger),
-        "moving_average_trend": _moving_average_is_bullish(trigger),
+
+        "moving_average_trend": _moving_average_is_bullish(
+            trigger
+        ),
 
         "rsi_momentum": (
             trigger.get("rsi") is not None
@@ -1185,7 +1322,11 @@ def _build_components_scalp(
 
         "breakout_retest": (
             entry_validation.get("breakout") is True
-            and entry_validation.get("retest") is True
+            and (
+                entry_validation.get("retest") is True
+                or entry_validation.get("breakout_hold") is True
+                or entry_validation.get("fresh_breakout") is True
+            )
         ),
 
         "bb_squeeze": (
@@ -1224,7 +1365,10 @@ def _build_components_swing(
         "multi_timeframe_trend": trend_ok,
 
         "ema_trend": _trend_is_bullish(trigger),
-        "moving_average_trend": _moving_average_is_bullish(trigger),
+
+        "moving_average_trend": _moving_average_is_bullish(
+            trigger
+        ),
 
         "rsi_momentum": (
             trigger.get("rsi") is not None
@@ -1262,7 +1406,11 @@ def _build_components_swing(
 
         "breakout_retest": (
             entry_validation.get("breakout") is True
-            and entry_validation.get("retest") is True
+            and (
+                entry_validation.get("retest") is True
+                or entry_validation.get("breakout_hold") is True
+                or entry_validation.get("fresh_breakout") is True
+            )
         ),
 
         "bb_squeeze": (
@@ -1329,11 +1477,16 @@ def _evaluate(
 
     if strategy == "SCALP":
         trigger_tf = "5m"
-        confirmation_tfs = ("15m", "30m")
-
+        confirmation_tfs = (
+            "15m",
+            "30m",
+        )
     else:
         trigger_tf = "15m"
-        confirmation_tfs = ("30m", "1h")
+        confirmation_tfs = (
+            "30m",
+            "1h",
+        )
 
     required_tfs = (
         trigger_tf,
@@ -1356,7 +1509,9 @@ def _evaluate(
             }
 
         prepared_data[timeframe] = prepared
-        snapshots[timeframe] = _indicator_snapshot(prepared)
+        snapshots[timeframe] = _indicator_snapshot(
+            prepared
+        )
 
     trigger = snapshots[trigger_tf]
 
@@ -1379,8 +1534,8 @@ def _evaluate(
             "reason": entry_validation.get("reason"),
         }
 
-    # Multi-timeframe trend is evaluated as a scoring component.
-    # It is NOT a standalone hard rejection anymore.
+    # Multi-timeframe trend is a scoring component,
+    # not a separate hard rejection.
     trend_ok = _check_confirmation_trend(
         confirmation_snapshots
     )
@@ -1391,11 +1546,17 @@ def _evaluate(
     )
 
     market_status = str(
-        market_context.get("market_status", "UNKNOWN")
+        market_context.get(
+            "market_status",
+            "UNKNOWN",
+        )
     ).upper()
 
     btc_trend = str(
-        market_context.get("btc_trend", "UNKNOWN")
+        market_context.get(
+            "btc_trend",
+            "UNKNOWN",
+        )
     ).upper()
 
     if strategy == "SCALP":
@@ -1406,7 +1567,6 @@ def _evaluate(
             market_status,
             btc_trend,
         )
-
     else:
         components = _build_components_swing(
             trigger,
@@ -1416,7 +1576,6 @@ def _evaluate(
             btc_trend,
         )
 
-    # Buyer confirmation remains mandatory.
     if not buyer_ok:
         return {
             "symbol": symbol,
@@ -1426,7 +1585,6 @@ def _evaluate(
             "components": components,
         }
 
-    # Score is the final decision after mandatory safety checks.
     scoring = score_setup({
         "components": components,
         "btc_trend": btc_trend,
@@ -1498,7 +1656,19 @@ def _evaluate(
         "btc_trend": btc_trend,
 
         "breakout_confirmed": True,
-        "retest_confirmed": True,
+
+        "retest_confirmed": bool(
+            entry_validation.get("retest")
+        ),
+
+        "breakout_hold_confirmed": bool(
+            entry_validation.get("breakout_hold")
+        ),
+
+        "fresh_breakout_confirmed": bool(
+            entry_validation.get("fresh_breakout")
+        ),
+
         "buyer_confirmation": True,
 
         "entry_status": "CANDIDATE",

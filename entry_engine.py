@@ -64,18 +64,17 @@ def _prepare_df(df: Any) -> pd.DataFrame | None:
 def _validate_market_context(market_context: dict[str, Any] | None) -> tuple[bool, str]:
     """Validate market regime so HIGH_RISK or UNKNOWN blocks entries safely."""
     if market_context is None:
-        return True, "BULLISH"
+        return False, "MISSING_MARKET_CONTEXT"
     if not isinstance(market_context, dict):
         return False, "INVALID_MARKET_CONTEXT"
 
-    status = str(market_context.get("market_status", "BULLISH")).upper()
+    status = str(market_context.get("market_status", "UNKNOWN")).upper()
     if status in ("HIGH_RISK", "UNKNOWN"):
         return False, f"MARKET_{status}"
 
     allow_bearish = bool(MARKET_FILTER_CONFIG.get("ALLOW_BEARISH_SIGNALS", False))
     if status == "BEARISH" and not allow_bearish:
-        # Allow penalty-based evaluation if score is strong, unless explicitly disallowed
-        return True, status
+        return False, "BEARISH_NOT_ALLOWED"
 
     return True, status
 
@@ -103,6 +102,80 @@ def _has_insufficient_upside(
 
     upside_pct = ((resistance_level - entry_price) / entry_price) * 100.0
     return upside_pct < max(0.5, req_pct * 0.65)
+
+
+def _has_consecutive_bullish_candles(
+    df: pd.DataFrame,
+    max_candles: int | None = None,
+    min_body_pct: float | None = None,
+) -> bool:
+    """Detect consecutive strong bullish candles that indicate late pump chase."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return False
+
+    count_limit = int(
+        max_candles
+        if max_candles is not None
+        else _safe_float(COIN_SELECTION_CONFIG.get("MAX_CONSECUTIVE_STRONG_BULL_CANDLES"), 3)
+    )
+    body_thresh = (
+        min_body_pct
+        if min_body_pct is not None
+        else _safe_float(COIN_SELECTION_CONFIG.get("STRONG_BULL_CANDLE_BODY_PERCENT"), 1.5)
+    )
+    if not _is_valid_num(body_thresh):
+        body_thresh = 1.5
+
+    if count_limit < 2 or len(df) < count_limit:
+        return False
+
+    recent = df.tail(count_limit)
+    for _, row in recent.iterrows():
+        o = _safe_float(row.get("open"))
+        c = _safe_float(row.get("close"))
+        if not (_is_valid_num(o) and _is_valid_num(c)) or o <= 0 or c <= o:
+            return False
+        body_pct = ((c - o) / o) * 100.0
+        if body_pct < body_thresh:
+            return False
+
+    return True
+
+
+def _has_rvol_collapse(
+    df: pd.DataFrame,
+    spike_threshold: float | None = None,
+    collapse_ratio: float | None = None,
+) -> bool:
+    """Detect RVOL spike followed by sharp volume drop-off."""
+    if df is None or not isinstance(df, pd.DataFrame) or "relative_volume" not in df.columns:
+        return False
+    if len(df) < 4:
+        return False
+
+    spike_thresh = (
+        spike_threshold
+        if spike_threshold is not None
+        else _safe_float(COIN_SELECTION_CONFIG.get("RVOL_SPIKE_THRESHOLD"), 2.0)
+    )
+    ratio_thresh = (
+        collapse_ratio
+        if collapse_ratio is not None
+        else _safe_float(COIN_SELECTION_CONFIG.get("RVOL_COLLAPSE_RATIO_OF_PEAK"), 0.70)
+    )
+    if not _is_valid_num(spike_thresh):
+        spike_thresh = 2.0
+    if not _is_valid_num(ratio_thresh):
+        ratio_thresh = 0.70
+
+    rvol_series = pd.to_numeric(df["relative_volume"], errors="coerce").tail(4)
+    current_rvol = _safe_float(rvol_series.iloc[-1])
+    prior_peak = _safe_float(rvol_series.iloc[:-1].max())
+
+    if not (_is_valid_num(prior_peak) and _is_valid_num(current_rvol)):
+        return False
+
+    return bool(prior_peak >= spike_thresh and current_rvol < (prior_peak * ratio_thresh))
 
 
 def _buyer_confirmation(df: pd.DataFrame) -> bool:
@@ -179,24 +252,6 @@ def _check_pump_and_overextension(
         COIN_SELECTION_CONFIG.get("MAX_EXTENSION_PERCENT"),
         3.0,
     )
-    max_bull_candles = int(
-        _safe_float(
-            COIN_SELECTION_CONFIG.get("MAX_CONSECUTIVE_STRONG_BULL_CANDLES"),
-            3,
-        )
-    )
-    min_bull_body_pct = _safe_float(
-        COIN_SELECTION_CONFIG.get("STRONG_BULL_CANDLE_BODY_PERCENT"),
-        1.5,
-    )
-    rvol_spike_thresh = _safe_float(
-        COIN_SELECTION_CONFIG.get("RVOL_SPIKE_THRESHOLD"),
-        2.0,
-    )
-    rvol_collapse_ratio = _safe_float(
-        COIN_SELECTION_CONFIG.get("RVOL_COLLAPSE_RATIO_OF_PEAK"),
-        0.70,
-    )
 
     roc = _safe_float(latest.get("roc"))
     if _is_valid_num(roc) and roc > max_roc * 1.35:
@@ -212,30 +267,11 @@ def _check_pump_and_overextension(
         if ext_pct > max_ext_pct * 1.4:
             return False, "PRICE_TOO_FAR_ABOVE_EMA20"
 
-    if max_bull_candles >= 2 and len(df) >= max_bull_candles:
-        recent = df.tail(max_bull_candles)
-        strong_count = 0
-        for _, row in recent.iterrows():
-            o = _safe_float(row.get("open"))
-            c = _safe_float(row.get("close"))
-            if _is_valid_num(o) and _is_valid_num(c) and o > 0 and c > o:
-                body_pct = ((c - o) / o) * 100.0
-                if body_pct >= min_bull_body_pct:
-                    strong_count += 1
-        if strong_count >= max_bull_candles and _is_valid_num(roc) and roc > max_roc:
-            return False, "CONSECUTIVE_PUMP_CANDLES"
+    if _has_consecutive_bullish_candles(df) and _is_valid_num(roc) and roc > max_roc:
+        return False, "CONSECUTIVE_PUMP_CANDLES"
 
-    if "relative_volume" in df.columns and len(df) >= 4:
-        rvol_series = pd.to_numeric(df["relative_volume"], errors="coerce").tail(4)
-        current_rvol = _safe_float(rvol_series.iloc[-1])
-        prior_peak = _safe_float(rvol_series.iloc[:-1].max())
-        if (
-            _is_valid_num(prior_peak)
-            and prior_peak >= rvol_spike_thresh
-            and _is_valid_num(current_rvol)
-            and current_rvol < (prior_peak * rvol_collapse_ratio)
-        ):
-            return False, "RVOL_COLLAPSE_AFTER_SPIKE"
+    if _has_rvol_collapse(df):
+        return False, "RVOL_COLLAPSE_AFTER_SPIKE"
 
     return True, "OK"
 

@@ -15,15 +15,10 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+import config as cfg
 from coin_selector import (
     select_coins,
     validate_candidate,
-)
-from config import (
-    API_CONFIG,
-    CONFIG,
-    FILTER_CONFIG,
-    RISK_CONFIG,
 )
 from data_provider import (
     get_24h_ticker,
@@ -60,6 +55,20 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
+# CONFIG ACCESSORS
+# ============================================================
+
+CORE_CONFIG = getattr(cfg, "CORE_CONFIG", {})
+API_CONFIG = getattr(cfg, "API_CONFIG", {})
+RISK_CONFIG = getattr(cfg, "RISK_CONFIG", {})
+COIN_SELECTION_CONFIG = getattr(
+    cfg,
+    "COIN_SELECTION_CONFIG",
+    getattr(cfg, "FILTER_CONFIG", {}),
+)
+
+
+# ============================================================
 # ENVIRONMENT AND CONFIGURATION
 # ============================================================
 
@@ -81,63 +90,6 @@ def _env_bool(name: str, default: bool) -> bool:
         f"Invalid {name} value: {value!r}."
     )
 
-
-DRY_RUN = _env_bool(
-    "DRY_RUN",
-    CONFIG.get("DEFAULT_DRY_RUN", True),
-)
-
-
-def _parse_capital() -> float:
-    raw = os.getenv("SCANNER_CAPITAL_USDT")
-
-    if raw is None or not raw.strip():
-        if DRY_RUN:
-            capital = CONFIG.get(
-                "SIMULATION_CAPITAL_USDT",
-                100.0,
-            )
-        else:
-            capital = 0.0
-    else:
-        try:
-            capital = float(raw.strip())
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(
-                "SCANNER_CAPITAL_USDT must be a valid number."
-            ) from exc
-
-    try:
-        capital = float(capital)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(
-            "Configured capital is invalid."
-        ) from exc
-
-    if not math.isfinite(capital) or capital < 0:
-        raise ValueError(
-            "Capital must be finite and non-negative."
-        )
-
-    return capital
-
-
-CAPITAL_USDT = _parse_capital()
-
-MAX_ORDERBOOK_CANDIDATES = 30
-KLINE_LIMIT = 300
-ORDER_BOOK_LIMIT = 100
-MAX_SIGNALS_PER_RUN = 3
-
-STRATEGIES_ENABLED = {
-    "SCALP": True,
-    "SWING": True,
-}
-
-
-# ============================================================
-# GENERAL HELPERS
-# ============================================================
 
 def _normalize_key(value: str) -> str:
     return (
@@ -191,6 +143,70 @@ def _safe_float(
     except (TypeError, ValueError, OverflowError):
         return default
 
+
+DRY_RUN = _env_bool(
+    "DRY_RUN",
+    bool(
+        _find_config_value(
+            CORE_CONFIG,
+            ("DRY_RUN", "DEFAULT_DRY_RUN"),
+            True,
+        )
+    ),
+)
+
+
+def _parse_capital() -> float:
+    raw = os.getenv("SCANNER_CAPITAL_USDT")
+
+    if raw is None or not raw.strip():
+        if DRY_RUN:
+            capital = _find_config_value(
+                RISK_CONFIG,
+                ("DEFAULT_CAPITAL_USDT", "SIMULATION_CAPITAL_USDT"),
+                100.0,
+            )
+        else:
+            capital = 0.0
+    else:
+        try:
+            capital = float(raw.strip())
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "SCANNER_CAPITAL_USDT must be a valid number."
+            ) from exc
+
+    try:
+        capital = float(capital)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "Configured capital is invalid."
+        ) from exc
+
+    if not math.isfinite(capital) or capital < 0:
+        raise ValueError(
+            "Capital must be finite and non-negative."
+        )
+
+    return capital
+
+
+CAPITAL_USDT = _parse_capital()
+
+MAX_ORDERBOOK_CANDIDATES = 30
+KLINE_LIMIT = 300
+ORDER_BOOK_LIMIT = 100
+MAX_SIGNALS_PER_RUN = 3
+
+STRATEGIES_ENABLED = {
+    "SCALP": True,
+    "SWING": True,
+}
+
+
+# ============================================================
+# GENERAL HELPERS
+# ============================================================
 
 def _get_field(
     data: dict,
@@ -350,7 +366,7 @@ def prefilter_symbols(
 ) -> list:
     min_volume = _safe_float(
         _find_config_value(
-            FILTER_CONFIG,
+            COIN_SELECTION_CONFIG,
             (
                 "MIN_24H_QUOTE_VOLUME_USDT",
                 "MIN_QUOTE_VOLUME_USDT",
@@ -363,8 +379,9 @@ def prefilter_symbols(
     min_trades = int(
         _safe_float(
             _find_config_value(
-                FILTER_CONFIG,
+                COIN_SELECTION_CONFIG,
                 (
+                    "MIN_TRADE_COUNT_24H",
                     "MIN_24H_TRADES",
                     "MIN_TRADES",
                 ),
@@ -439,7 +456,7 @@ def fetch_order_books(symbols: list) -> dict:
     return order_books
 
 
-def collect_candidates() -> list:
+def collect_candidates(ticker_data: dict | None = None) -> list:
     logger.info("Loading Binance Spot USDT symbols.")
 
     symbols = get_usdt_symbols()
@@ -454,7 +471,8 @@ def collect_candidates() -> list:
         len(symbols),
     )
 
-    ticker_data = get_24h_ticker()
+    if ticker_data is None:
+        ticker_data = get_24h_ticker()
 
     if not isinstance(ticker_data, dict):
         raise RuntimeError(
@@ -608,16 +626,19 @@ def attach_risk_plan(
     risk_percent = _safe_float(
         _find_config_value(
             RISK_CONFIG,
-            ("MAX_RISK_PERCENT",),
+            ("MAX_RISK_PERCENT", "MAX_RISK_PER_TRADE"),
             1.0,
         ),
         1.0,
     )
+    if 0 < risk_percent <= 0.1:
+        risk_percent = risk_percent * 100.0
 
     fee_rate = _safe_float(
         _find_config_value(
             RISK_CONFIG,
             (
+                "FEE_RATE_PER_SIDE",
                 "FEE_RATE",
                 "TRADING_FEE_RATE",
             ),
@@ -629,7 +650,7 @@ def attach_risk_plan(
     slippage_rate = _safe_float(
         _find_config_value(
             RISK_CONFIG,
-            ("SLIPPAGE_RATE",),
+            ("SLIPPAGE_RATE_PER_SIDE", "SLIPPAGE_RATE"),
             0.001,
         ),
         0.001,
@@ -1015,10 +1036,16 @@ def run_scanner() -> dict:
             return report
 
         # ----------------------------------------------------
-        # COLLECT CANDIDATES
+        # FETCH TICKER ONCE AND COLLECT CANDIDATES
         # ----------------------------------------------------
 
-        candidates = collect_candidates()
+        ticker_data = get_24h_ticker()
+        if not isinstance(ticker_data, dict):
+            raise RuntimeError(
+                "Invalid 24h ticker response."
+            )
+
+        candidates = collect_candidates(ticker_data=ticker_data)
         report["candidates_selected"] = len(candidates)
 
         if not candidates:
@@ -1030,9 +1057,6 @@ def run_scanner() -> dict:
         # ----------------------------------------------------
 
         if not DRY_RUN:
-            ticker_data = get_24h_ticker()
-            if not isinstance(ticker_data, dict):
-                ticker_data = {}
             update_existing_signals(ticker_data)
 
         # ----------------------------------------------------
@@ -1058,13 +1082,21 @@ def run_scanner() -> dict:
             )
             all_signals.extend(candidate_signals)
 
-        # Rank highest-score setups first before capping per run.
+        # Rank highest-score setups first and keep best setup per symbol.
         all_signals.sort(
             key=lambda item: _safe_float(item.get("score"), 0.0),
             reverse=True,
         )
 
-        signals = all_signals[:MAX_SIGNALS_PER_RUN]
+        deduped_signals = []
+        seen_symbols = set()
+        for sig in all_signals:
+            sym = str(sig.get("symbol", "")).upper()
+            if sym and sym not in seen_symbols:
+                seen_symbols.add(sym)
+                deduped_signals.append(sig)
+
+        signals = deduped_signals[:MAX_SIGNALS_PER_RUN]
         report["signals_generated"] = len(signals)
 
         # ----------------------------------------------------

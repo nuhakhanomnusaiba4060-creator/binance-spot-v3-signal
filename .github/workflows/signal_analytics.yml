@@ -1,4 +1,3 @@
-
 name: Binance Spot V3 Smart Signal Scanner
 
 on:
@@ -6,6 +5,12 @@ on:
     - cron: "*/5 * * * *"
 
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run in dry-run mode without sending live Telegram alerts (true/false)"
+        required: false
+        default: "false"
+        type: string
 
 permissions:
   contents: write
@@ -20,7 +25,7 @@ jobs:
     timeout-minutes: 10
 
     env:
-      DRY_RUN: "false"
+      DRY_RUN: ${{ inputs.dry_run || 'false' }}
       SCANNER_CAPITAL_USDT: ${{ vars.SCANNER_CAPITAL_USDT }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -30,6 +35,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -49,26 +55,16 @@ jobs:
           import os
           import sys
 
-          required = [
-              "TELEGRAM_BOT_TOKEN",
-              "TELEGRAM_CHAT_ID",
-              "SCANNER_CAPITAL_USDT",
-          ]
+          dry_run = os.getenv("DRY_RUN", "false").strip().lower() in ("1", "true", "yes")
+          capital_raw = os.getenv("SCANNER_CAPITAL_USDT", "").strip()
 
-          missing = [
-              name for name in required
-              if not os.getenv(name, "").strip()
-          ]
-
-          if missing:
-              print("ERROR: Missing GitHub Secrets/Variables:")
-              for name in missing:
-                  print(f"- {name}")
+          if not capital_raw:
+              print("ERROR: Missing SCANNER_CAPITAL_USDT variable.")
               sys.exit(1)
 
           try:
-              capital = float(os.environ["SCANNER_CAPITAL_USDT"])
-          except (TypeError, ValueError):
+              capital = float(capital_raw)
+          except ValueError:
               print("ERROR: SCANNER_CAPITAL_USDT is invalid.")
               sys.exit(1)
 
@@ -76,14 +72,29 @@ jobs:
               print("ERROR: Capital must be greater than zero.")
               sys.exit(1)
 
-          if os.getenv("DRY_RUN", "").lower() != "false":
-              print("ERROR: Live mode is not enabled.")
-              sys.exit(1)
+          if not dry_run:
+              missing_secrets = [
+                  name for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
+                  if not os.getenv(name, "").strip()
+              ]
+              if missing_secrets:
+                  print("ERROR: Missing required GitHub Secrets for live mode:")
+                  for name in missing_secrets:
+                      print(f"- {name}")
+                  sys.exit(1)
 
-          print("Live configuration validation successful.")
+          print("Configuration validation successful.")
           print(f"Capital: {capital:.2f} USDT")
-          print("Dry Run: DISABLED")
+          print(f"Dry Run: {'ENABLED' if dry_run else 'DISABLED'}")
           PY
+
+      - name: Run unit tests if present
+        run: |
+          if [ -d "tests" ] || ls test_*.py 1>/dev/null 2>&1; then
+            pytest -q
+          else
+            echo "No pytest files found; skipping test step."
+          fi
 
       - name: Run Binance Spot V3 Scanner
         run: |
@@ -100,6 +111,9 @@ jobs:
 
             if ! git diff --cached --quiet; then
               git commit -m "Update V3 signal history"
-              git push
+              git pull --rebase --autostash origin "${{ github.ref_name }}"
+              git push origin "${{ github.ref_name }}"
+            else
+              echo "No changes in signal_history.json to commit."
             fi
           fi

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-26T14:57:12.970811+00:00",
+  "updated_at": "2026-11-26T15:16:51.794414+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -750,7 +750,7 @@
         "t2": 3.110057039525,
         "t3": 3.14506844743
       },
-      "current_price": 3.051,
+      "current_price": 2.992,
       "status": "TARGET_1_HIT",
       "t1_hit": true,
       "t2_hit": false,
@@ -763,7 +763,7 @@
       "max_price_seen": 3.105,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-26T14:57:12.966211+00:00"
+      "last_updated": "2026-11-26T15:16:51.788889+00:00"
     },
     {
       "signal_id": "BTCUSDT_SWING_20261125T214221.040487+0000",
@@ -960,7 +960,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.1488,
+      "current_price": 0.1472,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -973,7 +973,7 @@
       "max_price_seen": 0.1494,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-26T14:57:12.968958+00:00"
+      "last_updated": "2026-11-26T15:16:51.791750+00:00"
     },
     {
       "signal_id": "XRPUSDT_SWING_20261126T035101.586796+0000",
@@ -1140,20 +1140,20 @@
         "t2": 9.618255395195,
         "t3": null
       },
-      "current_price": 9.192,
-      "status": "ACTIVE",
+      "current_price": 9.116,
+      "status": "STOP_LOSS_HIT",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
-      "stop_loss_hit": false,
+      "stop_loss_hit": true,
       "entry_reached": true,
       "entry_expiry": "2026-11-26T10:48:25.409192+00:00",
       "entry_window_expired": false,
       "entry_reached_at": "2026-11-26T09:54:24.644309+00:00",
       "max_price_seen": 9.261,
-      "result": null,
-      "closed_at": null,
-      "last_updated": "2026-11-26T14:57:12.970788+00:00"
+      "result": "LOSS",
+      "closed_at": "2026-11-26T15:16:51.794378+00:00",
+      "last_updated": "2026-11-26T15:16:51.794378+00:00"
     },
     {
       "signal_id": "PUMPUSDT_SWING_20261126T094826.138835+0000",

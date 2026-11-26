@@ -1,10 +1,6 @@
 """
 Binance Spot V3 Smart Signal Scanner
 Entry & 15-Point Signal Evaluation Engine
-
-Evaluates SCALP (5m trigger / 15m, 30m confirmation) and
-SWING (15m trigger / 30m, 1h confirmation) setups while protecting
-against late pump chases and over-filtering valid setups.
 """
 
 from __future__ import annotations
@@ -37,6 +33,32 @@ COIN_SELECTION_CONFIG = getattr(
 SCORING_CONFIG = getattr(cfg, "SCORING_CONFIG", {})
 INDICATOR_CONFIG = getattr(cfg, "INDICATOR_CONFIG", {})
 
+APPROVED_CLASSIFICATIONS = ("STRONG BUY", "EXCELLENT BUY")
+
+SCALP_CONFIG: dict[str, Any] = {
+    "TRIGGER_TIMEFRAME": "5m",
+    "CONFIRMATION_TIMEFRAMES": ("15m", "30m"),
+    "MIN_RVOL": 1.15,
+    "RSI_MIN": 50.0,
+    "RSI_MAX": 70.0,
+    "MIN_ADX": 18.0,
+    "MAX_ROC_PERCENT": 4.0,
+    "MAX_BB_WIDTH": 0.20,
+    **(STRATEGY_CONFIG.get("SCALP", {}) if isinstance(STRATEGY_CONFIG, dict) else {}),
+}
+
+SWING_CONFIG: dict[str, Any] = {
+    "TRIGGER_TIMEFRAME": "15m",
+    "CONFIRMATION_TIMEFRAMES": ("30m", "1h"),
+    "MIN_RVOL": 1.35,
+    "RSI_MIN": 48.0,
+    "RSI_MAX": 68.0,
+    "MIN_ADX": 20.0,
+    "MAX_ROC_PERCENT": 5.5,
+    "MAX_BB_WIDTH": 0.25,
+    **(STRATEGY_CONFIG.get("SWING", {}) if isinstance(STRATEGY_CONFIG, dict) else {}),
+}
+
 
 def _safe_float(value: Any, default: float = float("nan")) -> float:
     try:
@@ -61,11 +83,28 @@ def _prepare_df(df: Any) -> pd.DataFrame | None:
         return None
 
 
+def _get_dynamic_config(strategy_name: str, market_status: str = "BULLISH") -> dict[str, Any]:
+    base = dict(SCALP_CONFIG if str(strategy_name).upper() == "SCALP" else SWING_CONFIG)
+    status = str(market_status or "UNKNOWN").upper()
+    base["MARKET_STATUS"] = status
+
+    if status == "NEUTRAL":
+        base["MIN_RVOL"] = round(_safe_float(base.get("MIN_RVOL"), 1.2) * 1.1, 4)
+        base["SCORE_PENALTY"] = int(_safe_float(MARKET_FILTER_CONFIG.get("NEUTRAL_SCORE_PENALTY"), 2))
+    elif status == "BEARISH":
+        base["MIN_RVOL"] = round(_safe_float(base.get("MIN_RVOL"), 1.2) * 1.2, 4)
+        base["SCORE_PENALTY"] = int(_safe_float(MARKET_FILTER_CONFIG.get("BEARISH_SCORE_PENALTY"), 2))
+        base["ALLOW_BEARISH"] = bool(MARKET_FILTER_CONFIG.get("ALLOW_BEARISH_SIGNALS", False))
+    else:
+        base["SCORE_PENALTY"] = 0
+        base["ALLOW_BEARISH"] = True
+
+    return base
+
+
 def _validate_market_context(market_context: dict[str, Any] | None) -> tuple[bool, str]:
-    """Validate market regime so HIGH_RISK or UNKNOWN blocks entries safely."""
-    if market_context is None:
-        return False, "MISSING_MARKET_CONTEXT"
-    if not isinstance(market_context, dict):
+    """Validate market regime so HIGH_RISK, UNKNOWN, or disallowed BEARISH blocks entries."""
+    if market_context is None or not isinstance(market_context, dict):
         return False, "INVALID_MARKET_CONTEXT"
 
     status = str(market_context.get("market_status", "UNKNOWN")).upper()
@@ -74,7 +113,7 @@ def _validate_market_context(market_context: dict[str, Any] | None) -> tuple[boo
 
     allow_bearish = bool(MARKET_FILTER_CONFIG.get("ALLOW_BEARISH_SIGNALS", False))
     if status == "BEARISH" and not allow_bearish:
-        return False, "BEARISH_NOT_ALLOWED"
+        return False, "BEARISH_MARKET_REJECTED"
 
     return True, status
 
@@ -178,30 +217,55 @@ def _has_rvol_collapse(
     return bool(prior_peak >= spike_thresh and current_rvol < (prior_peak * ratio_thresh))
 
 
-def _buyer_confirmation(df: pd.DataFrame) -> bool:
-    """Check buyer pressure on latest closed candle without over-restricting setups."""
-    if df is None or df.empty:
-        return False
-    latest = df.iloc[-1]
-    o = _safe_float(latest.get("open"))
-    c = _safe_float(latest.get("close"))
-    h = _safe_float(latest.get("high"))
-    l = _safe_float(latest.get("low"))
-
-    if not (_is_valid_num(o) and _is_valid_num(c)):
-        return False
-    if c < o:
+def _buyer_confirmation(source: pd.DataFrame | dict[str, Any] | None) -> bool:
+    """Check buyer pressure on latest closed candle or indicator snapshot dict."""
+    if source is None:
         return False
 
-    if _is_valid_num(h) and _is_valid_num(l) and h > l:
-        close_pos = (c - l) / (h - l)
-        return close_pos >= 0.35
+    if isinstance(source, dict):
+        row = source
+    elif isinstance(source, pd.DataFrame):
+        if source.empty:
+            return False
+        row = source.iloc[-1].to_dict()
+    else:
+        return False
 
-    return True
+    direction = str(row.get("candle_direction", "")).upper()
+    if direction == "BEARISH":
+        return False
+
+    o = _safe_float(row.get("open"))
+    c = _safe_float(row.get("close"))
+    h = _safe_float(row.get("high"))
+    l = _safe_float(row.get("low"))
+
+    if _is_valid_num(o) and _is_valid_num(c):
+        if c < o:
+            return False
+        if _is_valid_num(h) and _is_valid_num(l) and h > l:
+            close_pos = (c - l) / (h - l)
+            return close_pos >= 0.45
+        return c > o
+
+    if direction == "BULLISH":
+        return True
+
+    return False
 
 
-def _get_breakout_data(df: pd.DataFrame) -> dict[str, Any]:
+def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any]:
     """Extract support, resistance, latest price, and breakout/retest status."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return {
+            "timeframe": timeframe,
+            "close": None,
+            "support": None,
+            "resistance": None,
+            "breakout_confirmed": False,
+            "retest_confirmed": False,
+        }
+
     latest = df.iloc[-1]
     close = _safe_float(latest.get("close"))
     levels = support_resistance(df)
@@ -219,7 +283,8 @@ def _get_breakout_data(df: pd.DataFrame) -> dict[str, Any]:
     )
 
     return {
-        "close": close,
+        "timeframe": timeframe,
+        "close": close if _is_valid_num(close) else None,
         "support": support if has_sup else None,
         "resistance": resistance if has_res else None,
         "breakout_confirmed": breakout_confirmed,
@@ -277,19 +342,46 @@ def _check_pump_and_overextension(
 
 
 def score_setup(
-    trigger_df: pd.DataFrame,
+    trigger_source: pd.DataFrame | dict[str, Any],
     conf_dfs: list[pd.DataFrame] | None = None,
     market_context: dict[str, Any] | None = None,
     strat_cfg: dict[str, Any] | None = None,
-) -> tuple[int, dict[str, int], list[str]]:
+) -> dict[str, Any]:
     """
-    Compute 15-point setup score aligned with Config Specification v2.0.
+    Compute 15-point setup score from a DataFrame or indicator snapshot dict.
     """
     conf_list = conf_dfs if isinstance(conf_dfs, list) else []
     s_cfg = strat_cfg if isinstance(strat_cfg, dict) else {}
 
-    latest = trigger_df.iloc[-1]
-    prev = trigger_df.iloc[-2] if len(trigger_df) >= 2 else latest
+    if isinstance(trigger_source, pd.DataFrame):
+        if trigger_source.empty:
+            latest: dict[str, Any] = {}
+            prev: dict[str, Any] = {}
+            obv_rising = False
+            b_info = {"breakout_confirmed": False, "retest_confirmed": False}
+            buyer_ok = False
+        else:
+            latest = trigger_source.iloc[-1].to_dict()
+            prev = trigger_source.iloc[-2].to_dict() if len(trigger_source) >= 2 else latest
+            obv_series = pd.to_numeric(trigger_source.get("obv"), errors="coerce").dropna()
+            obv_rising = len(obv_series) >= 3 and float(obv_series.iloc[-1]) > float(obv_series.iloc[-3])
+            b_info = _get_breakout_data(trigger_source)
+            buyer_ok = _buyer_confirmation(trigger_source)
+    elif isinstance(trigger_source, dict):
+        latest = trigger_source
+        prev = trigger_source
+        obv_rising = _safe_float(latest.get("obv_slope"), 0.0) > 0
+        b_info = {
+            "breakout_confirmed": bool(latest.get("breakout_confirmed", False)),
+            "retest_confirmed": bool(latest.get("retest_confirmed", False)),
+        }
+        buyer_ok = _buyer_confirmation(latest)
+    else:
+        latest = {}
+        prev = {}
+        obv_rising = False
+        b_info = {"breakout_confirmed": False, "retest_confirmed": False}
+        buyer_ok = False
 
     close = _safe_float(latest.get("close"))
     ema_9 = _safe_float(latest.get("ema_9"))
@@ -312,9 +404,6 @@ def score_setup(
     roc = _safe_float(latest.get("roc"))
     vol_mom = _safe_float(latest.get("volume_momentum"))
 
-    obv_series = pd.to_numeric(trigger_df.get("obv"), errors="coerce").dropna()
-    obv_rising = len(obv_series) >= 3 and float(obv_series.iloc[-1]) > float(obv_series.iloc[-3])
-
     rsi_min = _safe_float(s_cfg.get("RSI_MIN"), 50.0)
     rsi_max = _safe_float(s_cfg.get("RSI_MAX"), 68.0)
     min_adx = _safe_float(s_cfg.get("MIN_ADX"), 18.0)
@@ -332,7 +421,7 @@ def score_setup(
         "market_condition": 1 if market_status == "BULLISH" else 0,
         "btc_context": 1 if ("BULL" in btc_trend or market_status == "BULLISH") else 0,
         "mtf_trend": 0,
-        "ema_trend": 1 if (_is_valid_num(ema_9) and _is_valid_num(ema_20) and ema_9 >= ema_20 and close >= ema_20 * 0.997) else 0,
+        "ema_trend": 1 if (_is_valid_num(ema_9) and _is_valid_num(ema_20) and ema_9 >= ema_20 and _is_valid_num(close) and close >= ema_20 * 0.997) else 0,
         "ma_trend": 0,
         "rsi_momentum": 1 if (_is_valid_num(rsi) and rsi_min <= rsi <= rsi_max) else 0,
         "macd_momentum": 1 if (
@@ -346,7 +435,7 @@ def score_setup(
             and (not _is_valid_num(plus_di) or not _is_valid_num(minus_di) or plus_di >= minus_di * 0.9)
         ) else 0,
         "relative_volume": 1 if (_is_valid_num(rvol) and rvol >= min_rvol * 0.95) else 0,
-        "vwap_confirmation": 1 if (_is_valid_num(vwap) and close >= vwap * 0.998) else 0,
+        "vwap_confirmation": 1 if (_is_valid_num(vwap) and _is_valid_num(close) and close >= vwap * 0.998) else 0,
         "obv_cmf_flow": 1 if (obv_rising or (_is_valid_num(cmf) and cmf > 0.0)) else 0,
         "breakout_retest_quality": 0,
         "bb_squeeze": 1 if (_is_valid_num(bb_width) and bb_width <= squeeze_max * 1.25) else 0,
@@ -366,31 +455,49 @@ def score_setup(
         breakdown["mtf_trend"] = 1
 
     ma_ok = False
-    if _is_valid_num(sma_20) and close >= sma_20 * 0.996:
-        ma_ok = True
-    if _is_valid_num(sma_50) and close >= sma_50 * 0.99:
-        ma_ok = True
-    if _is_valid_num(sma_200) and close >= sma_200 * 0.985:
-        ma_ok = True
+    if _is_valid_num(close):
+        if _is_valid_num(sma_20) and close >= sma_20 * 0.996:
+            ma_ok = True
+        if _is_valid_num(sma_50) and close >= sma_50 * 0.99:
+            ma_ok = True
+        if _is_valid_num(sma_200) and close >= sma_200 * 0.985:
+            ma_ok = True
     if ma_ok:
         breakdown["ma_trend"] = 1
 
-    b_info = _get_breakout_data(trigger_df)
-    if _buyer_confirmation(trigger_df) and (
-        b_info["breakout_confirmed"] or b_info["retest_confirmed"] or breakdown["ema_trend"] == 1
+    if buyer_ok and (
+        b_info.get("breakout_confirmed") or b_info.get("retest_confirmed") or breakdown["ema_trend"] == 1
     ):
         breakdown["breakout_retest_quality"] = 1
 
-    raw_score = sum(breakdown.values())
+    max_score = int(_safe_float(SCORING_CONFIG.get("MAX_SCORE"), 15))
+    raw_score = min(max_score, sum(breakdown.values()))
+
     penalty = 0
     if market_status == "NEUTRAL":
         penalty = int(_safe_float(MARKET_FILTER_CONFIG.get("NEUTRAL_SCORE_PENALTY"), 2))
     elif market_status == "BEARISH":
         penalty = int(_safe_float(MARKET_FILTER_CONFIG.get("BEARISH_SCORE_PENALTY"), 1))
 
-    final_score = max(0, raw_score - penalty)
+    final_score = max(0, min(max_score, raw_score - penalty))
+    strong_min = int(_safe_float(SCORING_CONFIG.get("STRONG_BUY_MIN_SCORE"), 10))
+    excellent_min = int(_safe_float(SCORING_CONFIG.get("EXCELLENT_BUY_MIN_SCORE"), 13))
+
+    if final_score >= excellent_min:
+        classification = "EXCELLENT BUY"
+    elif final_score >= strong_min:
+        classification = "STRONG BUY"
+    else:
+        classification = "REJECT"
+
     reasons = [k for k, v in breakdown.items() if v > 0]
-    return final_score, breakdown, reasons
+    return {
+        "score": final_score,
+        "max_score": max_score,
+        "classification": classification,
+        "breakdown": breakdown,
+        "confirmations": reasons,
+    }
 
 
 def validate_entry(
@@ -408,7 +515,10 @@ def validate_entry(
     if not mkt_ok:
         return {"eligible": False, "classification": "REJECT", "reason": mkt_reason}
 
-    strat_cfg = STRATEGY_CONFIG.get(strategy_name, {})
+    strat_cfg = _get_dynamic_config(
+        strategy_name,
+        str((market_context or {}).get("market_status", "BULLISH")),
+    )
     trigger_tf = strat_cfg.get("TRIGGER_TIMEFRAME", "5m" if strategy_name == "SCALP" else "15m")
     conf_tfs = strat_cfg.get(
         "CONFIRMATION_TIMEFRAMES",
@@ -426,7 +536,7 @@ def validate_entry(
     if not ok_pump:
         return {"eligible": False, "classification": "REJECT", "reason": pump_reason}
 
-    b_info = _get_breakout_data(trigger_df)
+    b_info = _get_breakout_data(trigger_df, timeframe=trigger_tf)
     entry_price = _safe_float(trigger_df.iloc[-1].get("close"))
     if _has_insufficient_upside(entry_price, b_info.get("resistance")):
         return {"eligible": False, "classification": "REJECT", "reason": "INSUFFICIENT_UPSIDE"}
@@ -437,16 +547,11 @@ def validate_entry(
         if prepared is not None:
             conf_dfs.append(prepared)
 
-    score, breakdown, reasons = score_setup(trigger_df, conf_dfs, market_context, strat_cfg)
+    score_res = score_setup(trigger_df, conf_dfs, market_context, strat_cfg)
+    score = int(score_res["score"])
+    classification = str(score_res["classification"])
 
-    strong_min = int(_safe_float(SCORING_CONFIG.get("STRONG_BUY_MIN_SCORE"), 10))
-    excellent_min = int(_safe_float(SCORING_CONFIG.get("EXCELLENT_BUY_MIN_SCORE"), 13))
-
-    if score >= excellent_min:
-        classification = "EXCELLENT BUY"
-    elif score >= strong_min:
-        classification = "STRONG BUY"
-    else:
+    if classification not in APPROVED_CLASSIFICATIONS:
         return {
             "eligible": False,
             "classification": "REJECT",
@@ -468,13 +573,13 @@ def validate_entry(
         "strategy": strategy_name,
         "classification": classification,
         "score": score,
-        "max_score": int(_safe_float(SCORING_CONFIG.get("MAX_SCORE"), 15)),
+        "max_score": int(score_res["max_score"]),
         "entry_price": round(entry_price, 8),
         "support_level": round(sup_val, 8) if _is_valid_num(sup_val) and sup_val > 0 else None,
         "atr_value": round(atr_val, 8) if _is_valid_num(atr_val) and atr_val > 0 else None,
         "resistance_levels": resistance_levels,
-        "score_breakdown": breakdown,
-        "confirmations": reasons,
+        "score_breakdown": score_res["breakdown"],
+        "confirmations": score_res["confirmations"],
         "reason": "SETUP_QUALIFIED",
     }
 

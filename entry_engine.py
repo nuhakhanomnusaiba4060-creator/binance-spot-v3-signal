@@ -268,11 +268,21 @@ def _buyer_confirmation(source: pd.DataFrame | dict[str, Any] | None) -> bool:
 
     return False
 
-
 def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any]:
     """Extract support, resistance, latest price, and fresh breakout / retest status."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return {
+        return {}
+
+    lookback = _get_lookback(timeframe)
+
+    # 🔥 SMART FALLBACK: If not enough candles, use smaller lookback
+    if len(df) < lookback + 3:
+        fallback_lookback = max(5, len(df) - 5)
+        lookback = min(lookback, fallback_lookback)
+
+    minimum = lookback + 3
+    if len(df) < minimum:
+        return {}
             "timeframe": timeframe,
             "close": 0.0,
             "support": 0.0,

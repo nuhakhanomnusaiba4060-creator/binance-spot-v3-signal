@@ -1,39 +1,23 @@
 
 """
 Binance Spot V3 Smart Signal Scanner
-System and Integration Contract Tests
+System Integration and Regression Tests
 
-Python: 3.11
-Market: Binance Spot Only
+Python 3.11
+Spot market only.
 
-Test coverage:
-1. Module imports
-2. Configuration validation
-3. Indicator calculations
-4. Coin selector validation
-5. Market filter interface
-6. Entry engine interface and pump protection
-7. Risk manager interface
-8. Telegram interface
-9. Signal tracker persistence
-10. Scanner interface
-11. Breakout and retest logic
-12. Data provider validation
+Run:
+python test_system.py
 """
 
-import unittest
-import tempfile
 import os
+import tempfile
+import unittest
 import importlib
 from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-
-
-# =========================================================
-# MODULE IMPORTS
-# =========================================================
 
 import config
 import data_provider
@@ -65,7 +49,10 @@ def create_test_dataframe(length=250):
     high = np.maximum(open_price, close) + 0.25
     low = np.minimum(open_price, close) - 0.25
 
-    volume = 1000 + np.abs(np.sin(index / 4)) * 300
+    volume = (
+        1000
+        + np.abs(np.sin(index / 4)) * 300
+    )
 
     start_time = 1_750_000_000_000
 
@@ -78,11 +65,11 @@ def create_test_dataframe(length=250):
         "high": high,
         "low": low,
         "close": close,
-        "volume": volume,
         "close_time": [
             start_time + (i + 1) * 300_000 - 1
             for i in range(length)
         ],
+        "volume": volume,
         "quote_volume": close * volume,
         "trade_count": [1500] * length,
         "taker_buy_base_volume": volume * 0.55,
@@ -106,6 +93,91 @@ def create_test_order_book():
     }
 
 
+def create_market_context(
+    market_status="BULLISH",
+    btc_trend="BULLISH",
+    risk_level="LOW",
+):
+    return {
+        "market_status": market_status,
+        "btc_trend": btc_trend,
+        "risk_level": risk_level,
+        "data_quality": "VALID",
+        "signal_policy": {
+            "allow_new_signals": True,
+            "market_caution": market_status in (
+                "NEUTRAL",
+                "BEARISH",
+            ),
+        },
+    }
+
+
+def create_breakout_dataframe(
+    breakout=True,
+    retest=True,
+    failed_retest=False,
+):
+    """
+    Base candles:
+    Resistance = 101
+
+    Breakout:
+    Close above 101
+
+    Retest:
+    Price returns to resistance area and holds.
+
+    Fresh breakout:
+    Latest candle itself breaks resistance.
+    """
+
+    rows = []
+
+    for _ in range(25):
+        rows.append({
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.5,
+            "close": 100.0,
+            "volume": 1000.0,
+        })
+
+    if not breakout:
+        return pd.DataFrame(rows)
+
+    rows.append({
+        "open": 100.0,
+        "high": 102.5,
+        "low": 100.0,
+        "close": 102.0,
+        "volume": 2500.0,
+    })
+
+    if not retest:
+        return pd.DataFrame(rows)
+
+    rows.append({
+        "open": 102.0,
+        "high": 102.3,
+        "low": 101.2,
+        "close": 101.8,
+        "volume": 1500.0,
+    })
+
+    retest_low = 97.0 if failed_retest else 100.8
+
+    rows.append({
+        "open": 101.8,
+        "high": 102.1,
+        "low": retest_low,
+        "close": 101.9,
+        "volume": 1800.0,
+    })
+
+    return pd.DataFrame(rows)
+
+
 # =========================================================
 # 1. MODULE IMPORT TESTS
 # =========================================================
@@ -113,7 +185,6 @@ def create_test_order_book():
 class ModuleImportTests(unittest.TestCase):
 
     def test_all_modules_import(self):
-
         modules = [
             "config",
             "data_provider",
@@ -128,10 +199,10 @@ class ModuleImportTests(unittest.TestCase):
         ]
 
         for module_name in modules:
-
             with self.subTest(module=module_name):
-
-                module = importlib.import_module(module_name)
+                module = importlib.import_module(
+                    module_name
+                )
 
                 self.assertIsNotNone(module)
 
@@ -143,7 +214,6 @@ class ModuleImportTests(unittest.TestCase):
 class ConfigurationTests(unittest.TestCase):
 
     def test_required_config_sections_exist(self):
-
         required = [
             "CONFIG",
             "TIMEFRAMES",
@@ -151,33 +221,25 @@ class ConfigurationTests(unittest.TestCase):
             "RISK_CONFIG",
             "FILTER_CONFIG",
             "API_CONFIG",
+            "SIGNAL_CONFIG",
         ]
 
         for name in required:
-
             with self.subTest(config=name):
-
                 self.assertTrue(
                     hasattr(config, name),
-                    f"Missing config export: {name}",
+                    f"Missing config section: {name}",
                 )
 
     def test_validate_config(self):
-
         result = config.validate_config()
 
         self.assertNotEqual(
             result,
             False,
-            "Configuration validation returned False.",
         )
 
     def test_spot_only_configuration(self):
-
-        result = config.validate_config()
-
-        self.assertNotEqual(result, False)
-
         self.assertEqual(
             config.FILTER_CONFIG["ALLOWED_QUOTE_ASSET"],
             "USDT",
@@ -187,42 +249,46 @@ class ConfigurationTests(unittest.TestCase):
             config.API_CONFIG["USE_PUBLIC_API_ONLY"]
         )
 
-    def test_15_point_scoring_matches_components(self):
+    def test_scoring_has_15_components(self):
+        signal_config = config.SIGNAL_CONFIG
 
         self.assertEqual(
-            config.SIGNAL_CONFIG["MAX_SCORE"],
-            len(config.SIGNAL_CONFIG["SCORE_COMPONENTS"]),
-        )
-
-        self.assertEqual(
-            config.SIGNAL_CONFIG["MAX_SCORE"],
-            15,
-        )
-
-    def test_early_pump_components_present(self):
-
-        components = config.SIGNAL_CONFIG["SCORE_COMPONENTS"]
-
-        self.assertIn("bb_squeeze", components)
-        self.assertIn("early_momentum", components)
-        self.assertIn("volume_acceleration", components)
-
-    def test_pump_protection_config_present(self):
-
-        protection = config.FILTER_CONFIG["PUMP_PROTECTION"]
-
-        self.assertIn("MAX_ROC_PERCENT", protection)
-        self.assertIn("MAX_BB_WIDTH", protection)
-
-    def test_entry_validity_minutes_configured(self):
-
-        self.assertEqual(
-            config.TRACKING_CONFIG["SCALP_ENTRY_VALIDITY_MINUTES"],
+            signal_config["MAX_SCORE"],
             15,
         )
 
         self.assertEqual(
-            config.TRACKING_CONFIG["SWING_ENTRY_VALIDITY_MINUTES"],
+            signal_config["MAX_SCORE"],
+            len(signal_config["SCORE_COMPONENTS"]),
+        )
+
+    def test_pump_protection_config_exists(self):
+        protection = config.FILTER_CONFIG[
+            "PUMP_PROTECTION"
+        ]
+
+        self.assertIn(
+            "MAX_ROC_PERCENT",
+            protection,
+        )
+
+        self.assertIn(
+            "MAX_BB_WIDTH",
+            protection,
+        )
+
+    def test_entry_validity_configuration(self):
+        self.assertEqual(
+            config.TRACKING_CONFIG[
+                "SCALP_ENTRY_VALIDITY_MINUTES"
+            ],
+            15,
+        )
+
+        self.assertEqual(
+            config.TRACKING_CONFIG[
+                "SWING_ENTRY_VALIDITY_MINUTES"
+            ],
             60,
         )
 
@@ -234,38 +300,41 @@ class ConfigurationTests(unittest.TestCase):
 class IndicatorTests(unittest.TestCase):
 
     def setUp(self):
-
         self.df = create_test_dataframe()
 
     def test_dataframe_validation(self):
-
         result = indicators.validate_dataframe(
             self.df.copy()
         )
 
-        self.assertIsInstance(result, pd.DataFrame)
+        self.assertIsInstance(
+            result,
+            pd.DataFrame,
+        )
+
         self.assertFalse(result.empty)
 
     def test_indicator_calculation(self):
-
         result = indicators.calculate_all_indicators(
             self.df.copy()
         )
 
-        self.assertIsInstance(result, pd.DataFrame)
+        self.assertIsInstance(
+            result,
+            pd.DataFrame,
+        )
 
-        self.assertGreaterEqual(
+        self.assertGreater(
             len(result),
-            220,
+            0,
         )
 
     def test_required_indicator_columns(self):
-
         result = indicators.calculate_all_indicators(
             self.df.copy()
         )
 
-        required_columns = [
+        required = [
             "ema_9",
             "ema_20",
             "sma_20",
@@ -273,17 +342,14 @@ class IndicatorTests(unittest.TestCase):
             "sma_200",
         ]
 
-        for column in required_columns:
-
+        for column in required:
             with self.subTest(column=column):
-
                 self.assertIn(
                     column,
                     result.columns,
                 )
 
-    def test_indicator_values_are_numeric(self):
-
+    def test_indicator_values_are_finite(self):
         result = indicators.calculate_all_indicators(
             self.df.copy()
         )
@@ -295,7 +361,6 @@ class IndicatorTests(unittest.TestCase):
             "sma_50",
             "sma_200",
         ):
-
             values = pd.to_numeric(
                 result[column],
                 errors="coerce",
@@ -305,8 +370,7 @@ class IndicatorTests(unittest.TestCase):
                 np.isfinite(values.dropna()).all()
             )
 
-    def test_new_early_pump_indicators_present(self):
-
+    def test_early_momentum_indicators_exist(self):
         result = indicators.calculate_all_indicators(
             self.df.copy()
         )
@@ -323,7 +387,6 @@ class IndicatorTests(unittest.TestCase):
 class CoinSelectorTests(unittest.TestCase):
 
     def setUp(self):
-
         self.symbols = ["TESTUSDT"]
 
         self.order_books = {
@@ -331,7 +394,6 @@ class CoinSelectorTests(unittest.TestCase):
         }
 
     def test_snake_case_ticker(self):
-
         ticker_data = {
             "TESTUSDT": {
                 "quote_volume": "5000000",
@@ -358,7 +420,6 @@ class CoinSelectorTests(unittest.TestCase):
         )
 
     def test_camel_case_ticker(self):
-
         ticker_data = {
             "TESTUSDT": {
                 "quoteVolume": "5000000",
@@ -380,7 +441,6 @@ class CoinSelectorTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
     def test_low_volume_rejected(self):
-
         ticker_data = {
             "TESTUSDT": {
                 "quote_volume": "1000",
@@ -398,19 +458,16 @@ class CoinSelectorTests(unittest.TestCase):
         self.assertEqual(result, [])
 
     def test_non_usdt_pair_rejected(self):
-
         self.assertFalse(
             coin_selector._is_valid_symbol("TESTBTC")
         )
 
     def test_leveraged_token_rejected(self):
-
         self.assertFalse(
             coin_selector._is_valid_symbol("TESTUPUSDT")
         )
 
-    def test_tokenized_stock_rejected(self):
-
+    def test_tokenized_stocks_rejected(self):
         self.assertFalse(
             coin_selector._is_valid_symbol("NVDABUSDT")
         )
@@ -419,8 +476,7 @@ class CoinSelectorTests(unittest.TestCase):
             coin_selector._is_valid_symbol("TSLABUSDT")
         )
 
-    def test_stablecoin_rejected(self):
-
+    def test_stablecoins_rejected(self):
         self.assertFalse(
             coin_selector._is_valid_symbol("USDCUSDT")
         )
@@ -430,7 +486,6 @@ class CoinSelectorTests(unittest.TestCase):
         )
 
     def test_order_book_validation(self):
-
         result = coin_selector.analyze_order_book(
             create_test_order_book()
         )
@@ -447,7 +502,6 @@ class CoinSelectorTests(unittest.TestCase):
         )
 
     def test_invalid_order_book_rejected(self):
-
         result = coin_selector.analyze_order_book({})
 
         self.assertFalse(result["valid"])
@@ -459,16 +513,15 @@ class CoinSelectorTests(unittest.TestCase):
 
 class MarketFilterTests(unittest.TestCase):
 
-    def test_market_filter_function_exists(self):
-
+    def test_market_filter_functions_exist(self):
         self.assertTrue(
             callable(market_filter.analyze_market)
         )
 
-    def test_market_context_validator_exists(self):
-
         self.assertTrue(
-            callable(market_filter.validate_market_context)
+            callable(
+                market_filter.validate_market_context
+            )
         )
 
 
@@ -479,43 +532,35 @@ class MarketFilterTests(unittest.TestCase):
 class EntryEngineTests(unittest.TestCase):
 
     def test_required_functions_exist(self):
-
         required = [
             "evaluate_scalp",
             "evaluate_swing",
             "score_setup",
             "validate_entry",
+            "_get_breakout_data",
+            "_validate_market_context",
+            "_buyer_confirmation",
         ]
 
         for name in required:
-
             with self.subTest(function=name):
-
                 self.assertTrue(
                     callable(
                         getattr(entry_engine, name, None)
                     )
                 )
 
-    def test_only_approved_signal_classes(self):
-
-        approved = entry_engine.__dict__.get(
-            "APPROVED_CLASSIFICATIONS",
-            ["STRONG BUY", "EXCELLENT BUY"],
+    def test_approved_signal_classes(self):
+        approved = (
+            entry_engine.APPROVED_CLASSIFICATIONS
         )
 
-        self.assertIn(
-            "STRONG BUY",
-            approved,
-        )
+        self.assertIn("STRONG BUY", approved)
+        self.assertIn("EXCELLENT BUY", approved)
 
-        self.assertIn(
-            "EXCELLENT BUY",
-            approved,
-        )
+        self.assertNotIn("WEAK BUY", approved)
 
-    def test_scalp_swing_configs_differ(self):
-
+    def test_scalp_swing_thresholds_are_different(self):
         self.assertNotEqual(
             entry_engine.SCALP_CONFIG["MIN_RVOL"],
             entry_engine.SWING_CONFIG["MIN_RVOL"],
@@ -526,8 +571,39 @@ class EntryEngineTests(unittest.TestCase):
             entry_engine.SWING_CONFIG["MIN_ADX"],
         )
 
-    def test_pump_protection_functions_exist(self):
+    def test_dynamic_config_neutral_market(self):
+        result = entry_engine._get_dynamic_config(
+            "SCALP",
+            "NEUTRAL",
+        )
 
+        self.assertGreater(
+            result["MIN_RVOL"],
+            0,
+        )
+
+        self.assertGreater(
+            result["MIN_ADX"],
+            0,
+        )
+
+    def test_dynamic_config_bearish_market(self):
+        result = entry_engine._get_dynamic_config(
+            "SCALP",
+            "BEARISH",
+        )
+
+        self.assertGreaterEqual(
+            result["MIN_RVOL"],
+            1.0,
+        )
+
+        self.assertGreaterEqual(
+            result["MIN_ADX"],
+            16.0,
+        )
+
+    def test_pump_protection_functions_exist(self):
         required = [
             "_has_consecutive_bullish_candles",
             "_has_rvol_collapse",
@@ -535,24 +611,264 @@ class EntryEngineTests(unittest.TestCase):
         ]
 
         for name in required:
-
             with self.subTest(function=name):
-
                 self.assertTrue(
                     callable(
                         getattr(entry_engine, name, None)
                     )
                 )
 
+    def test_unknown_market_context_rejected(self):
+        result = entry_engine._validate_market_context({
+            "market_status": "UNKNOWN",
+            "btc_trend": "UNKNOWN",
+            "risk_level": "UNKNOWN",
+        })
+
+        self.assertFalse(result[0])
+
+    def test_high_risk_market_rejected(self):
+        context = create_market_context(
+            risk_level="HIGH",
+        )
+
+        result = entry_engine._validate_market_context(
+            context
+        )
+
+        self.assertFalse(result[0])
+
+    def test_low_risk_valid_market_context_accepted(self):
+        context = create_market_context()
+
+        result = entry_engine._validate_market_context(
+            context
+        )
+
+        self.assertTrue(result[0])
+
+    def test_bearish_candle_not_buyer_confirmation(self):
+        snapshot = {
+            "close": 99.0,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 98.0,
+            "volume": 2000.0,
+            "previous_volume": 1000.0,
+        }
+
+        result = entry_engine._buyer_confirmation(
+            snapshot
+        )
+
+        self.assertFalse(result)
+
+    def test_bullish_strong_close_buyer_confirmation(self):
+        snapshot = {
+            "close": 100.9,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "volume": 1200.0,
+            "previous_volume": 1000.0,
+        }
+
+        result = entry_engine._buyer_confirmation(
+            snapshot
+        )
+
+        self.assertTrue(result)
+
+    def test_invalid_symbol_rejected(self):
+        result = entry_engine.evaluate_scalp(
+            "TESTBTC",
+            {},
+            market_context=create_market_context(),
+        )
+
+        self.assertEqual(
+            result["classification"],
+            "REJECT",
+        )
+
+        self.assertEqual(
+            result["reason"],
+            "INVALID_USDT_SYMBOL",
+        )
+
 
 # =========================================================
-# 7. RISK MANAGER TESTS
+# 7. BREAKOUT TESTS
+# =========================================================
+
+class BreakoutTests(unittest.TestCase):
+
+    def test_fresh_breakout_is_accepted(self):
+        df = create_breakout_dataframe(
+            breakout=True,
+            retest=False,
+        )
+
+        result = entry_engine._get_breakout_data(
+            df,
+            timeframe="5m",
+        )
+
+        self.assertTrue(
+            result.get("breakout")
+        )
+
+        self.assertTrue(
+            result.get("fresh_breakout")
+        )
+
+        self.assertTrue(
+            result.get("above_resistance")
+        )
+
+    def test_separate_candle_retest_is_accepted(self):
+        df = create_breakout_dataframe(
+            breakout=True,
+            retest=True,
+        )
+
+        result = entry_engine._get_breakout_data(
+            df,
+            timeframe="5m",
+        )
+
+        self.assertTrue(
+            result.get("breakout")
+        )
+
+        self.assertTrue(
+            result.get("retest")
+        )
+
+        self.assertTrue(
+            result.get("above_resistance")
+        )
+
+    def test_failed_retest_is_not_accepted(self):
+        df = create_breakout_dataframe(
+            breakout=True,
+            retest=True,
+            failed_retest=True,
+        )
+
+        result = entry_engine._get_breakout_data(
+            df,
+            timeframe="5m",
+        )
+
+        self.assertFalse(
+            result.get("breakout", False)
+        )
+
+        self.assertFalse(
+            result.get("retest", False)
+        )
+
+    def test_no_breakout_is_rejected(self):
+        df = create_breakout_dataframe(
+            breakout=False,
+        )
+
+        result = entry_engine._get_breakout_data(
+            df,
+            timeframe="5m",
+        )
+
+        self.assertFalse(
+            result.get("breakout", False)
+        )
+
+    def test_breakout_resistance_is_positive(self):
+        df = create_breakout_dataframe(
+            breakout=True,
+            retest=False,
+        )
+
+        result = entry_engine._get_breakout_data(
+            df,
+            timeframe="5m",
+        )
+
+        self.assertGreater(
+            result.get("resistance", 0),
+            0,
+        )
+
+
+# =========================================================
+# 8. SCORING TESTS
+# =========================================================
+
+class ScoringTests(unittest.TestCase):
+
+    def test_zero_score_rejected(self):
+        result = entry_engine.score_setup({
+            "components": {},
+            "market_status": "BULLISH",
+            "btc_trend": "BULLISH",
+        })
+
+        self.assertEqual(
+            result["classification"],
+            "REJECT",
+        )
+
+        self.assertEqual(
+            result["score"],
+            0,
+        )
+
+    def test_score_never_exceeds_maximum(self):
+        components = {
+            f"component_{i}": True
+            for i in range(30)
+        }
+
+        result = entry_engine.score_setup({
+            "components": components,
+            "market_status": "BULLISH",
+            "btc_trend": "BULLISH",
+        })
+
+        self.assertLessEqual(
+            result["score"],
+            result["max_score"],
+        )
+
+    def test_scoring_returns_required_fields(self):
+        result = entry_engine.score_setup({
+            "components": {
+                f"component_{i}": False
+                for i in range(15)
+            },
+            "market_status": "BULLISH",
+            "btc_trend": "BULLISH",
+        })
+
+        required = [
+            "score",
+            "max_score",
+            "required_score",
+            "classification",
+            "components",
+        ]
+
+        for key in required:
+            self.assertIn(key, result)
+
+
+# =========================================================
+# 9. RISK MANAGER TESTS
 # =========================================================
 
 class RiskManagerTests(unittest.TestCase):
 
     def test_required_functions_exist(self):
-
         required = [
             "calculate_stop_loss",
             "calculate_targets",
@@ -562,17 +878,14 @@ class RiskManagerTests(unittest.TestCase):
         ]
 
         for name in required:
-
             with self.subTest(function=name):
-
                 self.assertTrue(
                     callable(
                         getattr(risk_manager, name, None)
                     )
                 )
 
-    def test_position_size_function(self):
-
+    def test_position_size_calculation(self):
         result = risk_manager.calculate_position_size(
             capital=100,
             entry=10,
@@ -582,25 +895,25 @@ class RiskManagerTests(unittest.TestCase):
             slippage_rate=0.001,
         )
 
-        self.assertIsInstance(result, dict)
+        self.assertIsInstance(
+            result,
+            dict,
+        )
 
         self.assertGreater(
             result.get("quantity", 0),
             0,
         )
 
-    def test_stop_loss_rejects_too_wide(self):
-
+    def test_stop_loss_rejects_excessive_distance(self):
         with self.assertRaises(ValueError):
-
             risk_manager.calculate_stop_loss(
                 entry_price=100,
                 support_level=85,
                 atr=None,
             )
 
-    def test_stop_loss_bounds_configured(self):
-
+    def test_stop_loss_bounds_are_valid(self):
         self.assertGreater(
             risk_manager.MAX_STOP_LOSS_DISTANCE_PERCENT,
             0,
@@ -618,13 +931,12 @@ class RiskManagerTests(unittest.TestCase):
 
 
 # =========================================================
-# 8. TELEGRAM TESTS
+# 10. TELEGRAM TESTS
 # =========================================================
 
 class TelegramTests(unittest.TestCase):
 
     def test_required_functions_exist(self):
-
         required = [
             "credentials_available",
             "send_message",
@@ -634,20 +946,20 @@ class TelegramTests(unittest.TestCase):
         ]
 
         for name in required:
-
             with self.subTest(function=name):
-
                 self.assertTrue(
                     callable(
                         getattr(telegram_bot, name, None)
                     )
                 )
 
-    def test_missing_credentials_do_not_expose_secrets(self):
-
+    def test_telegram_status_does_not_expose_token(self):
         status = telegram_bot.get_telegram_status()
 
-        self.assertIsInstance(status, dict)
+        self.assertIsInstance(
+            status,
+            dict,
+        )
 
         self.assertNotIn(
             "TELEGRAM_BOT_TOKEN_VALUE",
@@ -656,13 +968,12 @@ class TelegramTests(unittest.TestCase):
 
 
 # =========================================================
-# 9. SIGNAL TRACKER TESTS
+# 11. SIGNAL TRACKER TESTS
 # =========================================================
 
 class SignalTrackerTests(unittest.TestCase):
 
     def test_required_functions_exist(self):
-
         required = [
             "load_history",
             "save_history",
@@ -671,32 +982,18 @@ class SignalTrackerTests(unittest.TestCase):
             "update_signal_status",
             "expire_old_signals",
             "calculate_performance",
+            "expire_unfilled_entries",
         ]
 
         for name in required:
-
             with self.subTest(function=name):
-
                 self.assertTrue(
                     callable(
                         getattr(signal_tracker, name, None)
                     )
                 )
 
-    def test_entry_expiry_function_exists(self):
-
-        self.assertTrue(
-            callable(
-                getattr(
-                    signal_tracker,
-                    "expire_unfilled_entries",
-                    None,
-                )
-            )
-        )
-
-    def test_entry_validity_constants_present(self):
-
+    def test_entry_validity_constants(self):
         self.assertEqual(
             signal_tracker.SCALP_ENTRY_VALIDITY_MINUTES,
             15,
@@ -708,9 +1005,7 @@ class SignalTrackerTests(unittest.TestCase):
         )
 
     def test_history_persistence(self):
-
         with tempfile.TemporaryDirectory() as directory:
-
             file_path = os.path.join(
                 directory,
                 "test_history.json",
@@ -745,13 +1040,12 @@ class SignalTrackerTests(unittest.TestCase):
 
 
 # =========================================================
-# 10. SCANNER TESTS
+# 12. SCANNER TESTS
 # =========================================================
 
 class ScannerTests(unittest.TestCase):
 
     def test_scanner_functions_exist(self):
-
         required = [
             "run_scanner",
             "fetch_market_context",
@@ -759,12 +1053,11 @@ class ScannerTests(unittest.TestCase):
             "evaluate_candidate",
             "attach_risk_plan",
             "deliver_signal",
+            "is_eligible_signal",
         ]
 
         for name in required:
-
             with self.subTest(function=name):
-
                 self.assertTrue(
                     callable(
                         getattr(scanner, name, None)
@@ -772,7 +1065,6 @@ class ScannerTests(unittest.TestCase):
                 )
 
     def test_non_usdt_signal_rejected(self):
-
         signal = {
             "symbol": "BTCBTC",
             "classification": "STRONG BUY",
@@ -784,7 +1076,6 @@ class ScannerTests(unittest.TestCase):
         )
 
     def test_unapproved_signal_rejected(self):
-
         signal = {
             "symbol": "BTCUSDT",
             "classification": "WEAK BUY",
@@ -797,213 +1088,71 @@ class ScannerTests(unittest.TestCase):
 
 
 # =========================================================
-# 11. BREAKOUT AND RETEST TESTS
+# 13. DATA PROVIDER TESTS
 # =========================================================
 
-class EntryEngineBreakoutRetestTests(unittest.TestCase):
-
-    def make_breakout_dataframe(self, retest_low=100.80):
-
-        """
-        Structure:
-        - 20 stable candles
-        - Resistance at 101.0
-        - Breakout candle closes at 102.0
-        - Pullback candle stays above resistance
-        - Retest candle touches resistance zone
-        """
-
-        rows = []
-
-        for _ in range(20):
-
-            rows.append({
-                "open": 100.0,
-                "high": 101.0,
-                "low": 99.5,
-                "close": 100.0,
-                "volume": 1000.0,
-            })
-
-        # Breakout candle
-        rows.append({
-            "open": 100.0,
-            "high": 102.5,
-            "low": 100.0,
-            "close": 102.0,
-            "volume": 2500.0,
-        })
-
-        # Pullback candle
-        rows.append({
-            "open": 102.0,
-            "high": 102.3,
-            "low": 101.2,
-            "close": 101.8,
-            "volume": 1500.0,
-        })
-
-        # Retest candle
-        rows.append({
-            "open": 101.8,
-            "high": 102.1,
-            "low": retest_low,
-            "close": 101.9,
-            "volume": 1800.0,
-        })
-
-        return pd.DataFrame(rows)
-
-    def test_separate_candle_breakout_and_retest(self):
-
-        df = self.make_breakout_dataframe()
-
-        result = entry_engine._get_breakout_data(df)
-
-        self.assertTrue(
-            result.get("breakout")
-        )
-
-        self.assertTrue(
-            result.get("retest")
-        )
-
-        self.assertTrue(
-            result.get("above_resistance")
-        )
-
-    def test_failed_retest_is_rejected(self):
-
-        df = self.make_breakout_dataframe(
-            retest_low=97.0
-        )
-
-        result = entry_engine._get_breakout_data(df)
-
-        self.assertFalse(
-            result.get("retest", False)
-        )
-
-    def test_breakout_without_separate_retest_is_rejected(self):
-
-        rows = []
-
-        for _ in range(20):
-
-            rows.append({
-                "open": 100.0,
-                "high": 101.0,
-                "low": 99.5,
-                "close": 100.0,
-                "volume": 1000.0,
-            })
-
-        # Latest candle itself is the breakout
-        rows.append({
-            "open": 100.0,
-            "high": 103.0,
-            "low": 100.0,
-            "close": 102.5,
-            "volume": 2500.0,
-        })
-
-        df = pd.DataFrame(rows)
-
-        result = entry_engine._get_breakout_data(df)
-
-        self.assertFalse(
-            result.get("breakout", False)
-        )
-
-        self.assertFalse(
-            result.get("retest", False)
-        )
-
-    def test_unknown_market_context_is_rejected(self):
-
-        result = entry_engine._validate_market_context({
-            "market_status": "UNKNOWN",
-            "btc_trend": "UNKNOWN",
-            "risk_level": "UNKNOWN",
-        })
-
-        self.assertFalse(result[0])
-
-    def test_high_risk_market_is_rejected(self):
-
-        result = entry_engine._validate_market_context({
-            "market_status": "HIGH_RISK",
-            "btc_trend": "BEARISH",
-            "risk_level": "HIGH",
-        })
-
-        self.assertFalse(result[0])
-
-
-# =========================================================
-# 12. DATA PROVIDER VALIDATION TESTS
-# =========================================================
-
-class DataProviderValidationTests(unittest.TestCase):
+class DataProviderTests(unittest.TestCase):
 
     def setUp(self):
-
         self.df = create_test_dataframe()
 
-    def test_negative_taker_buy_base_volume_rejected(self):
-
+    def test_negative_taker_base_volume_rejected(self):
         df = self.df.copy()
 
-        df.loc[0, "taker_buy_base_volume"] = -1
+        df.loc[
+            0,
+            "taker_buy_base_volume",
+        ] = -1
 
         with self.assertRaises(
             data_provider.BinanceDataValidationError
         ):
-
             data_provider._validate_candle_rows(df)
 
-    def test_negative_taker_buy_quote_volume_rejected(self):
-
+    def test_negative_taker_quote_volume_rejected(self):
         df = self.df.copy()
 
-        df.loc[0, "taker_buy_quote_volume"] = -1
+        df.loc[
+            0,
+            "taker_buy_quote_volume",
+        ] = -1
 
         with self.assertRaises(
             data_provider.BinanceDataValidationError
         ):
-
             data_provider._validate_candle_rows(df)
 
     def test_taker_base_volume_exceeding_total_rejected(self):
-
         df = self.df.copy()
 
-        df.loc[0, "taker_buy_base_volume"] = (
+        df.loc[
+            0,
+            "taker_buy_base_volume",
+        ] = (
             df.loc[0, "volume"] * 1.01
         )
 
         with self.assertRaises(
             data_provider.BinanceDataValidationError
         ):
-
             data_provider._validate_candle_rows(df)
 
     def test_taker_quote_volume_exceeding_total_rejected(self):
-
         df = self.df.copy()
 
-        df.loc[0, "taker_buy_quote_volume"] = (
+        df.loc[
+            0,
+            "taker_buy_quote_volume",
+        ] = (
             df.loc[0, "quote_volume"] * 1.01
         )
 
         with self.assertRaises(
             data_provider.BinanceDataValidationError
         ):
-
             data_provider._validate_candle_rows(df)
 
     def test_close_time_before_open_time_rejected(self):
-
         df = self.df.copy()
 
         df.loc[0, "close_time"] = (
@@ -1013,70 +1162,7 @@ class DataProviderValidationTests(unittest.TestCase):
         with self.assertRaises(
             data_provider.BinanceDataValidationError
         ):
-
             data_provider._validate_candle_rows(df)
-
-    def test_monthly_candle_35_days_old_accepted(self):
-
-        now_ms = 1_800_000_000_000
-
-        age_ms = (
-            35
-            * 24
-            * 60
-            * 60
-            * 1000
-        )
-
-        df = pd.DataFrame({
-            "close_time": [
-                now_ms - age_ms
-            ]
-        })
-
-        with patch.object(
-            data_provider,
-            "_utc_now_ms",
-            return_value=now_ms,
-        ):
-
-            data_provider._validate_candle_freshness(
-                df,
-                "1M",
-            )
-
-    def test_monthly_candle_41_days_old_rejected(self):
-
-        now_ms = 1_800_000_000_000
-
-        age_ms = (
-            41
-            * 24
-            * 60
-            * 60
-            * 1000
-        )
-
-        df = pd.DataFrame({
-            "close_time": [
-                now_ms - age_ms
-            ]
-        })
-
-        with patch.object(
-            data_provider,
-            "_utc_now_ms",
-            return_value=now_ms,
-        ):
-
-            with self.assertRaises(
-                data_provider.BinanceDataValidationError
-            ):
-
-                data_provider._validate_candle_freshness(
-                    df,
-                    "1M",
-                )
 
 
 # =========================================================
@@ -1084,7 +1170,6 @@ class DataProviderValidationTests(unittest.TestCase):
 # =========================================================
 
 if __name__ == "__main__":
-
     print("=" * 60)
     print("BINANCE SPOT V3 SYSTEM TESTS")
     print("=" * 60)

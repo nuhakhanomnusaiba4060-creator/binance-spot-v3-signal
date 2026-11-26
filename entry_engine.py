@@ -313,7 +313,7 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
         and close > 0
         and _is_valid_num(resistance)
         and resistance > 0
-        and close > resistance
+        and close >= resistance
     )
 
     current_at_or_above_res = bool(
@@ -328,25 +328,36 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
         not prior_closes.empty
         and _is_valid_num(resistance)
         and resistance > 0
-        and float(prior_closes.max()) > resistance * (1.0 - retest_tol * 0.25)
+        and float(prior_closes.max()) >= resistance * (1.0 - retest_tol * 0.25)
     )
 
-    # Failed retest: close drops below resistance and fails to hold above open
+    # Failed retest: close drops clearly below resistance and fails to hold above open
     failed_retest = bool(
         _is_valid_num(resistance)
         and resistance > 0
-        and close < resistance * (1.0 - retest_tol * 0.5)
+        and close < resistance * (1.0 - max(retest_tol * 1.5, 0.01))
         and (_is_valid_num(open_p) and close < open_p)
     )
 
+    # Valid retest: either holding near broken resistance or holding near support on a separate bar
     retest_confirmed = bool(
         not failed_retest
         and _is_valid_num(close)
         and close > 0
-        and _is_valid_num(resistance)
-        and resistance > 0
-        and close >= resistance * (1.0 - retest_tol * 0.5)
-        and abs(close - resistance) / resistance <= max(retest_tol * 4.0, 0.025)
+        and (
+            (
+                _is_valid_num(resistance)
+                and resistance > 0
+                and abs(close - resistance) / resistance <= max(retest_tol * 6.0, 0.04)
+                and close >= resistance * (1.0 - max(retest_tol * 2.0, 0.02))
+            )
+            or (
+                _is_valid_num(support)
+                and support > 0
+                and abs(low_p - support) / support <= max(retest_tol * 4.0, 0.025)
+                and close >= support
+            )
+        )
     )
 
     breakout_confirmed = bool(

@@ -1,12 +1,6 @@
 """
 Binance Spot V3 Smart Signal Scanner
 Market Data Provider (Spot USDT Only)
-
-Design principles:
-- Use Binance Spot public endpoints only
-- Drop unclosed live candles so indicators rely strictly on closed bars
-- Filter out non-ASCII and clearly pegged/stable symbols without over-filtering
-- Retry transient failures with exponential backoff
 """
 
 from __future__ import annotations
@@ -26,12 +20,11 @@ import config as cfg
 logger = logging.getLogger(__name__)
 
 
+class BinanceDataValidationError(ValueError):
+    """Raised when Binance market or kline data fails integrity checks."""
+
+
 API_CONFIG = getattr(cfg, "API_CONFIG", {})
-COIN_SELECTION_CONFIG = getattr(
-    cfg,
-    "COIN_SELECTION_CONFIG",
-    getattr(cfg, "FILTER_CONFIG", {}),
-)
 
 DEFAULT_BASE_URL = "https://data-api.binance.vision"
 KLINE_COLUMNS = [
@@ -64,7 +57,6 @@ INTERVAL_MS = {
     "1d": 86_400_000,
 }
 
-# Only reject clearly pegged/stable/wrapped non-momentum instruments
 EXCLUDED_BASE_ASSETS = {
     "USDC",
     "BUSD",
@@ -108,7 +100,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 def is_eligible_spot_usdt_symbol(symbol: Any) -> bool:
     """
     Allow active ASCII Spot USDT pairs while filtering out non-ASCII symbols,
-    leveraged tokens, and known pegged/stable/wrapped tokens.
+    leveraged tokens, tokenized stocks, and pegged/stable/wrapped assets.
     """
     if not isinstance(symbol, str):
         return False
@@ -125,6 +117,10 @@ def is_eligible_spot_usdt_symbol(symbol: Any) -> bool:
 
     base_asset = sym[: -len("USDT")]
     if not base_asset or base_asset in EXCLUDED_BASE_ASSETS:
+        return False
+
+    # Tokenized stock tickers commonly carry a 'B' suffix on 5+ char base tickers (e.g. NVDAB)
+    if len(base_asset) >= 5 and base_asset.endswith("B"):
         return False
 
     return True
@@ -155,12 +151,6 @@ def _request_json(path: str, params: dict[str, Any] | None = None) -> Any:
             response = requests.get(url, params=params, timeout=timeout)
             if response.status_code in (418, 429):
                 sleep_for = backoff_base * (2**attempt)
-                logger.warning(
-                    "Binance rate limit/ban status %s on %s; retrying in %.1fs",
-                    response.status_code,
-                    path,
-                    sleep_for,
-                )
                 time.sleep(sleep_for)
                 continue
 
@@ -173,6 +163,58 @@ def _request_json(path: str, params: dict[str, Any] | None = None) -> Any:
                 time.sleep(sleep_for)
 
     raise RuntimeError(f"Request failed for {path}: {last_error}")
+
+
+def validate_klines_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Validate kline timestamps and volume invariants, raising BinanceDataValidationError."""
+    if not isinstance(df, pd.DataFrame):
+        raise BinanceDataValidationError("Klines must be a DataFrame.")
+
+    if df.empty:
+        return df.copy()
+
+    result = df.copy()
+    numeric_cols = [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_volume",
+        "taker_buy_base_volume",
+        "taker_buy_quote_volume",
+    ]
+    for col in numeric_cols:
+        if col in result.columns:
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+
+    if "open_time" in result.columns and "close_time" in result.columns:
+        if (result["close_time"] < result["open_time"]).any():
+            raise BinanceDataValidationError("close_time cannot be earlier than open_time.")
+
+    if "volume" in result.columns and (result["volume"] < 0).any():
+        raise BinanceDataValidationError("Base volume cannot be negative.")
+
+    if "quote_volume" in result.columns and (result["quote_volume"] < 0).any():
+        raise BinanceDataValidationError("Quote volume cannot be negative.")
+
+    if "taker_buy_base_volume" in result.columns:
+        taker_base = result["taker_buy_base_volume"]
+        if (taker_base < 0).any():
+            raise BinanceDataValidationError("Taker buy base volume cannot be negative.")
+        if "volume" in result.columns and (taker_base > result["volume"] * 1.0001).any():
+            raise BinanceDataValidationError("Taker buy base volume exceeds total base volume.")
+
+    if "taker_buy_quote_volume" in result.columns:
+        taker_quote = result["taker_buy_quote_volume"]
+        if (taker_quote < 0).any():
+            raise BinanceDataValidationError("Taker buy quote volume cannot be negative.")
+        if "quote_volume" in result.columns and (taker_quote > result["quote_volume"] * 1.0001).any():
+            raise BinanceDataValidationError("Taker buy quote volume exceeds total quote volume.")
+
+    return result
 
 
 def get_usdt_symbols(force_refresh: bool = False) -> list[str]:
@@ -218,12 +260,11 @@ def get_usdt_symbols(force_refresh: bool = False) -> list[str]:
 
 
 def _drop_unclosed_klines(df: pd.DataFrame, interval: str) -> pd.DataFrame:
-    if df.empty or interval not in INTERVAL_MS:
+    if df.empty or interval not in INTERVAL_MS or "close_time" not in df.columns:
         return df
 
     step_ms = INTERVAL_MS[interval]
     now_ms = int(time.time() * 1000)
-    # A candle with close_time >= now_ms (or open_time + step_ms > now_ms) is still forming
     closed_mask = (df["close_time"] < now_ms) & ((df["open_time"] + step_ms) <= now_ms)
     return df.loc[closed_mask].reset_index(drop=True)
 
@@ -244,22 +285,7 @@ def get_klines(symbol: str, interval: str, limit: int = 300) -> pd.DataFrame:
         return pd.DataFrame(columns=KLINE_COLUMNS)
 
     df = pd.DataFrame(raw, columns=KLINE_COLUMNS)
-    numeric_cols = [
-        "open_time",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "close_time",
-        "quote_volume",
-        "trade_count",
-        "taker_buy_base_volume",
-        "taker_buy_quote_volume",
-    ]
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
+    df = validate_klines_dataframe(df)
     df = df.dropna(subset=["open_time", "open", "high", "low", "close", "volume", "close_time"])
     df = df.sort_values("open_time", kind="stable").drop_duplicates(subset=["open_time"], keep="last")
     df = _drop_unclosed_klines(df, interval)

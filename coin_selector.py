@@ -104,7 +104,7 @@ LEVERAGED_SUFFIXES = (
     "BEARUSDT",
 )
 
-# 🔥 Binance xStocks (Tokenized Stocks) - Static List
+# Binance xStocks (Tokenized Stocks) - Static List
 TOKENIZED_STOCKS = {
     # US Stocks
     "AAPLBUSDT",   "AMCBUSDT",    "AMZNBUSDT",   "COINBUSDT",
@@ -115,14 +115,14 @@ TOKENIZED_STOCKS = {
     "SOXSBUSDT",   "SPCXBUSDT",   "STXBUSDT",    "TSLABUSDT",
     "USARBUSDT",   "UVXYBUSDT",   "VSTBUSDT",    "WENBUSDT",
     "ZMBUSDT",     "BOTBUSDT",
-    
-    # 🔥 নতুন যুক্ত হওয়া স্টক (Korea/Asia/ETFs)
+
+    # Korea / Asia / ETFs
     "KORUBUSDT",   "SKHYBUSDT",   "QQQBUSDT",    "LLYBUSDT",
     "TMFBUSDT",    "BRKBBUSDT",   "GEVBUSDT",    "PENGBUSDT",
     "ADBEBUSDT",   "PDDBUSDT",    "BBBBUSDT",
 }
 
-# 🔥 Stablecoins - Pegged to $1
+# Stablecoins - Pegged to $1 or fiat equivalents
 STABLECOINS = {
     "USDCUSDT",     "BUSDUSDT",     "TUSDUSDT",     "USDPUSDT",
     "FDUSDUSDT",    "USD1USDT",     "RLUSDUSDT",    "XUSDUSDT",
@@ -130,20 +130,19 @@ STABLECOINS = {
     "EURUSDT",      "GBPUSDT",      "AUDUSDT",      "BFUSDUSDT",
 }
 
-# 🔥 Precious metals and wrapped tokens
+# Precious metals and wrapped tokens
 LOW_VOLATILITY_ASSETS = {
     "XAUTUSDT",   "PAXGUSDT",   "WBTCUSDT",   "WETHUSDT",
     "STETHUSDT",  "CBBTCUSDT",
 }
 
-# Combined static exclusion set
 EXCLUDED_SYMBOLS = (
     TOKENIZED_STOCKS
     | STABLECOINS
     | LOW_VOLATILITY_ASSETS
 )
 
-# 🔥 Real cryptos that naturally end with "B" (to avoid false positive exclusion)
+# Real cryptos that naturally end with "B" (to avoid false positive exclusion)
 REAL_B_CRYPTOS = {
     "ARBUSDT", "BNBUSDT", "SUBUSDT", "BBUSDT", "WBTCUSDT", "BUSDUSDT",
 }
@@ -161,15 +160,12 @@ def _is_valid_symbol(symbol: str) -> bool:
     if len(symbol) <= 4:
         return False
 
-    # 1. Static Exclusion (Stocks, Stablecoins, Metals)
     if symbol in EXCLUDED_SYMBOLS:
         return False
 
-    # 2. Leveraged Tokens
     if symbol.endswith(LEVERAGED_SUFFIXES):
         return False
 
-    # 3. Dynamic xStock Exclusion (Ends with BUSDT, but is not a known real crypto)
     if symbol.endswith("BUSDT") and symbol not in REAL_B_CRYPTOS:
         return False
 
@@ -252,10 +248,15 @@ def _normalize_ticker_data(ticker_data: Any) -> dict:
 
 def analyze_order_book(order_book: dict) -> dict:
     result = {
-        "valid": False, "best_bid": 0.0, "best_ask": 0.0,
-        "spread_percent": None, "bid_depth_usdt": 0.0,
-        "ask_depth_usdt": 0.0, "total_depth_usdt": 0.0,
-        "liquid": False, "reason": None,
+        "valid": False,
+        "best_bid": 0.0,
+        "best_ask": 0.0,
+        "spread_percent": None,
+        "bid_depth_usdt": 0.0,
+        "ask_depth_usdt": 0.0,
+        "total_depth_usdt": 0.0,
+        "liquid": False,
+        "reason": None,
     }
 
     if not isinstance(order_book, dict):
@@ -308,16 +309,20 @@ def analyze_order_book(order_book: dict) -> dict:
             result["reason"] = "CROSSED_ORDER_BOOK"
             return result
 
-        mid_price = (best_bid + best_ask) / 2
-        spread_percent = ((best_ask - best_bid) / mid_price) * 100
+        mid_price = (best_bid + best_ask) / 2.0
+        spread_percent = ((best_ask - best_bid) / mid_price) * 100.0
         bid_depth = sum(price * quantity for price, quantity in valid_bids)
         ask_depth = sum(price * quantity for price, quantity in valid_asks)
         total_depth = bid_depth + ask_depth
 
         result.update({
-            "valid": True, "best_bid": best_bid, "best_ask": best_ask,
-            "spread_percent": spread_percent, "bid_depth_usdt": bid_depth,
-            "ask_depth_usdt": ask_depth, "total_depth_usdt": total_depth,
+            "valid": True,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "spread_percent": spread_percent,
+            "bid_depth_usdt": bid_depth,
+            "ask_depth_usdt": ask_depth,
+            "total_depth_usdt": total_depth,
             "liquid": (
                 spread_percent <= MAX_SPREAD_PERCENT
                 and total_depth >= MIN_ORDER_BOOK_DEPTH
@@ -347,28 +352,36 @@ def select_coins(symbols: list, ticker_data: Any, order_book_data: dict) -> list
     ticker_map = _normalize_ticker_data(ticker_data)
 
     candidates = []
+    seen_symbols = set()
     excluded_stocks_count = 0
     excluded_stables_count = 0
     excluded_leveraged_count = 0
+    excluded_low_vol_count = 0
 
     for raw_symbol in symbols:
         if not isinstance(raw_symbol, str):
             continue
 
         symbol = raw_symbol.upper().strip()
+        if not symbol or symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
 
-        # Diagnostic counts
-        if symbol in TOKENIZED_STOCKS or (symbol.endswith("BUSDT") and symbol not in REAL_B_CRYPTOS):
+        if symbol in TOKENIZED_STOCKS or (
+            symbol.endswith("BUSDT") and symbol not in REAL_B_CRYPTOS
+        ):
             excluded_stocks_count += 1
             continue
         if symbol in STABLECOINS:
             excluded_stables_count += 1
             continue
+        if symbol in LOW_VOLATILITY_ASSETS:
+            excluded_low_vol_count += 1
+            continue
         if symbol.endswith(LEVERAGED_SUFFIXES):
             excluded_leveraged_count += 1
             continue
 
-        # Final validation
         if not _is_valid_symbol(symbol):
             continue
 
@@ -376,7 +389,6 @@ def select_coins(symbols: list, ticker_data: Any, order_book_data: dict) -> list
         if not isinstance(ticker, dict):
             continue
 
-        # Ticker Data (snake_case or camelCase)
         quote_volume = _safe_float(_get_field(ticker, "quote_volume", "quoteVolume"))
         trade_count = int(_safe_float(_get_field(ticker, "trade_count", "count")))
         last_price = _safe_float(_get_field(ticker, "last_price", "lastPrice"))
@@ -385,25 +397,32 @@ def select_coins(symbols: list, ticker_data: Any, order_book_data: dict) -> list
         high_price = _safe_float(_get_field(ticker, "high_price", "highPrice"))
         low_price = _safe_float(_get_field(ticker, "low_price", "lowPrice"))
 
-        # Mandatory ticker validation
-        if (quote_volume < MIN_QUOTE_VOLUME or trade_count < MIN_TRADES or last_price <= 0):
+        if (
+            quote_volume < MIN_QUOTE_VOLUME
+            or trade_count < MIN_TRADES
+            or last_price <= 0
+        ):
             continue
 
         if high_price > 0 and low_price > 0 and high_price < low_price:
             continue
 
-        # Order-book validation
         order_book = order_book_data.get(symbol)
         if order_book is None:
             if REQUIRE_ORDER_BOOK:
                 continue
-            order_analysis = {"valid": False, "spread_percent": None, "liquid": False}
+            order_analysis = {
+                "valid": False,
+                "spread_percent": None,
+                "liquid": False,
+            }
         else:
             order_analysis = analyze_order_book(order_book)
-            if REQUIRE_ORDER_BOOK and (not order_analysis["valid"] or not order_analysis["liquid"]):
+            if REQUIRE_ORDER_BOOK and (
+                not order_analysis["valid"] or not order_analysis["liquid"]
+            ):
                 continue
 
-        # Structured candidate record
         candidate = {
             "symbol": symbol,
             "last_price": last_price,
@@ -420,22 +439,35 @@ def select_coins(symbols: list, ticker_data: Any, order_book_data: dict) -> list
             "bid_depth_usdt": order_analysis.get("bid_depth_usdt", 0.0),
             "ask_depth_usdt": order_analysis.get("ask_depth_usdt", 0.0),
             "total_depth_usdt": order_analysis.get("total_depth_usdt", 0.0),
-            "liquidity_status": "VALID" if order_analysis.get("liquid") else "NOT_VERIFIED",
+            "liquidity_status": (
+                "VALID" if order_analysis.get("liquid") else "NOT_VERIFIED"
+            ),
             "selection_status": "ELIGIBLE",
             "selected_at": datetime.now(timezone.utc).isoformat(),
         }
 
         candidates.append(candidate)
 
-    # Sort by highest quote volume
     candidates.sort(key=lambda item: item["quote_volume_24h"], reverse=True)
 
-    logger.info("Coin selection completed: %s eligible candidates.", len(candidates))
+    logger.info(
+        "Coin selection completed: %s eligible candidates.",
+        len(candidates),
+    )
 
-    if excluded_stocks_count or excluded_stables_count:
+    if (
+        excluded_stocks_count
+        or excluded_stables_count
+        or excluded_leveraged_count
+        or excluded_low_vol_count
+    ):
         logger.info(
-            "Filtered out: %s stock tokens | %s stablecoins | %s leveraged",
-            excluded_stocks_count, excluded_stables_count, excluded_leveraged_count,
+            "Filtered out: %s stock tokens | %s stablecoins | "
+            "%s leveraged | %s low-vol/wrapped",
+            excluded_stocks_count,
+            excluded_stables_count,
+            excluded_leveraged_count,
+            excluded_low_vol_count,
         )
 
     return candidates

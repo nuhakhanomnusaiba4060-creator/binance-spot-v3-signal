@@ -1,4 +1,3 @@
-
 """
 Binance Spot V3 - Risk Management Engine
 Balanced validation edition.
@@ -221,8 +220,8 @@ def _effective_prices(
     cost = fee + slippage
 
     return (
-        entry * (1 + cost),
-        exit_price * (1 - cost),
+        entry * (1.0 + cost),
+        exit_price * (1.0 - cost),
     )
 
 
@@ -233,13 +232,11 @@ def _net_rr(
     fee,
     slippage,
 ):
-    effective_entry, effective_stop = (
-        _effective_prices(
-            entry,
-            stop,
-            fee,
-            slippage,
-        )
+    effective_entry, effective_stop = _effective_prices(
+        entry,
+        stop,
+        fee,
+        slippage,
     )
 
     _, effective_target = _effective_prices(
@@ -269,11 +266,10 @@ def _minimum_net_target_price(
     Calculates the minimum target price required
     to achieve the requested NET Risk/Reward.
     """
-
     cost = fee + slippage
 
-    effective_entry = entry * (1 + cost)
-    effective_stop = stop * (1 - cost)
+    effective_entry = entry * (1.0 + cost)
+    effective_stop = stop * (1.0 - cost)
 
     net_loss = effective_entry - effective_stop
 
@@ -282,7 +278,7 @@ def _minimum_net_target_price(
             "Invalid net loss while calculating T1"
         )
 
-    exit_factor = 1 - cost
+    exit_factor = 1.0 - cost
 
     if exit_factor <= 0:
         raise ValueError(
@@ -291,11 +287,7 @@ def _minimum_net_target_price(
 
     required_net_reward = minimum_rr * net_loss
 
-    target = (
-        effective_entry + required_net_reward
-    ) / exit_factor
-
-    return target
+    return (effective_entry + required_net_reward) / exit_factor
 
 
 # ---------------------------------------------------------
@@ -359,13 +351,9 @@ def calculate_stop_loss(
 
     candidates = []
 
-    # Technical support candidate.
     if support is not None and support < entry:
-        candidates.append(
-            ("SUPPORT", support)
-        )
+        candidates.append(("SUPPORT", support))
 
-    # ATR candidates.
     if atr_value is not None:
         for mult in (
             multiplier,
@@ -373,48 +361,30 @@ def calculate_stop_loss(
             multiplier * 0.75,
         ):
             level = entry - atr_value * mult
-
             if 0 < level < entry:
-                candidates.append(
-                    (f"ATR_{mult:.2f}x", level)
-                )
+                candidates.append((f"ATR_{mult:.2f}x", level))
 
     valid = []
 
     for method, level in candidates:
-        distance = (
-            (entry - level) / entry * 100
-        )
-
+        distance = (entry - level) / entry * 100.0
         if min_dist <= distance <= max_dist:
-            valid.append(
-                (method, level, distance)
-            )
+            valid.append((method, level, distance))
 
     if not valid:
         raise ValueError(
             "No Stop Loss candidate fits configured distance limits"
         )
 
-    # Prefer valid technical support.
     chosen = next(
-        (
-            item
-            for item in valid
-            if item[0] == "SUPPORT"
-        ),
+        (item for item in valid if item[0] == "SUPPORT"),
         None,
     )
 
     if chosen is None:
         preferred = f"ATR_{multiplier:.2f}x"
-
         chosen = next(
-            (
-                item
-                for item in valid
-                if item[0] == preferred
-            ),
+            (item for item in valid if item[0] == preferred),
             valid[0],
         )
 
@@ -423,22 +393,10 @@ def calculate_stop_loss(
     return {
         "stop_loss": round(level, 12),
         "method": method,
-        "risk_distance": round(
-            entry - level,
-            12,
-        ),
-        "risk_percent": round(
-            distance,
-            4,
-        ),
-        "max_allowed_percent": round(
-            max_dist,
-            4,
-        ),
-        "min_allowed_percent": round(
-            min_dist,
-            4,
-        ),
+        "risk_distance": round(entry - level, 12),
+        "risk_percent": round(distance, 4),
+        "max_allowed_percent": round(max_dist, 4),
+        "min_allowed_percent": round(min_dist, 4),
     }
 
 
@@ -450,17 +408,13 @@ def _levels(values, entry):
     if values is None:
         return []
 
-    if not isinstance(
-        values,
-        (list, tuple, set),
-    ):
+    if not isinstance(values, (list, tuple, set)):
         values = [values]
 
     output = []
 
     for item in values:
         level = _num(item)
-
         if level is not None and level > entry:
             output.append(level)
 
@@ -475,28 +429,16 @@ def _target_item(
     fee,
     slip,
 ):
-    gross_rr = (
-        (price - entry) / (entry - stop)
-    )
-
-    net_rr = _net_rr(
-        entry,
-        stop,
-        price,
-        fee,
-        slip,
-    )
+    gross_rr = (price - entry) / (entry - stop)
+    net_rr = _net_rr(entry, stop, price, fee, slip)
 
     return {
         "price": round(price, 12),
         "reward_percent": round(
-            (price - entry) / entry * 100,
+            (price - entry) / entry * 100.0,
             4,
         ),
-        "risk_reward": round(
-            gross_rr,
-            3,
-        ),
+        "risk_reward": round(gross_rr, 3),
         "net_risk_reward": (
             round(net_rr, 3)
             if net_rr is not None
@@ -515,15 +457,8 @@ def calculate_targets(
     fee_rate=None,
     slippage_rate=None,
 ):
-    entry = _positive(
-        entry_price,
-        "entry_price",
-    )
-
-    stop = _positive(
-        stop_loss,
-        "stop_loss",
-    )
+    entry = _positive(entry_price, "entry_price")
+    stop = _positive(stop_loss, "stop_loss")
 
     if stop >= entry:
         raise ValueError(
@@ -533,20 +468,11 @@ def calculate_targets(
     minimum_rr = (
         MIN_RISK_REWARD
         if min_risk_reward is None
-        else _positive(
-            min_risk_reward,
-            "min_risk_reward",
-        )
+        else _positive(min_risk_reward, "min_risk_reward")
     )
 
-    fee, slip = _cost_rates(
-        fee_rate,
-        slippage_rate,
-    )
-
-    spacing = (
-        entry * MIN_TARGET_SPACING_PERCENT / 100
-    )
+    fee, slip = _cost_rates(fee_rate, slippage_rate)
+    spacing = entry * MIN_TARGET_SPACING_PERCENT / 100.0
 
     selected = []
     sources = []
@@ -556,101 +482,45 @@ def calculate_targets(
             return
 
         price = _num(price)
-
         if price is None or price <= entry:
             return
 
-        if (
-            selected
-            and price - selected[-1] < spacing
-        ):
+        if selected and (price - selected[-1]) < spacing:
             return
 
-        net_rr = _net_rr(
-            entry,
-            stop,
-            price,
-            fee,
-            slip,
-        )
-
-        if (
-            net_rr is None
-            or net_rr + 1e-9 < minimum_rr
-        ):
+        net_rr = _net_rr(entry, stop, price, fee, slip)
+        if net_rr is None or (net_rr + 1e-9) < minimum_rr:
             return
 
         selected.append(price)
         sources.append(source)
 
-    # Resistance targets have priority.
-    for level in _levels(
-        resistance_levels,
-        entry,
-    ):
-        add(
-            level,
-            "RESISTANCE",
-        )
+    for level in _levels(resistance_levels, entry):
+        add(level, "RESISTANCE")
 
-    # ATR fills missing targets.
     atr_value = _num(atr)
 
     if atr_value is not None and atr_value > 0:
-        for mult in (
-            2.0,
-            3.0,
-            4.0,
-            5.0,
-            6.0,
-            8.0,
-            10.0,
-        ):
+        for mult in (1.5, 2.25, 3.0, 4.0, 5.0):
             add(
                 entry + atr_value * mult,
                 f"ATR_{mult:g}x",
             )
-
             if len(selected) == 3:
                 break
 
-    # Percentage fallback only if ATR is unavailable.
-    if (
-        len(selected) < 3
-        and (
-            atr_value is None
-            or atr_value <= 0
-        )
-    ):
-        for pct in (
-            2.0,
-            3.0,
-            4.5,
-            6.0,
-            8.0,
-            10.0,
-        ):
+    if len(selected) < 3 and (atr_value is None or atr_value <= 0):
+        for pct in (2.0, 3.0, 4.5, 6.0, 8.0):
             add(
-                entry * (1 + pct / 100),
+                entry * (1.0 + pct / 100.0),
                 f"FIXED_{pct:g}%",
             )
-
             if len(selected) == 3:
                 break
 
     items = [
-        _target_item(
-            entry,
-            stop,
-            price,
-            source,
-            fee,
-            slip,
-        )
-        for price, source in zip(
-            selected,
-            sources,
-        )
+        _target_item(entry, stop, price, source, fee, slip)
+        for price, source in zip(selected, sources)
     ]
 
     minimum_t1 = _minimum_net_target_price(
@@ -664,29 +534,11 @@ def calculate_targets(
     return {
         "entry_price": round(entry, 12),
         "stop_loss": round(stop, 12),
-        "risk_distance": round(
-            entry - stop,
-            12,
-        ),
-        "minimum_t1_price": round(
-            minimum_t1,
-            12,
-        ),
-        "t1": (
-            items[0]
-            if len(items) > 0
-            else None
-        ),
-        "t2": (
-            items[1]
-            if len(items) > 1
-            else None
-        ),
-        "t3": (
-            items[2]
-            if len(items) > 2
-            else None
-        ),
+        "risk_distance": round(entry - stop, 12),
+        "minimum_t1_price": round(minimum_t1, 12),
+        "t1": items[0] if len(items) > 0 else None,
+        "t2": items[1] if len(items) > 1 else None,
+        "t3": items[2] if len(items) > 2 else None,
         "targets_available": len(items),
         "target_status": (
             "VALID"
@@ -710,128 +562,55 @@ def calculate_position_size(
     fee_rate=DEFAULT_FEE_RATE,
     slippage_rate=DEFAULT_SLIPPAGE_RATE,
 ):
-    capital = _positive(
-        capital,
-        "capital",
-    )
-
-    entry = _positive(
-        entry,
-        "entry",
-    )
-
-    stop = _positive(
-        stop_loss,
-        "stop_loss",
-    )
-
-    risk_pct = _positive(
-        risk_percent,
-        "risk_percent",
-    )
+    capital = _positive(capital, "capital")
+    entry = _positive(entry, "entry")
+    stop = _positive(stop_loss, "stop_loss")
+    risk_pct = _positive(risk_percent, "risk_percent")
 
     if stop >= entry:
-        raise ValueError(
-            "Stop Loss must be below entry"
-        )
+        raise ValueError("Stop Loss must be below entry")
 
     if risk_pct > MAX_RISK_PERCENT + 1e-9:
-        raise ValueError(
-            "Risk exceeds configured maximum"
-        )
+        raise ValueError("Risk exceeds configured maximum")
 
-    fee, slip = _cost_rates(
-        fee_rate,
-        slippage_rate,
+    fee, slip = _cost_rates(fee_rate, slippage_rate)
+    budget = capital * risk_pct / 100.0
+
+    effective_entry, effective_stop = _effective_prices(
+        entry,
+        stop,
+        fee,
+        slip,
     )
 
-    budget = capital * risk_pct / 100
-
-    effective_entry, effective_stop = (
-        _effective_prices(
-            entry,
-            stop,
-            fee,
-            slip,
-        )
-    )
-
-    loss_per_unit = (
-        effective_entry - effective_stop
-    )
-
+    loss_per_unit = effective_entry - effective_stop
     if loss_per_unit <= 0:
-        raise ValueError(
-            "Invalid effective loss per unit"
-        )
+        raise ValueError("Invalid effective loss per unit")
 
     qty_risk = budget / loss_per_unit
-
-    # Include entry costs in capital limitation.
     qty_capital = capital / effective_entry
-
-    qty = min(
-        qty_risk,
-        qty_capital,
-    )
+    qty = min(qty_risk, qty_capital)
 
     if not math.isfinite(qty) or qty <= 0:
-        raise ValueError(
-            "Calculated quantity is invalid"
-        )
+        raise ValueError("Calculated quantity is invalid")
 
     loss = qty * loss_per_unit
 
     return {
-        "capital_usdt": round(
-            capital,
-            8,
-        ),
-        "risk_budget_usdt": round(
-            budget,
-            8,
-        ),
-        "risk_percent_requested": round(
-            risk_pct,
-            4,
-        ),
-        "actual_estimated_loss_usdt": round(
-            loss,
-            8,
-        ),
-        "actual_risk_percent": round(
-            loss / capital * 100,
-            4,
-        ),
-        "quantity": round(
-            qty,
-            12,
-        ),
-        "position_value_usdt": round(
-            qty * entry,
-            8,
-        ),
-        "total_entry_outlay_usdt": round(
-            qty * effective_entry,
-            8,
-        ),
-        "estimated_entry_cost_usdt": round(
-            qty * entry * (fee + slip),
-            8,
-        ),
-        "effective_entry_price": round(
-            effective_entry,
-            12,
-        ),
-        "effective_stop_price": round(
-            effective_stop,
-            12,
-        ),
+        "capital_usdt": round(capital, 8),
+        "risk_budget_usdt": round(budget, 8),
+        "risk_percent_requested": round(risk_pct, 4),
+        "actual_estimated_loss_usdt": round(loss, 8),
+        "actual_risk_percent": round(loss / capital * 100.0, 4),
+        "quantity": round(qty, 12),
+        "position_value_usdt": round(qty * entry, 8),
+        "total_entry_outlay_usdt": round(qty * effective_entry, 8),
+        "estimated_entry_cost_usdt": round(qty * entry * (fee + slip), 8),
+        "effective_entry_price": round(effective_entry, 12),
+        "effective_stop_price": round(effective_stop, 12),
         "fee_rate_per_side": fee,
         "slippage_rate_per_side": slip,
-        "capital_limited": (
-            qty_capital < qty_risk
-        ),
+        "capital_limited": qty_capital < qty_risk,
         "status": "VALID",
     }
 
@@ -856,139 +635,64 @@ def validate_risk(
     stop = _num(stop_loss)
 
     if entry is None or entry <= 0:
-        errors.append(
-            "Invalid entry price"
-        )
+        errors.append("Invalid entry price")
 
     if stop is None or stop <= 0:
-        errors.append(
-            "Invalid Stop Loss"
-        )
+        errors.append("Invalid Stop Loss")
 
-    if (
-        entry is not None
-        and stop is not None
-        and stop >= entry
-    ):
-        errors.append(
-            "Stop Loss must be below entry"
-        )
+    if entry is not None and stop is not None and stop >= entry:
+        errors.append("Stop Loss must be below entry")
 
-    # Stop Loss distance validation.
-    if (
-        entry is not None
-        and stop is not None
-        and 0 < stop < entry
-    ):
-        distance_pct = (
-            (entry - stop) / entry * 100
-        )
+    if entry is not None and stop is not None and 0 < stop < entry:
+        distance_pct = (entry - stop) / entry * 100.0
 
-        if (
-            distance_pct
-            > MAX_STOP_LOSS_DISTANCE_PERCENT
-            + 1e-9
-        ):
-            errors.append(
-                "Stop Loss exceeds maximum distance"
-            )
+        if distance_pct > MAX_STOP_LOSS_DISTANCE_PERCENT + 1e-9:
+            errors.append("Stop Loss exceeds maximum distance")
 
-        if (
-            distance_pct
-            < MIN_STOP_LOSS_DISTANCE_PERCENT
-            - 1e-9
-        ):
-            errors.append(
-                "Stop Loss is below minimum distance"
-            )
+        if distance_pct < MIN_STOP_LOSS_DISTANCE_PERCENT - 1e-9:
+            errors.append("Stop Loss is below minimum distance")
 
-    # Risk percentage validation.
     rp = _num(risk_percent)
+    if rp is None or rp <= 0 or rp > MAX_RISK_PERCENT + 1e-9:
+        errors.append("Risk percentage is invalid or exceeds limit")
 
-    if (
-        rp is None
-        or rp <= 0
-        or rp > MAX_RISK_PERCENT + 1e-9
-    ):
-        errors.append(
-            "Risk percentage is invalid or exceeds limit"
-        )
-
-    # None uses configured minimum.
     if min_risk_reward is None:
         min_rr = MIN_RISK_REWARD
     else:
         min_rr = _num(min_risk_reward)
 
     if min_rr is None or min_rr <= 0:
-        errors.append(
-            "Minimum Risk/Reward is invalid"
-        )
+        errors.append("Minimum Risk/Reward is invalid")
         min_rr_for_check = MIN_RISK_REWARD
-
     else:
         min_rr_for_check = min_rr
-
-        if (
-            min_rr + 1e-9
-            < MIN_RISK_REWARD
-        ):
+        if (min_rr + 1e-9) < MIN_RISK_REWARD:
             errors.append(
                 "Minimum Risk/Reward is below configured policy"
             )
 
-    fee, slip = _cost_rates(
-        fee_rate,
-        slippage_rate,
-    )
+    fee, slip = _cost_rates(fee_rate, slippage_rate)
 
-    # T1 is mandatory.
-    # T2 and T3 are optional.
-    if (
-        not isinstance(targets, dict)
-        or not isinstance(targets.get("t1"), dict)
-    ):
-        errors.append(
-            "Valid T1 target is unavailable"
-        )
-
+    if not isinstance(targets, dict) or not isinstance(targets.get("t1"), dict):
+        errors.append("Valid T1 target is unavailable")
     else:
         previous = entry
 
-        for key in (
-            "t1",
-            "t2",
-            "t3",
-        ):
+        for key in ("t1", "t2", "t3"):
             item = targets.get(key)
-
             if item is None:
                 continue
 
             if not isinstance(item, dict):
-                errors.append(
-                    f"Invalid {key.upper()} target structure"
-                )
+                errors.append(f"Invalid {key.upper()} target structure")
                 continue
 
-            price = _num(
-                item.get("price")
-            )
-
-            if (
-                price is None
-                or entry is None
-                or price <= entry
-            ):
-                errors.append(
-                    f"Invalid {key.upper()} price"
-                )
+            price = _num(item.get("price"))
+            if price is None or entry is None or price <= entry:
+                errors.append(f"Invalid {key.upper()} price")
                 continue
 
-            if (
-                previous is not None
-                and price <= previous
-            ):
+            if previous is not None and price <= previous:
                 errors.append(
                     f"{key.upper()} must be above previous target"
                 )
@@ -996,68 +700,24 @@ def validate_risk(
 
             previous = price
 
-            if (
-                stop is not None
-                and entry is not None
-                and stop < entry
-            ):
-                rr = _net_rr(
-                    entry,
-                    stop,
-                    price,
-                    fee,
-                    slip,
-                )
+            if stop is not None and entry is not None and stop < entry:
+                rr = _net_rr(entry, stop, price, fee, slip)
+                if rr is None or (rr + 1e-9) < min_rr_for_check:
+                    errors.append(f"{key.upper()} net R:R is below minimum")
 
-                if (
-                    rr is None
-                    or rr + 1e-9 < min_rr_for_check
-                ):
-                    errors.append(
-                        f"{key.upper()} net R:R is below minimum"
-                    )
-
-    # Position size validation.
     if position_size is not None:
-
         if not isinstance(position_size, dict):
-            errors.append(
-                "Invalid position size data"
-            )
-
+            errors.append("Invalid position size data")
         else:
-            qty = _num(
-                position_size.get("quantity")
-            )
-
-            actual_risk = _num(
-                position_size.get(
-                    "actual_risk_percent"
-                )
-            )
-
-            loss = _num(
-                position_size.get(
-                    "actual_estimated_loss_usdt"
-                )
-            )
-
-            budget = _num(
-                position_size.get(
-                    "risk_budget_usdt"
-                )
-            )
+            qty = _num(position_size.get("quantity"))
+            actual_risk = _num(position_size.get("actual_risk_percent"))
+            loss = _num(position_size.get("actual_estimated_loss_usdt"))
+            budget = _num(position_size.get("risk_budget_usdt"))
 
             if qty is None or qty <= 0:
-                errors.append(
-                    "Invalid position quantity"
-                )
+                errors.append("Invalid position quantity")
 
-            if (
-                actual_risk is None
-                or actual_risk
-                > MAX_RISK_PERCENT + 1e-6
-            ):
+            if actual_risk is None or actual_risk > MAX_RISK_PERCENT + 1e-6:
                 errors.append(
                     "Position risk exceeds limit or is unavailable"
                 )
@@ -1065,32 +725,18 @@ def validate_risk(
             if (
                 loss is None
                 or budget is None
-                or loss
-                > budget + max(
-                    1e-8,
-                    budget * 1e-6,
-                )
+                or loss > budget + max(1e-8, budget * 1e-6)
             ):
-                errors.append(
-                    "Estimated loss exceeds risk budget"
-                )
+                errors.append("Estimated loss exceeds risk budget")
 
     return {
         "valid": not errors,
-        "status": (
-            "VALID"
-            if not errors
-            else "REJECT"
-        ),
+        "status": "VALID" if not errors else "REJECT",
         "errors": errors,
         "max_risk_percent": MAX_RISK_PERCENT,
         "minimum_risk_reward": MIN_RISK_REWARD,
-        "max_stop_loss_distance_percent": (
-            MAX_STOP_LOSS_DISTANCE_PERCENT
-        ),
-        "min_stop_loss_distance_percent": (
-            MIN_STOP_LOSS_DISTANCE_PERCENT
-        ),
+        "max_stop_loss_distance_percent": MAX_STOP_LOSS_DISTANCE_PERCENT,
+        "min_stop_loss_distance_percent": MIN_STOP_LOSS_DISTANCE_PERCENT,
     }
 
 
@@ -1109,10 +755,7 @@ def build_risk_plan(
     slippage_rate=DEFAULT_SLIPPAGE_RATE,
 ):
     try:
-        entry = _positive(
-            entry_price,
-            "entry_price",
-        )
+        entry = _positive(entry_price, "entry_price")
 
         stop_data = calculate_stop_loss(
             entry_price=entry,
@@ -1151,15 +794,8 @@ def build_risk_plan(
         )
 
         return {
-            "status": (
-                "VALID"
-                if validation["valid"]
-                else "REJECT"
-            ),
-            "entry_price": round(
-                entry,
-                12,
-            ),
+            "status": "VALID" if validation["valid"] else "REJECT",
+            "entry_price": round(entry, 12),
             "stop_loss": stop_data,
             "targets": targets,
             "position_size": position,
@@ -1172,12 +808,7 @@ def build_risk_plan(
         ZeroDivisionError,
         OverflowError,
     ) as exc:
-
-        logger.warning(
-            "RISK PLAN REJECTED: %s",
-            exc,
-        )
-
+        logger.warning("RISK PLAN REJECTED: %s", exc)
         return {
             "status": "REJECT",
             "error": str(exc),

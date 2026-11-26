@@ -1,44 +1,70 @@
+
 """
 Binance Spot V3 Smart Signal Scanner
-Central Configuration Module (Sensitivity Tuned for Early Pump)
+Central Configuration Module
 
-Version: 3.1.1
+Version: 3.2.0
 Python: 3.11
 Market: Binance Spot Only
+
+Balanced signal sensitivity:
+- Avoid excessive filtering.
+- Preserve liquidity and risk controls.
+- Allow confirmed breakout without mandatory retest.
 """
 
 from copy import deepcopy
 import math
 
+
 # ============================================================
 # 1. CORE CONFIGURATION
 # ============================================================
+
 CONFIG = {
-    "VERSION": "3.1.1",
+    "VERSION": "3.2.0",
     "EXCHANGE": "BINANCE",
     "MARKET_TYPE": "SPOT",
     "QUOTE_ASSET": "USDT",
+
     "SCAN_INTERVAL_SECONDS": 300,
+
     "TARGET_SIGNALS_PER_DAY": (5, 7),
     "TARGET_SIGNALS_MANDATORY": False,
+
     "MAX_TRADE_DURATION_HOURS": 48,
     "SIGNAL_TRACKING_HOURS": 48,
+
     "TIMEZONE": "UTC",
     "PYTHON_VERSION": "3.11",
+
     "SPOT_ONLY": True,
     "USDT_ONLY": True,
+
     "DEFAULT_DRY_RUN": True,
     "SIMULATION_CAPITAL_USDT": 100.0,
-    "ALLOWED_SIGNAL_TYPES": ["STRONG BUY", "EXCELLENT BUY"],
+
+    "ALLOWED_SIGNAL_TYPES": [
+        "STRONG BUY",
+        "EXCELLENT BUY",
+    ],
+
     "EXCLUDED_MARKETS": [
-        "FUTURES", "MARGIN", "STOCKS", "SHARES",
-        "EQUITIES", "TOKENIZED_STOCKS", "NON_CRYPTO_ASSETS",
+        "FUTURES",
+        "MARGIN",
+        "STOCKS",
+        "SHARES",
+        "EQUITIES",
+        "TOKENIZED_STOCKS",
+        "NON_CRYPTO_ASSETS",
     ],
 }
+
 
 # ============================================================
 # 2. TIMEFRAME CONFIGURATION
 # ============================================================
+
 TIMEFRAMES = {
     "SCALP": {
         "TRIGGER": "5m",
@@ -46,182 +72,303 @@ TIMEFRAMES = {
         "ADDITIONAL_CONFIRMATION": "30m",
         "ENTRY_VALIDITY_MINUTES": 15,
     },
+
     "SWING": {
         "TRIGGER": "15m",
         "CONFIRMATION": "30m",
         "TREND_CONFIRMATION": "1h",
         "ENTRY_VALIDITY_MINUTES": 60,
     },
-    "BTC_MARKET": ["15m", "1h", "4h"],
+
+    "BTC_MARKET": [
+        "15m",
+        "1h",
+        "4h",
+    ],
+
     "REQUIRE_CLOSED_CANDLES": True,
 }
+
 
 # ============================================================
 # 3. STRATEGY CONFIGURATION
 # ============================================================
+
 STRATEGIES = {
     "SCALP": {
         "ENABLED": True,
         "MAX_DURATION": "SEVERAL_HOURS",
         "TRIGGER_TIMEFRAME": "5m",
-        "CONFIRMATION_TIMEFRAMES": ["15m", "30m"],
+        "CONFIRMATION_TIMEFRAMES": [
+            "15m",
+            "30m",
+        ],
         "ENTRY_VALIDITY_MINUTES": 15,
     },
+
     "SWING": {
         "ENABLED": True,
         "MAX_DURATION_HOURS": 48,
         "TRIGGER_TIMEFRAME": "15m",
-        "CONFIRMATION_TIMEFRAMES": ["30m", "1h"],
+        "CONFIRMATION_TIMEFRAMES": [
+            "30m",
+            "1h",
+        ],
         "ENTRY_VALIDITY_MINUTES": 60,
     },
+
+    # Retest is preferred but not mandatory.
     "ENTRY_SEQUENCE": [
         "BREAKOUT",
         "CANDLE_CLOSE",
-        "RETEST",
         "BUYER_CONFIRMATION",
         "ENTRY",
     ],
+
     "PREFER_RETEST": True,
+
     "REQUIRE_BREAKOUT_CONFIRMATION": True,
-    "REQUIRE_RETEST": True,
+    "REQUIRE_RETEST": False,
     "REQUIRE_BUYER_CONFIRMATION": True,
+
     "REJECT_LATE_ENTRY": True,
+
     "MAX_ENTRY_EXTENSION_PERCENT": 3.0,
     "RETEST_TOLERANCE_PERCENT": 0.5,
     "BREAKOUT_LOOKBACK_CANDLES": 20,
 }
 
+
 # ============================================================
 # 4. RISK CONFIGURATION
 # ============================================================
+
 RISK_CONFIG = {
     "MAX_RISK_PER_TRADE_PERCENT": 1.0,
-    "MIN_RISK_REWARD_RATIO": 2.0,
+    "MIN_RISK_REWARD_RATIO": 1.5,
+
     "MAX_RISK_PERCENT": 1.0,
-    "MIN_RISK_REWARD": 2.0,
+    "MIN_RISK_REWARD": 1.5,
+
     "POSITION_SIZING_METHOD": "STOP_LOSS_DISTANCE",
+
     "INCLUDE_TRADING_FEES": True,
     "INCLUDE_ESTIMATED_SLIPPAGE": True,
+
     "FEE_RATE": 0.001,
     "SLIPPAGE_RATE": 0.001,
+
     "ATR_MULTIPLIER": 1.5,
+
     "MAX_STOP_LOSS_DISTANCE_PERCENT": 8.0,
+
     "STOP_LOSS_METHOD": [
         "TECHNICAL_INVALIDATION",
         "CONFIRMED_SUPPORT",
         "ATR14",
         "MARKET_VOLATILITY",
     ],
+
     "TARGET_METHOD": {
         "T1": "FIRST_MEANINGFUL_RESISTANCE",
         "T2": "NEXT_RESISTANCE",
         "T3": "EXTENDED_RESISTANCE",
     },
+
     "REQUIRE_MINIMUM_RR_AT_T1": True,
 }
+
 
 # ============================================================
 # 5. FILTER CONFIGURATION
 # ============================================================
+
 FILTER_CONFIG = {
     "ALLOWED_QUOTE_ASSET": "USDT",
+
+    # Preserve liquidity protection.
     "MIN_24H_QUOTE_VOLUME_USDT": 3_000_000,
     "MIN_QUOTE_VOLUME_USDT": 3_000_000,
     "MIN_QUOTE_VOLUME": 3_000_000,
-    
-    # 🔥 অপ্টিমাইজড লিমিট: 1.2 থেকে কমিয়ে 1.05 করা হলো আর্লি পাম্প ধরার জন্য
+
     "MIN_RELATIVE_VOLUME": 1.05,
     "PREFERRED_RELATIVE_VOLUME": 1.2,
-    
+
     "MAX_SPREAD_PERCENT": 0.15,
+
     "MIN_24H_TRADE_COUNT": 1000,
     "MIN_24H_TRADES": 1000,
     "MIN_TRADES": 1000,
+
     "REQUIRE_ORDER_BOOK": True,
     "MIN_ORDER_BOOK_DEPTH": 0,
 
     "RSI": {
         "PERIOD": 14,
+
         "WEAK_BELOW": 45,
         "CAUTION_MIN": 45,
+
         "PREFERRED_MIN": 50,
         "PREFERRED_MAX": 68,
+
         "OVEREXTENSION_MIN": 69,
         "OVEREXTENSION_MAX": 74,
+
         "REJECT_ABOVE": 74,
     },
 
     "ORDER_BOOK": {
         "VALIDATE_SPREAD": True,
         "VALIDATE_DEPTH": True,
+
         "VALIDATE_BUY_LIQUIDITY": True,
         "VALIDATE_SELL_LIQUIDITY": True,
+
         "ESTIMATE_SLIPPAGE": True,
         "CHECK_IMBALANCE": True,
     },
 
     "PUMP_PROTECTION": {
         "ENABLED": True,
+
         "CHECK_PRICE_SPIKES": True,
         "CHECK_VOLUME_SPIKES": True,
         "CHECK_RAPID_REVERSALS": True,
         "CHECK_THIN_ORDER_BOOK": True,
         "CHECK_ABNORMAL_VOLATILITY": True,
+
         "REJECT_STALE_DATA": True,
+
         "MAX_ROC_PERCENT": 4.0,
         "MAX_BB_WIDTH": 0.20,
     },
 }
 
+
 # ============================================================
 # 6. INDICATOR CONFIGURATION
 # ============================================================
+
 INDICATOR_CONFIG = {
-    "EMA": {"FAST": 9, "SLOW": 20},
-    "SMA": {"PERIODS": [20, 50, 200]},
-    "RSI": {"PERIOD": 14},
-    "MACD": {"FAST": 12, "SLOW": 26, "SIGNAL": 9},
-    "ADX": {"PERIOD": 14},
-    "ATR": {"PERIOD": 14},
-    "BOLLINGER": {"PERIOD": 20, "STANDARD_DEVIATION": 2},
-    "VWAP": {"METHOD": "SESSION_BASED"},
-    
-    # 🔥 অপ্টিমাইজড: 20 থেকে কমিয়ে 10 করা হলো, যাতে দ্রুত ভলিউম স্পাইক ধরা পড়ে
-    "RELATIVE_VOLUME": {"BASELINE_CANDLES": 10},
-    
-    "OBV": {"METHOD": "STANDARD"},
-    "CMF": {"PERIOD": 20},
-    "ROC": {"PERIOD": 5},
-    "VOLUME_MOMENTUM": {"PERIOD": 3},
+    "EMA": {
+        "FAST": 9,
+        "SLOW": 20,
+    },
+
+    "SMA": {
+        "PERIODS": [
+            20,
+            50,
+            200,
+        ],
+    },
+
+    "RSI": {
+        "PERIOD": 14,
+    },
+
+    "MACD": {
+        "FAST": 12,
+        "SLOW": 26,
+        "SIGNAL": 9,
+    },
+
+    "ADX": {
+        "PERIOD": 14,
+    },
+
+    "ATR": {
+        "PERIOD": 14,
+    },
+
+    "BOLLINGER": {
+        "PERIOD": 20,
+        "STANDARD_DEVIATION": 2,
+    },
+
+    "VWAP": {
+        "METHOD": "SESSION_BASED",
+    },
+
+    "RELATIVE_VOLUME": {
+        "BASELINE_CANDLES": 10,
+    },
+
+    "OBV": {
+        "METHOD": "STANDARD",
+    },
+
+    "CMF": {
+        "PERIOD": 20,
+    },
+
+    "ROC": {
+        "PERIOD": 5,
+    },
+
+    "VOLUME_MOMENTUM": {
+        "PERIOD": 3,
+    },
+
     "SUPPORT_RESISTANCE": {
         "METHOD": "RECENT_CONFIRMED_SWING_LEVELS",
         "PIVOT_LOOKBACK": 5,
     },
+
     "MIN_REQUIRED_CANDLES": 220,
 }
+
 
 # ============================================================
 # 7. MARKET FILTER CONFIGURATION
 # ============================================================
+
 MARKET_CONFIG = {
     "BTC_SYMBOL": "BTCUSDT",
-    "REQUIRED_TIMEFRAMES": ["15m", "1h", "4h"],
+
+    "REQUIRED_TIMEFRAMES": [
+        "15m",
+        "1h",
+        "4h",
+    ],
+
     "REQUIRED_INDICATORS": [
-        "MA20", "MA50", "MA200", "RSI14",
-        "MACD", "ADX14", "ATR14", "VOLUME_TREND",
+        "MA20",
+        "MA50",
+        "MA200",
+        "RSI14",
+        "MACD",
+        "ADX14",
+        "ATR14",
+        "VOLUME_TREND",
     ],
+
     "MARKET_STATUSES": [
-        "BULLISH", "NEUTRAL", "BEARISH", "HIGH_RISK", "UNKNOWN",
+        "BULLISH",
+        "NEUTRAL",
+        "BEARISH",
+        "HIGH_RISK",
+        "UNKNOWN",
     ],
+
     "UNKNOWN_DATA_POLICY": "CONSERVATIVE",
-    "REJECT_NEW_SIGNALS_ON": ["HIGH_RISK", "UNKNOWN"],
+
+    "REJECT_NEW_SIGNALS_ON": [
+        "HIGH_RISK",
+        "UNKNOWN",
+    ],
+
     "ALLOW_SELECTIVE_SIGNALS_ON_BEARISH": True,
+
     "REQUIRE_COMPLETE_BTC_DATA": True,
 }
+
 
 # ============================================================
 # 8. SIGNAL SCORING CONFIGURATION
 # ============================================================
+
 SIGNAL_CONFIG = {
     "SCORE_COMPONENTS": [
         "market_condition",
@@ -240,109 +387,185 @@ SIGNAL_CONFIG = {
         "early_momentum",
         "volume_acceleration",
     ],
+
     "POINTS_PER_COMPONENT": 1,
     "MAX_SCORE": 15,
-    "MIN_SCORE": 10,
-    "REJECT_MAX_SCORE": 9,
-    "STRONG_MIN_SCORE": 10,
-    "EXCELLENT_MIN_SCORE": 13,
-    
-    # Compatibility aliases
-    "STRONG_BUY_MIN_SCORE": 10,
-    "STRONG_BUY_MAX_SCORE": 12,
-    "EXCELLENT_BUY_MIN_SCORE": 13,
+
+    # Balanced score threshold.
+    "MIN_SCORE": 9,
+    "REJECT_MAX_SCORE": 8,
+
+    "STRONG_MIN_SCORE": 9,
+    "EXCELLENT_MIN_SCORE": 12,
+
+    # Compatibility aliases.
+    "STRONG_BUY_MIN_SCORE": 9,
+    "STRONG_BUY_MAX_SCORE": 11,
+
+    "EXCELLENT_BUY_MIN_SCORE": 12,
     "EXCELLENT_BUY_MAX_SCORE": 15,
 
     "MISSING_DATA_POLICY": "DO_NOT_AWARD_POINTS",
+
     "MANDATORY_REJECTION_OVERRIDES_SCORE": True,
-    "ALLOWED_SIGNAL_TYPES": ["STRONG BUY", "EXCELLENT BUY"],
+
+    "ALLOWED_SIGNAL_TYPES": [
+        "STRONG BUY",
+        "EXCELLENT BUY",
+    ],
 }
+
 
 # ============================================================
 # 9. SIGNAL TRACKING CONFIGURATION
 # ============================================================
+
 TRACKING_CONFIG = {
     "MAX_TRACKING_HOURS": 48,
     "MAX_TRACK_HOURS": 48,
+
     "SCALP_ENTRY_VALIDITY_MINUTES": 15,
     "SWING_ENTRY_VALIDITY_MINUTES": 60,
+
     "DUPLICATE_PREVENTION": True,
     "COOLDOWN_HOURS": 6,
+
     "SIGNAL_EXPIRY": True,
     "PERFORMANCE_TRACKING": True,
+
     "TRACK_PARTIAL_EXITS": True,
     "TRACK_REALIZED_PNL": True,
+
     "TRACK_FIELDS": [
-        "SIGNAL_TIMESTAMP", "ENTRY_PRICE", "ACTUAL_ENTRY_STATUS",
-        "STOP_LOSS", "T1", "T2", "T3", "MAX_FAVORABLE_MOVEMENT",
-        "MAX_ADVERSE_MOVEMENT", "TARGET_REACHED", "STOP_LOSS_REACHED",
-        "EXPIRED_STATUS", "FINAL_RESULT", "REALIZED_PNL", "PARTIAL_EXIT_HISTORY",
+        "SIGNAL_TIMESTAMP",
+        "ENTRY_PRICE",
+        "ACTUAL_ENTRY_STATUS",
+        "STOP_LOSS",
+        "T1",
+        "T2",
+        "T3",
+        "MAX_FAVORABLE_MOVEMENT",
+        "MAX_ADVERSE_MOVEMENT",
+        "TARGET_REACHED",
+        "STOP_LOSS_REACHED",
+        "EXPIRED_STATUS",
+        "FINAL_RESULT",
+        "REALIZED_PNL",
+        "PARTIAL_EXIT_HISTORY",
     ],
+
     "EXPIRED_BEFORE_ENTRY_COUNTS_AS_TRADE": False,
 }
+
 
 # ============================================================
 # 10. API CONFIGURATION
 # ============================================================
+
 API_CONFIG = {
     "BASE_URL": "https://data-api.binance.vision",
+
     "ENDPOINTS": {
         "EXCHANGE_INFO": "/api/v3/exchangeInfo",
         "KLINES": "/api/v3/klines",
         "TICKER_24H": "/api/v3/ticker/24hr",
         "ORDER_BOOK": "/api/v3/depth",
     },
+
     "DATA_FRESHNESS_SECONDS": {
-        "5m": 600, "15m": 1800, "30m": 3600, "1h": 7200, "4h": 14400,
-        "TICKER_24H": 120, "ORDER_BOOK": 10,
+        "5m": 600,
+        "15m": 1800,
+        "30m": 3600,
+        "1h": 7200,
+        "4h": 14400,
+
+        "TICKER_24H": 120,
+        "ORDER_BOOK": 10,
     },
+
     "REQUIRE_CLOSED_CANDLES": True,
+
     "MAX_RETRIES": 3,
     "REQUEST_TIMEOUT_SECONDS": 10,
     "RETRY_BACKOFF_SECONDS": 1,
+
     "USE_PUBLIC_API_ONLY": True,
+
     "MISSING_DATA_POLICY": "REJECT_OR_MARK_UNKNOWN",
 }
+
 
 # ============================================================
 # 11. TELEGRAM CONFIGURATION
 # ============================================================
+
 TELEGRAM_CONFIG = {
     "BOT_TOKEN_ENV": "TELEGRAM_BOT_TOKEN",
     "CHAT_ID_ENV": "TELEGRAM_CHAT_ID",
+
     "REQUIRE_BOTH_CREDENTIALS": True,
+
     "TEST_MESSAGE_SEPARATE_FROM_SIGNALS": True,
+
     "MAX_MESSAGE_LENGTH": 4000,
     "REQUEST_TIMEOUT_SECONDS": 15,
     "MAX_RETRIES": 2,
+
     "REQUIRED_SIGNAL_FIELDS": [
-        "SYMBOL", "SIGNAL_CLASSIFICATION", "STRATEGY", "SCORE",
-        "MARKET_CONDITION", "ENTRY_ZONE", "STOP_LOSS", "T1", "T2", "T3",
-        "RISK_REWARD", "ENTRY_EXPIRY", "TIMESTAMP_UTC", "WARNINGS",
+        "SYMBOL",
+        "SIGNAL_CLASSIFICATION",
+        "STRATEGY",
+        "SCORE",
+        "MARKET_CONDITION",
+        "ENTRY_ZONE",
+        "STOP_LOSS",
+        "T1",
+        "T2",
+        "T3",
+        "RISK_REWARD",
+        "ENTRY_EXPIRY",
+        "TIMESTAMP_UTC",
+        "WARNINGS",
     ],
 }
+
 
 # ============================================================
 # 12. GITHUB ACTIONS CONFIGURATION
 # ============================================================
+
 WORKFLOW_CONFIG = {
     "RUNTIME": "Python 3.11",
+
     "SCHEDULE_INTERVAL_MINUTES": 5,
+
     "MANUAL_TESTING": True,
+
     "RUN_AUTOMATED_TESTS_BEFORE_SIGNALS": True,
+
     "CREDENTIAL_STORAGE": "GITHUB_SECRETS",
+
     "DEFAULT_DRY_RUN": True,
+
     "ALLOW_LIVE_WITHOUT_TESTS": False,
+
     "USE_CONCURRENCY_CONTROL": True,
 }
+
 
 # ============================================================
 # 13. CONFIGURATION EXPORTS
 # ============================================================
+
 REQUIRED_CONFIG_EXPORTS = [
-    "CONFIG", "TIMEFRAMES", "STRATEGIES", "RISK_CONFIG",
-    "FILTER_CONFIG", "API_CONFIG",
+    "CONFIG",
+    "TIMEFRAMES",
+    "STRATEGIES",
+    "RISK_CONFIG",
+    "FILTER_CONFIG",
+    "API_CONFIG",
 ]
+
 
 def get_config():
     return {
@@ -360,122 +583,377 @@ def get_config():
         "WORKFLOW_CONFIG": deepcopy(WORKFLOW_CONFIG),
     }
 
+
 # ============================================================
 # 14. CONFIGURATION VALIDATION
 # ============================================================
+
 def validate_config():
+
+    # --------------------------------------------------------
+    # Core validation
+    # --------------------------------------------------------
+
     if CONFIG["MARKET_TYPE"] != "SPOT":
-        raise ValueError("Only Binance Spot market is allowed.")
+        raise ValueError(
+            "Only Binance Spot market is allowed."
+        )
+
     if CONFIG["SPOT_ONLY"] is not True:
-        raise ValueError("SPOT_ONLY must be True.")
-    if CONFIG["QUOTE_ASSET"] != "USDT" or CONFIG["USDT_ONLY"] is not True:
-        raise ValueError("Only USDT Spot pairs are allowed.")
+        raise ValueError(
+            "SPOT_ONLY must be True."
+        )
+
+    if (
+        CONFIG["QUOTE_ASSET"] != "USDT"
+        or CONFIG["USDT_ONLY"] is not True
+    ):
+        raise ValueError(
+            "Only USDT Spot pairs are allowed."
+        )
+
     if CONFIG["SCAN_INTERVAL_SECONDS"] != 300:
-        raise ValueError("Scan interval must be 5 minutes.")
+        raise ValueError(
+            "Scan interval must be 5 minutes."
+        )
+
     if CONFIG["MAX_TRADE_DURATION_HOURS"] != 48:
-        raise ValueError("Maximum trade duration must be 48 hours.")
+        raise ValueError(
+            "Maximum trade duration must be 48 hours."
+        )
+
     if CONFIG["DEFAULT_DRY_RUN"] is not True:
-        raise ValueError("Default DRY_RUN must remain enabled.")
+        raise ValueError(
+            "Default DRY_RUN must remain enabled."
+        )
 
     capital = CONFIG["SIMULATION_CAPITAL_USDT"]
-    if not isinstance(capital, (int, float)) or not math.isfinite(capital):
-        raise ValueError("Simulation capital must be finite.")
-    if capital <= 0:
-        raise ValueError("Simulation capital must be positive.")
+
+    if (
+        not isinstance(capital, (int, float))
+        or not math.isfinite(capital)
+        or capital <= 0
+    ):
+        raise ValueError(
+            "Simulation capital must be finite and positive."
+        )
+
+    # --------------------------------------------------------
+    # Timeframe validation
+    # --------------------------------------------------------
 
     if TIMEFRAMES["SCALP"]["TRIGGER"] != "5m":
-        raise ValueError("Scalp trigger timeframe must be 5m.")
+        raise ValueError(
+            "Scalp trigger timeframe must be 5m."
+        )
+
     if TIMEFRAMES["SCALP"]["CONFIRMATION"] != "15m":
-        raise ValueError("Scalp confirmation timeframe must be 15m.")
+        raise ValueError(
+            "Scalp confirmation timeframe must be 15m."
+        )
+
     if TIMEFRAMES["SCALP"]["ADDITIONAL_CONFIRMATION"] != "30m":
-        raise ValueError("Scalp additional confirmation must be 30m.")
+        raise ValueError(
+            "Scalp additional confirmation must be 30m."
+        )
+
     if TIMEFRAMES["SWING"]["TRIGGER"] != "15m":
-        raise ValueError("Swing trigger timeframe must be 15m.")
+        raise ValueError(
+            "Swing trigger timeframe must be 15m."
+        )
+
     if TIMEFRAMES["SWING"]["CONFIRMATION"] != "30m":
-        raise ValueError("Swing confirmation timeframe must be 30m.")
+        raise ValueError(
+            "Swing confirmation timeframe must be 30m."
+        )
+
     if TIMEFRAMES["SWING"]["TREND_CONFIRMATION"] != "1h":
-        raise ValueError("Swing trend confirmation must be 1h.")
+        raise ValueError(
+            "Swing trend confirmation must be 1h."
+        )
+
     if TIMEFRAMES["REQUIRE_CLOSED_CANDLES"] is not True:
-        raise ValueError("Closed candles must be required.")
+        raise ValueError(
+            "Closed candles must be required."
+        )
 
-    for key in ("REQUIRE_BREAKOUT_CONFIRMATION", "REQUIRE_RETEST", "REQUIRE_BUYER_CONFIRMATION", "REJECT_LATE_ENTRY"):
+    # --------------------------------------------------------
+    # Strategy validation
+    # --------------------------------------------------------
+
+    required_true_strategy_keys = (
+        "REQUIRE_BREAKOUT_CONFIRMATION",
+        "REQUIRE_BUYER_CONFIRMATION",
+        "REJECT_LATE_ENTRY",
+    )
+
+    for key in required_true_strategy_keys:
         if STRATEGIES[key] is not True:
-            raise ValueError(f"{key} must be True.")
+            raise ValueError(
+                f"{key} must be True."
+            )
 
-    expected_sequence = ["BREAKOUT", "CANDLE_CLOSE", "RETEST", "BUYER_CONFIRMATION", "ENTRY"]
+    if STRATEGIES["REQUIRE_RETEST"] not in (True, False):
+        raise ValueError(
+            "REQUIRE_RETEST must be boolean."
+        )
+
+    expected_sequence = [
+        "BREAKOUT",
+        "CANDLE_CLOSE",
+        "BUYER_CONFIRMATION",
+        "ENTRY",
+    ]
+
     if STRATEGIES["ENTRY_SEQUENCE"] != expected_sequence:
-        raise ValueError("Entry sequence configuration mismatch.")
+        raise ValueError(
+            "Entry sequence configuration mismatch."
+        )
+
+    if STRATEGIES["PREFER_RETEST"] is not True:
+        raise ValueError(
+            "Retest preference must remain enabled."
+        )
+
+    # --------------------------------------------------------
+    # Risk validation
+    # --------------------------------------------------------
 
     max_risk = RISK_CONFIG["MAX_RISK_PER_TRADE_PERCENT"]
     min_rr = RISK_CONFIG["MIN_RISK_REWARD_RATIO"]
-    if not math.isfinite(max_risk) or not 0 < max_risk <= 1.0:
-        raise ValueError("Risk per trade must be above 0 and at most 1%.")
-    if not math.isfinite(min_rr) or min_rr < 2.0:
-        raise ValueError("Minimum risk/reward must be at least 1:2.")
 
-    for key in ("FEE_RATE", "SLIPPAGE_RATE", "ATR_MULTIPLIER"):
+    if (
+        not isinstance(max_risk, (int, float))
+        or not math.isfinite(max_risk)
+        or not 0 < max_risk <= 1.0
+    ):
+        raise ValueError(
+            "Risk per trade must be above 0 and at most 1%."
+        )
+
+    if (
+        not isinstance(min_rr, (int, float))
+        or not math.isfinite(min_rr)
+        or min_rr < 1.5
+    ):
+        raise ValueError(
+            "Minimum risk/reward must be at least 1:1.5."
+        )
+
+    if RISK_CONFIG["MIN_RISK_REWARD"] != min_rr:
+        raise ValueError(
+            "Risk/reward compatibility settings do not match."
+        )
+
+    for key in (
+        "FEE_RATE",
+        "SLIPPAGE_RATE",
+        "ATR_MULTIPLIER",
+    ):
         value = RISK_CONFIG[key]
-        if not math.isfinite(value) or value < 0:
-            raise ValueError(f"{key} must be finite and non-negative.")
+
+        if (
+            not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(
+                f"{key} must be finite and non-negative."
+            )
 
     if RISK_CONFIG["ATR_MULTIPLIER"] <= 0:
-        raise ValueError("ATR multiplier must be positive.")
+        raise ValueError(
+            "ATR multiplier must be positive."
+        )
+
+    # --------------------------------------------------------
+    # Filter validation
+    # --------------------------------------------------------
 
     if FILTER_CONFIG["ALLOWED_QUOTE_ASSET"] != "USDT":
-        raise ValueError("Only USDT quote assets are allowed.")
+        raise ValueError(
+            "Only USDT quote assets are allowed."
+        )
 
-    for key in ("MIN_24H_QUOTE_VOLUME_USDT", "MIN_24H_TRADE_COUNT", "MAX_SPREAD_PERCENT", "MIN_RELATIVE_VOLUME"):
+    positive_filter_keys = (
+        "MIN_24H_QUOTE_VOLUME_USDT",
+        "MIN_24H_TRADE_COUNT",
+        "MAX_SPREAD_PERCENT",
+        "MIN_RELATIVE_VOLUME",
+    )
+
+    for key in positive_filter_keys:
         value = FILTER_CONFIG[key]
-        if not math.isfinite(value) or value <= 0:
-            raise ValueError(f"{key} must be positive and finite.")
+
+        if (
+            not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(
+                f"{key} must be positive and finite."
+            )
+
+    if FILTER_CONFIG["MIN_RELATIVE_VOLUME"] < 0.5:
+        raise ValueError(
+            "Minimum relative volume is too low."
+        )
+
+    if FILTER_CONFIG["MAX_SPREAD_PERCENT"] > 1.0:
+        raise ValueError(
+            "Maximum spread limit is too high."
+        )
+
+    # --------------------------------------------------------
+    # Indicator validation
+    # --------------------------------------------------------
 
     ema = INDICATOR_CONFIG["EMA"]
     macd = INDICATOR_CONFIG["MACD"]
-    if ema["FAST"] <= 0 or ema["SLOW"] <= ema["FAST"]:
-        raise ValueError("Invalid EMA periods.")
-    if macd["FAST"] <= 0 or macd["SLOW"] <= macd["FAST"]:
-        raise ValueError("Invalid MACD periods.")
+
+    if (
+        ema["FAST"] <= 0
+        or ema["SLOW"] <= ema["FAST"]
+    ):
+        raise ValueError(
+            "Invalid EMA periods."
+        )
+
+    if (
+        macd["FAST"] <= 0
+        or macd["SLOW"] <= macd["FAST"]
+    ):
+        raise ValueError(
+            "Invalid MACD periods."
+        )
+
     if macd["SIGNAL"] <= 0:
-        raise ValueError("Invalid MACD signal period.")
+        raise ValueError(
+            "Invalid MACD signal period."
+        )
 
     if INDICATOR_CONFIG["MIN_REQUIRED_CANDLES"] < 220:
-        raise ValueError("Minimum candle history must be at least 220.")
+        raise ValueError(
+            "Minimum candle history must be at least 220."
+        )
+
     if INDICATOR_CONFIG["RELATIVE_VOLUME"]["BASELINE_CANDLES"] <= 0:
-        raise ValueError("Relative volume baseline must be positive.")
+        raise ValueError(
+            "Relative volume baseline must be positive."
+        )
+
+    # --------------------------------------------------------
+    # Market validation
+    # --------------------------------------------------------
 
     if MARKET_CONFIG["BTC_SYMBOL"] != "BTCUSDT":
-        raise ValueError("BTC market symbol must be BTCUSDT.")
-    if MARKET_CONFIG["UNKNOWN_DATA_POLICY"] != "CONSERVATIVE":
-        raise ValueError("Unknown data policy must be conservative.")
-    if "HIGH_RISK" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
-        raise ValueError("HIGH_RISK must reject new signals.")
-    if "UNKNOWN" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
-        raise ValueError("UNKNOWN market must reject new signals.")
+        raise ValueError(
+            "BTC market symbol must be BTCUSDT."
+        )
 
-    if SIGNAL_CONFIG["MAX_SCORE"] != len(SIGNAL_CONFIG["SCORE_COMPONENTS"]):
-        raise ValueError("Signal scoring configuration mismatch.")
-    if SIGNAL_CONFIG["MIN_SCORE"] < 8:
-        raise ValueError("Minimum signal score must be at least 8.")
-    if not (0 <= SIGNAL_CONFIG["REJECT_MAX_SCORE"] < SIGNAL_CONFIG["MIN_SCORE"] <= SIGNAL_CONFIG["MAX_SCORE"]):
-        raise ValueError("Invalid signal score boundaries.")
+    if MARKET_CONFIG["UNKNOWN_DATA_POLICY"] != "CONSERVATIVE":
+        raise ValueError(
+            "Unknown data policy must be conservative."
+        )
+
+    if "HIGH_RISK" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
+        raise ValueError(
+            "HIGH_RISK must reject new signals."
+        )
+
+    if "UNKNOWN" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
+        raise ValueError(
+            "UNKNOWN market must reject new signals."
+        )
+
+    # --------------------------------------------------------
+    # Signal score validation
+    # --------------------------------------------------------
+
+    if (
+        SIGNAL_CONFIG["MAX_SCORE"]
+        != len(SIGNAL_CONFIG["SCORE_COMPONENTS"])
+    ):
+        raise ValueError(
+            "Signal scoring configuration mismatch."
+        )
+
+    min_score = SIGNAL_CONFIG["MIN_SCORE"]
+    reject_score = SIGNAL_CONFIG["REJECT_MAX_SCORE"]
+    max_score = SIGNAL_CONFIG["MAX_SCORE"]
+
+    if not (
+        8 <= min_score <= max_score
+        and 0 <= reject_score < min_score
+    ):
+        raise ValueError(
+            "Invalid signal score boundaries."
+        )
+
+    if SIGNAL_CONFIG["STRONG_MIN_SCORE"] != min_score:
+        raise ValueError(
+            "Strong signal score configuration mismatch."
+        )
+
+    if SIGNAL_CONFIG["EXCELLENT_MIN_SCORE"] <= min_score:
+        raise ValueError(
+            "Excellent score must exceed strong score."
+        )
+
+    if SIGNAL_CONFIG["EXCELLENT_MIN_SCORE"] > max_score:
+        raise ValueError(
+            "Excellent score exceeds maximum score."
+        )
+
+    # --------------------------------------------------------
+    # Telegram validation
+    # --------------------------------------------------------
 
     if TELEGRAM_CONFIG["MAX_MESSAGE_LENGTH"] <= 0:
-        raise ValueError("Telegram message length must be positive.")
+        raise ValueError(
+            "Telegram message length must be positive."
+        )
+
     if TELEGRAM_CONFIG["REQUEST_TIMEOUT_SECONDS"] <= 0:
-        raise ValueError("Telegram timeout must be positive.")
+        raise ValueError(
+            "Telegram timeout must be positive."
+        )
+
+    # --------------------------------------------------------
+    # Workflow validation
+    # --------------------------------------------------------
+
     if WORKFLOW_CONFIG["DEFAULT_DRY_RUN"] is not True:
-        raise ValueError("Workflow default DRY_RUN must remain enabled.")
+        raise ValueError(
+            "Workflow default DRY_RUN must remain enabled."
+        )
+
     if WORKFLOW_CONFIG["ALLOW_LIVE_WITHOUT_TESTS"] is not False:
-        raise ValueError("Live mode without tests is not allowed.")
+        raise ValueError(
+            "Live mode without tests is not allowed."
+        )
 
     return True
+
 
 # ============================================================
 # 15. MODULE EXPORTS
 # ============================================================
+
 __all__ = [
-    "CONFIG", "TIMEFRAMES", "STRATEGIES", "RISK_CONFIG", "FILTER_CONFIG",
-    "INDICATOR_CONFIG", "MARKET_CONFIG", "SIGNAL_CONFIG", "TRACKING_CONFIG",
-    "API_CONFIG", "TELEGRAM_CONFIG", "WORKFLOW_CONFIG",
-    "REQUIRED_CONFIG_EXPORTS", "get_config", "validate_config",
+    "CONFIG",
+    "TIMEFRAMES",
+    "STRATEGIES",
+    "RISK_CONFIG",
+    "FILTER_CONFIG",
+    "INDICATOR_CONFIG",
+    "MARKET_CONFIG",
+    "SIGNAL_CONFIG",
+    "TRACKING_CONFIG",
+    "API_CONFIG",
+    "TELEGRAM_CONFIG",
+    "WORKFLOW_CONFIG",
+    "REQUIRED_CONFIG_EXPORTS",
+    "get_config",
+    "validate_config",
 ]

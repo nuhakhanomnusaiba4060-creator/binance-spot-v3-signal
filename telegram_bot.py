@@ -4,17 +4,19 @@ Binance Spot V3 Smart Signal Scanner
 Telegram Notification Engine
 
 - Bengali signal notifications.
-- Estimated net profit at T1/T2/T3, excluding invested capital.
+- Estimated net profit at T1/T2/T3.
 - Entry fee, exit fee and slippage included.
 - Telegram credentials read from environment variables.
 - Only STRONG BUY and EXCELLENT BUY signals are allowed.
+- Safe HTML message truncation.
+- Entry expiry uses the signal's original timestamp when available.
 """
 
 import os
 import re
-import logging
 import html
 import math
+import logging
 
 from datetime import datetime, timezone, timedelta
 
@@ -92,6 +94,11 @@ SWING_ENTRY_VALIDITY_MINUTES = int(
         TRACKING_CONFIG,
         "SWING_ENTRY_VALIDITY_MINUTES"
     ) or 60
+)
+
+MAX_MESSAGE_LENGTH = max(
+    500,
+    min(MAX_MESSAGE_LENGTH, 4096)
 )
 
 
@@ -194,11 +201,6 @@ def _translate_market(value):
 
 
 def _is_valid_spot_symbol(symbol):
-    """
-    Basic Binance Spot USDT symbol validation.
-    Reject malformed symbols and common leveraged-token suffixes.
-    """
-
     if not isinstance(symbol, str):
         return False
 
@@ -223,7 +225,73 @@ def _is_valid_spot_symbol(symbol):
 
 
 # ---------------------------------------------------------
-# ESTIMATED NET PROFIT
+# SAFE HTML TRUNCATION
+# ---------------------------------------------------------
+
+def _truncate_html(message, max_length):
+    """
+    Truncate Telegram HTML without cutting an HTML tag
+    or leaving an opened formatting tag unclosed.
+    """
+
+    if len(message) <= max_length:
+        return message
+
+    tokens = re.findall(
+        r"<[^>]*>|&(?:#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);|[^<&]+|.",
+        message,
+        flags=re.DOTALL,
+    )
+
+    output = []
+    open_tags = []
+    used = 0
+
+    suffix = "\n\n[বার্তা সংক্ষিপ্ত করা হয়েছে]"
+    reserve = len(suffix) + 40
+    limit = max(100, max_length - reserve)
+
+    for token in tokens:
+        if used + len(token) > limit:
+            break
+
+        if token.startswith("<") and token.endswith(">"):
+            closing = re.fullmatch(
+                r"</([a-zA-Z0-9]+)\s*>",
+                token
+            )
+
+            opening = re.fullmatch(
+                r"<([a-zA-Z0-9]+)(?:\s+[^>]*)?>",
+                token
+            )
+
+            if closing:
+                tag_name = closing.group(1).lower()
+
+                if tag_name in open_tags:
+                    index = len(open_tags) - 1 - open_tags[::-1].index(tag_name)
+                    open_tags = open_tags[:index]
+
+            elif opening:
+                tag_name = opening.group(1).lower()
+
+                if tag_name in ("b", "strong", "i", "em", "u", "s", "code", "pre"):
+                    open_tags.append(tag_name)
+
+        output.append(token)
+        used += len(token)
+
+    result = "".join(output) + suffix
+
+    for tag in reversed(open_tags):
+        result += f"</{tag}>"
+
+    return result[:max_length]
+
+
+# ---------------------------------------------------------
+# NET PROFIT CALCULATION
 # ---------------------------------------------------------
 
 def _calculate_net_profit(position, target):
@@ -297,18 +365,7 @@ def _calculate_net_profit(position, target):
     return net_profit
 
 
-# ---------------------------------------------------------
-# PROFIT LINE FORMATTING
-# ---------------------------------------------------------
-
 def _format_profit_line(position, target, label):
-    """
-    Format estimated net profit for T1/T2/T3.
-
-    Invested capital is excluded.
-    Trading fees and slippage are included.
-    """
-
     if not isinstance(target, dict):
         return (
             f"<b>{label} সম্ভাব্য নিট লাভ:</b> "
@@ -473,10 +530,16 @@ def send_message(
         }
 
     if len(message) > MAX_MESSAGE_LENGTH:
-        message = (
-            message[: MAX_MESSAGE_LENGTH - 30]
-            + "\n\n[বার্তা সংক্ষিপ্ত করা হয়েছে]"
-        )
+        if parse_mode == "HTML":
+            message = _truncate_html(
+                message,
+                MAX_MESSAGE_LENGTH
+            )
+        else:
+            message = (
+                message[:MAX_MESSAGE_LENGTH - 40]
+                + "\n\n[বার্তা সংক্ষিপ্ত করা হয়েছে]"
+            )
 
     payload = {
         "text": message,
@@ -494,8 +557,14 @@ def send_message(
         payload
     )
 
+    if not isinstance(result, dict):
+        return {
+            "success": False,
+            "description": "Invalid Telegram response",
+        }
+
     if (
-        not result.get("success")
+        result.get("success") is not True
         and parse_mode
     ):
         error_desc = str(
@@ -511,6 +580,16 @@ def send_message(
                 "falling back to plain text."
             )
 
+            plain_text = re.sub(
+                r"</?(?:b|strong|i|em|u|s|code|pre)>",
+                "",
+                message,
+                flags=re.IGNORECASE,
+            )
+
+            plain_text = html.unescape(plain_text)
+
+            payload["text"] = plain_text
             payload.pop("parse_mode", None)
 
             result = _telegram_request(
@@ -540,13 +619,13 @@ def send_connection_test():
 # TIME HELPERS
 # ---------------------------------------------------------
 
-def _format_time_utc(iso_value):
-    if not iso_value:
-        return "N/A"
+def _parse_datetime(value):
+    if not value:
+        return None
 
     try:
         parsed = datetime.fromisoformat(
-            str(iso_value).replace("Z", "+00:00")
+            str(value).replace("Z", "+00:00")
         )
 
         if parsed.tzinfo is None:
@@ -554,17 +633,39 @@ def _format_time_utc(iso_value):
                 tzinfo=timezone.utc
             )
 
-        return parsed.astimezone(
-            timezone.utc
-        ).strftime(
-            "%Y-%m-%d %H:%M:%S UTC"
-        )
+        return parsed.astimezone(timezone.utc)
 
     except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _format_time_utc(iso_value):
+    parsed = _parse_datetime(iso_value)
+
+    if parsed is None:
         return "N/A"
 
+    return parsed.strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
 
-def _compute_entry_expiry(strategy):
+
+def _compute_entry_expiry(signal, strategy):
+    """
+    Prefer the exact expiry already attached to the signal.
+
+    Otherwise calculate expiry from generated_at.
+    This reduces timing differences between notification
+    and signal registration.
+    """
+
+    existing_expiry = _parse_datetime(
+        signal.get("entry_expiry")
+    )
+
+    if existing_expiry is not None:
+        return existing_expiry.isoformat()
+
     strategy = str(strategy).upper()
 
     if strategy == "SCALP":
@@ -578,9 +679,15 @@ def _compute_entry_expiry(strategy):
             "Unsupported trading strategy"
         )
 
+    generated_at = _parse_datetime(
+        signal.get("generated_at")
+    )
+
+    if generated_at is None:
+        generated_at = datetime.now(timezone.utc)
+
     return (
-        datetime.now(timezone.utc)
-        + timedelta(minutes=minutes)
+        generated_at + timedelta(minutes=minutes)
     ).isoformat()
 
 
@@ -597,6 +704,11 @@ def _format_target(target, label):
     price = _format_price(
         target.get("price")
     )
+
+    if price == "N/A":
+        return (
+            f"<b>{label}:</b> পাওয়া যায়নি"
+        )
 
     rr = _number(
         target.get("risk_reward")
@@ -627,7 +739,7 @@ def format_signal(signal):
         signal.get("classification")
         or signal.get("signal")
         or ""
-    ).upper()
+    ).upper().strip()
 
     allowed_signals = (
         "STRONG BUY",
@@ -639,7 +751,9 @@ def format_signal(signal):
             "Only approved BUY signals are allowed"
         )
 
-    if str(signal.get("status", "")).upper() == "REJECTED":
+    if str(
+        signal.get("status", "")
+    ).upper() == "REJECTED":
         raise ValueError(
             "Rejected signals cannot be sent"
         )
@@ -651,7 +765,9 @@ def format_signal(signal):
             "Risk plan is missing"
         )
 
-    if str(risk_plan.get("status", "")).upper() != "VALID":
+    if str(
+        risk_plan.get("status", "")
+    ).upper() != "VALID":
         raise ValueError(
             "Risk plan is not valid"
         )
@@ -661,12 +777,10 @@ def format_signal(signal):
         {}
     )
 
-    if not isinstance(validation, dict):
-        raise ValueError(
-            "Risk validation is missing"
-        )
-
-    if validation.get("valid") is not True:
+    if (
+        not isinstance(validation, dict)
+        or validation.get("valid") is not True
+    ):
         raise ValueError(
             "Risk validation failed"
         )
@@ -682,7 +796,7 @@ def format_signal(signal):
 
     strategy = str(
         signal.get("strategy", "")
-    ).upper()
+    ).upper().strip()
 
     if strategy not in ("SCALP", "SWING"):
         raise ValueError(
@@ -773,14 +887,14 @@ def format_signal(signal):
         signal.get("market_status", "UNKNOWN")
     )
 
-    # Times
+    # Signal times
     created_at = _format_time_utc(
         signal.get("generated_at")
     )
 
-    expiry_value = (
-        signal.get("entry_expiry")
-        or _compute_entry_expiry(strategy)
+    expiry_value = _compute_entry_expiry(
+        signal,
+        strategy
     )
 
     entry_expiry = _format_time_utc(

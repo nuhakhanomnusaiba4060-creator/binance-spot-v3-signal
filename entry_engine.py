@@ -61,6 +61,99 @@ def _prepare_df(df: Any) -> pd.DataFrame | None:
         return None
 
 
+def _validate_market_context(market_context: dict[str, Any] | None) -> tuple[bool, str]:
+    """Validate market regime so HIGH_RISK or UNKNOWN blocks entries safely."""
+    if market_context is None:
+        return True, "BULLISH"
+    if not isinstance(market_context, dict):
+        return False, "INVALID_MARKET_CONTEXT"
+
+    status = str(market_context.get("market_status", "BULLISH")).upper()
+    if status in ("HIGH_RISK", "UNKNOWN"):
+        return False, f"MARKET_{status}"
+
+    allow_bearish = bool(MARKET_FILTER_CONFIG.get("ALLOW_BEARISH_SIGNALS", False))
+    if status == "BEARISH" and not allow_bearish:
+        # Allow penalty-based evaluation if score is strong, unless explicitly disallowed
+        return True, status
+
+    return True, status
+
+
+def _has_insufficient_upside(
+    entry_price: float,
+    resistance_level: float | None,
+    min_upside_pct: float | None = None,
+) -> bool:
+    """Return True only when a known nearby resistance leaves too little upside."""
+    if not _is_valid_num(entry_price) or entry_price <= 0:
+        return True
+    if resistance_level is None or not _is_valid_num(resistance_level):
+        return False
+    if resistance_level <= entry_price:
+        return False
+
+    req_pct = (
+        min_upside_pct
+        if min_upside_pct is not None
+        else _safe_float(COIN_SELECTION_CONFIG.get("MIN_NEXT_RESISTANCE_DISTANCE_PERCENT"), 1.5)
+    )
+    if not _is_valid_num(req_pct):
+        req_pct = 1.5
+
+    upside_pct = ((resistance_level - entry_price) / entry_price) * 100.0
+    return upside_pct < max(0.5, req_pct * 0.65)
+
+
+def _buyer_confirmation(df: pd.DataFrame) -> bool:
+    """Check buyer pressure on latest closed candle without over-restricting setups."""
+    if df is None or df.empty:
+        return False
+    latest = df.iloc[-1]
+    o = _safe_float(latest.get("open"))
+    c = _safe_float(latest.get("close"))
+    h = _safe_float(latest.get("high"))
+    l = _safe_float(latest.get("low"))
+
+    if not (_is_valid_num(o) and _is_valid_num(c)):
+        return False
+    if c < o:
+        return False
+
+    if _is_valid_num(h) and _is_valid_num(l) and h > l:
+        close_pos = (c - l) / (h - l)
+        return close_pos >= 0.35
+
+    return True
+
+
+def _get_breakout_data(df: pd.DataFrame) -> dict[str, Any]:
+    """Extract support, resistance, latest price, and breakout/retest status."""
+    latest = df.iloc[-1]
+    close = _safe_float(latest.get("close"))
+    levels = support_resistance(df)
+    support = _safe_float(levels.get("support"))
+    resistance = _safe_float(levels.get("resistance"))
+    retest_tol = _safe_float(INDICATOR_CONFIG.get("RETEST_TOLERANCE_PERCENT"), 0.5) / 100.0
+
+    has_res = _is_valid_num(resistance) and resistance > 0
+    has_sup = _is_valid_num(support) and support > 0
+
+    breakout_confirmed = bool(has_res and close >= resistance * (1.0 - retest_tol * 0.5))
+    retest_confirmed = bool(
+        (has_res and abs(close - resistance) / resistance <= retest_tol * 1.5 and close >= resistance * (1.0 - retest_tol))
+        or (has_sup and abs(close - support) / support <= retest_tol * 1.5 and close >= support * (1.0 - retest_tol))
+    )
+
+    return {
+        "close": close,
+        "support": support if has_sup else None,
+        "resistance": resistance if has_res else None,
+        "breakout_confirmed": breakout_confirmed,
+        "retest_confirmed": retest_confirmed,
+    }
+
+
 def _check_pump_and_overextension(
     df: pd.DataFrame,
     strat_cfg: dict[str, Any],
@@ -106,7 +199,7 @@ def _check_pump_and_overextension(
     )
 
     roc = _safe_float(latest.get("roc"))
-    if _is_valid_num(roc) and abs(roc) > max_roc * 1.35 and roc > 0:
+    if _is_valid_num(roc) and roc > max_roc * 1.35:
         return False, "PUMP_ROC_OVEREXTENDED"
 
     bb_width = _safe_float(latest.get("bb_width"))
@@ -119,7 +212,6 @@ def _check_pump_and_overextension(
         if ext_pct > max_ext_pct * 1.4:
             return False, "PRICE_TOO_FAR_ABOVE_EMA20"
 
-    # Check consecutive strong bullish price candles
     if max_bull_candles >= 2 and len(df) >= max_bull_candles:
         recent = df.tail(max_bull_candles)
         strong_count = 0
@@ -130,10 +222,9 @@ def _check_pump_and_overextension(
                 body_pct = ((c - o) / o) * 100.0
                 if body_pct >= min_bull_body_pct:
                     strong_count += 1
-        if strong_count >= max_bull_candles and roc > max_roc:
+        if strong_count >= max_bull_candles and _is_valid_num(roc) and roc > max_roc:
             return False, "CONSECUTIVE_PUMP_CANDLES"
 
-    # Check RVOL spike followed by sharp drop
     if "relative_volume" in df.columns and len(df) >= 4:
         rvol_series = pd.to_numeric(df["relative_volume"], errors="coerce").tail(4)
         current_rvol = _safe_float(rvol_series.iloc[-1])
@@ -149,15 +240,18 @@ def _check_pump_and_overextension(
     return True, "OK"
 
 
-def _score_setup(
+def score_setup(
     trigger_df: pd.DataFrame,
-    conf_dfs: list[pd.DataFrame],
-    market_context: dict[str, Any] | None,
-    strat_cfg: dict[str, Any],
+    conf_dfs: list[pd.DataFrame] | None = None,
+    market_context: dict[str, Any] | None = None,
+    strat_cfg: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, int], list[str]]:
     """
     Compute 15-point setup score aligned with Config Specification v2.0.
     """
+    conf_list = conf_dfs if isinstance(conf_dfs, list) else []
+    s_cfg = strat_cfg if isinstance(strat_cfg, dict) else {}
+
     latest = trigger_df.iloc[-1]
     prev = trigger_df.iloc[-2] if len(trigger_df) >= 2 else latest
 
@@ -185,17 +279,17 @@ def _score_setup(
     obv_series = pd.to_numeric(trigger_df.get("obv"), errors="coerce").dropna()
     obv_rising = len(obv_series) >= 3 and float(obv_series.iloc[-1]) > float(obv_series.iloc[-3])
 
-    rsi_min = _safe_float(strat_cfg.get("RSI_MIN"), 50.0)
-    rsi_max = _safe_float(strat_cfg.get("RSI_MAX"), 68.0)
-    min_adx = _safe_float(strat_cfg.get("MIN_ADX"), 18.0)
-    min_rvol = _safe_float(strat_cfg.get("MIN_RVOL"), 1.2)
+    rsi_min = _safe_float(s_cfg.get("RSI_MIN"), 50.0)
+    rsi_max = _safe_float(s_cfg.get("RSI_MAX"), 68.0)
+    min_adx = _safe_float(s_cfg.get("MIN_ADX"), 18.0)
+    min_rvol = _safe_float(s_cfg.get("MIN_RVOL"), 1.2)
     squeeze_max = _safe_float(INDICATOR_CONFIG.get("BB_SQUEEZE_MAX_WIDTH"), 0.10)
     roc_min = _safe_float(INDICATOR_CONFIG.get("ROC_EARLY_MIN_PERCENT"), 0.5)
     roc_max = _safe_float(INDICATOR_CONFIG.get("ROC_EARLY_MAX_PERCENT"), 3.0)
     vol_accel_min = _safe_float(INDICATOR_CONFIG.get("VOLUME_ACCELERATION_MIN"), 1.2)
 
     m_ctx = market_context if isinstance(market_context, dict) else {}
-    market_status = str(m_ctx.get("market_status", "UNKNOWN")).upper()
+    market_status = str(m_ctx.get("market_status", "BULLISH")).upper()
     btc_trend = str(m_ctx.get("btc_trend", "UNKNOWN")).upper()
 
     breakdown: dict[str, int] = {
@@ -224,19 +318,17 @@ def _score_setup(
         "volume_acceleration": 1 if (_is_valid_num(vol_mom) and vol_mom >= vol_accel_min * 0.9) else 0,
     }
 
-    # Multi-timeframe confirmation check
     mtf_bull_count = 0
-    for cdf in conf_dfs:
+    for cdf in conf_list:
         if cdf is not None and not cdf.empty:
             crow = cdf.iloc[-1]
             c_close = _safe_float(crow.get("close"))
             c_ema20 = _safe_float(crow.get("ema_20"))
             if _is_valid_num(c_close) and _is_valid_num(c_ema20) and c_close >= c_ema20 * 0.996:
                 mtf_bull_count += 1
-    if conf_dfs and mtf_bull_count >= 1:
+    if conf_list and mtf_bull_count >= 1:
         breakdown["mtf_trend"] = 1
 
-    # Moving average trend check
     ma_ok = False
     if _is_valid_num(sma_20) and close >= sma_20 * 0.996:
         ma_ok = True
@@ -247,20 +339,13 @@ def _score_setup(
     if ma_ok:
         breakdown["ma_trend"] = 1
 
-    # Breakout / retest quality check
-    levels = support_resistance(trigger_df)
-    res_level = _safe_float(levels.get("resistance"))
-    sup_level = _safe_float(levels.get("support"))
-    retest_tol = _safe_float(INDICATOR_CONFIG.get("RETEST_TOLERANCE_PERCENT"), 0.5) / 100.0
-
-    bullish_bar = _safe_float(latest.get("close")) >= _safe_float(latest.get("open"))
-    near_or_above_sup = _is_valid_num(sup_level) and close >= sup_level * (1.0 - retest_tol)
-    breakout_or_push = _is_valid_num(res_level) and close >= res_level * (1.0 - retest_tol)
-    if bullish_bar and (near_or_above_sup or breakout_or_push or breakdown["ema_trend"] == 1):
+    b_info = _get_breakout_data(trigger_df)
+    if _buyer_confirmation(trigger_df) and (
+        b_info["breakout_confirmed"] or b_info["retest_confirmed"] or breakdown["ema_trend"] == 1
+    ):
         breakdown["breakout_retest_quality"] = 1
 
     raw_score = sum(breakdown.values())
-
     penalty = 0
     if market_status == "NEUTRAL":
         penalty = int(_safe_float(MARKET_FILTER_CONFIG.get("NEUTRAL_SCORE_PENALTY"), 2))
@@ -272,28 +357,27 @@ def _score_setup(
     return final_score, breakdown, reasons
 
 
-def _evaluate_strategy(
+def validate_entry(
     strategy_name: str,
     symbol: str,
     data_by_tf: dict[str, pd.DataFrame],
     market_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Validate and score a candidate setup for SCALP or SWING."""
     sym = str(symbol).upper().strip()
     if not sym.endswith("USDT"):
         return {"eligible": False, "classification": "REJECT", "reason": "INVALID_USDT_SYMBOL"}
 
-    m_ctx = market_context if isinstance(market_context, dict) else {}
-    market_status = str(m_ctx.get("market_status", "BULLISH")).upper()
-    if market_status in ("HIGH_RISK", "UNKNOWN"):
-        return {
-            "eligible": False,
-            "classification": "REJECT",
-            "reason": f"MARKET_{market_status}",
-        }
+    mkt_ok, mkt_reason = _validate_market_context(market_context)
+    if not mkt_ok:
+        return {"eligible": False, "classification": "REJECT", "reason": mkt_reason}
 
     strat_cfg = STRATEGY_CONFIG.get(strategy_name, {})
     trigger_tf = strat_cfg.get("TRIGGER_TIMEFRAME", "5m" if strategy_name == "SCALP" else "15m")
-    conf_tfs = strat_cfg.get("CONFIRMATION_TIMEFRAMES", ("15m", "30m") if strategy_name == "SCALP" else ("30m", "1h"))
+    conf_tfs = strat_cfg.get(
+        "CONFIRMATION_TIMEFRAMES",
+        ("15m", "30m") if strategy_name == "SCALP" else ("30m", "1h"),
+    )
 
     if not isinstance(data_by_tf, dict) or trigger_tf not in data_by_tf:
         return {"eligible": False, "classification": "REJECT", "reason": "MISSING_TRIGGER_TIMEFRAME"}
@@ -306,13 +390,18 @@ def _evaluate_strategy(
     if not ok_pump:
         return {"eligible": False, "classification": "REJECT", "reason": pump_reason}
 
+    b_info = _get_breakout_data(trigger_df)
+    entry_price = _safe_float(trigger_df.iloc[-1].get("close"))
+    if _has_insufficient_upside(entry_price, b_info.get("resistance")):
+        return {"eligible": False, "classification": "REJECT", "reason": "INSUFFICIENT_UPSIDE"}
+
     conf_dfs = []
     for tf in conf_tfs:
         prepared = _prepare_df(data_by_tf.get(tf))
         if prepared is not None:
             conf_dfs.append(prepared)
 
-    score, breakdown, reasons = _score_setup(trigger_df, conf_dfs, m_ctx, strat_cfg)
+    score, breakdown, reasons = score_setup(trigger_df, conf_dfs, market_context, strat_cfg)
 
     strong_min = int(_safe_float(SCORING_CONFIG.get("STRONG_BUY_MIN_SCORE"), 10))
     excellent_min = int(_safe_float(SCORING_CONFIG.get("EXCELLENT_BUY_MIN_SCORE"), 13))
@@ -329,13 +418,12 @@ def _evaluate_strategy(
             "reason": f"SCORE_BELOW_THRESHOLD_{score}",
         }
 
-    latest = trigger_df.iloc[-1]
-    entry_price = _safe_float(latest.get("close"))
-    atr_val = _safe_float(latest.get("atr"), entry_price * 0.01)
-    levels = support_resistance(trigger_df)
-    sup_val = _safe_float(levels.get("support"), entry_price * (1.0 - max(0.008, (atr_val / entry_price) * 1.5)))
-    res_val = _safe_float(levels.get("resistance"), 0.0)
-
+    atr_val = _safe_float(trigger_df.iloc[-1].get("atr"), entry_price * 0.01)
+    sup_val = _safe_float(
+        b_info.get("support"),
+        entry_price * (1.0 - max(0.008, (atr_val / entry_price) * 1.5)),
+    )
+    res_val = _safe_float(b_info.get("resistance"), 0.0)
     resistance_levels = [res_val] if _is_valid_num(res_val) and res_val > entry_price else []
 
     return {
@@ -361,7 +449,7 @@ def evaluate_scalp(
     indicators: dict[str, Any] | None = None,
     market_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _evaluate_strategy("SCALP", symbol, market_data, market_context=market_context)
+    return validate_entry("SCALP", symbol, market_data, market_context=market_context)
 
 
 def evaluate_swing(
@@ -370,4 +458,4 @@ def evaluate_swing(
     indicators: dict[str, Any] | None = None,
     market_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _evaluate_strategy("SWING", symbol, market_data, market_context=market_context)
+    return validate_entry("SWING", symbol, market_data, market_context=market_context)

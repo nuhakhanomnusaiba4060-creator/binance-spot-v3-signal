@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-26T13:57:35.857653+00:00",
+  "updated_at": "2026-11-26T14:10:40.425962+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -750,7 +750,7 @@
         "t2": 3.110057039525,
         "t3": 3.14506844743
       },
-      "current_price": 3.087,
+      "current_price": 3.089,
       "status": "TARGET_1_HIT",
       "t1_hit": true,
       "t2_hit": false,
@@ -763,7 +763,7 @@
       "max_price_seen": 3.105,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-26T13:57:35.850877+00:00"
+      "last_updated": "2026-11-26T14:09:50.898318+00:00"
     },
     {
       "signal_id": "BTCUSDT_SWING_20261125T214221.040487+0000",
@@ -960,7 +960,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.1492,
+      "current_price": 0.1494,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -973,7 +973,7 @@
       "max_price_seen": 0.1494,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-26T13:57:35.855001+00:00"
+      "last_updated": "2026-11-26T14:09:50.921965+00:00"
     },
     {
       "signal_id": "XRPUSDT_SWING_20261126T035101.586796+0000",
@@ -1140,7 +1140,7 @@
         "t2": 9.618255395195,
         "t3": null
       },
-      "current_price": 9.253,
+      "current_price": 9.258,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -1153,7 +1153,7 @@
       "max_price_seen": 9.261,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-26T13:57:35.857617+00:00"
+      "last_updated": "2026-11-26T14:09:50.924354+00:00"
     },
     {
       "signal_id": "PUMPUSDT_SWING_20261126T094826.138835+0000",
@@ -1214,6 +1214,36 @@
       "result": "ENTRY_WINDOW_EXPIRED",
       "closed_at": "2026-11-26T11:43:52.429166+00:00",
       "last_updated": "2026-11-26T11:43:52.429166+00:00"
+    },
+    {
+      "signal_id": "ETHUSDT_SCALP_20261126T141040.425909+0000",
+      "symbol": "ETHUSDT",
+      "strategy": "SCALP",
+      "classification": "STRONG BUY",
+      "score": 10,
+      "created_at": "2026-11-26T14:10:40.425909+00:00",
+      "expires_at": "2026-11-28T14:10:40.425909+00:00",
+      "entry_price": 1704.96,
+      "stop_loss": 1699.33,
+      "targets": {
+        "t1": 1735.128708121339,
+        "t2": null,
+        "t3": null
+      },
+      "current_price": 1704.96,
+      "status": "ACTIVE",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "entry_reached": false,
+      "entry_expiry": "2026-11-26T14:25:40.425909+00:00",
+      "entry_window_expired": false,
+      "entry_reached_at": null,
+      "max_price_seen": 1704.96,
+      "result": null,
+      "closed_at": null,
+      "last_updated": "2026-11-26T14:10:40.425909+00:00"
     }
   ]
 }

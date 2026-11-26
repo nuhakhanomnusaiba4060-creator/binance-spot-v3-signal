@@ -277,6 +277,7 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
             "close": 0.0,
             "support": 0.0,
             "resistance": 0.0,
+            "above_resistance": False,
             "breakout": False,
             "fresh_breakout": False,
             "retest": False,
@@ -307,14 +308,15 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
     if not _is_valid_num(retest_tol) or retest_tol <= 0:
         retest_tol = 0.005
 
-    prior_broke_out = bool(
-        not prior_closes.empty
+    above_res = bool(
+        _is_valid_num(close)
+        and close > 0
         and _is_valid_num(resistance)
         and resistance > 0
-        and float(prior_closes.max()) >= resistance * (1.0 - retest_tol * 0.5)
+        and close > resistance
     )
 
-    current_above_res = bool(
+    current_at_or_above_res = bool(
         _is_valid_num(close)
         and close > 0
         and _is_valid_num(resistance)
@@ -322,34 +324,43 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
         and close >= resistance * (1.0 - retest_tol * 0.5)
     )
 
-    retest_confirmed = bool(
-        _is_valid_num(close)
-        and close > 0
-        and close >= open_p * 0.998
-        and (
-            (
-                _is_valid_num(resistance)
-                and resistance > 0
-                and abs(close - resistance) / resistance <= max(retest_tol * 2.5, 0.015)
-                and close >= resistance * (1.0 - max(retest_tol * 1.5, 0.008))
-            )
-            or (
-                _is_valid_num(support)
-                and support > 0
-                and abs(low_p - support) / support <= max(retest_tol * 2.5, 0.015)
-                and close >= support * (1.0 - max(retest_tol * 1.5, 0.008))
-            )
-        )
+    prior_broke_out = bool(
+        not prior_closes.empty
+        and _is_valid_num(resistance)
+        and resistance > 0
+        and float(prior_closes.max()) > resistance * (1.0 - retest_tol * 0.25)
     )
 
-    breakout_confirmed = bool(current_above_res or (prior_broke_out and retest_confirmed))
-    fresh_breakout = bool(current_above_res and not prior_broke_out)
+    # Failed retest: close drops below resistance and fails to hold above open
+    failed_retest = bool(
+        _is_valid_num(resistance)
+        and resistance > 0
+        and close < resistance * (1.0 - retest_tol * 0.5)
+        and (_is_valid_num(open_p) and close < open_p)
+    )
+
+    retest_confirmed = bool(
+        not failed_retest
+        and _is_valid_num(close)
+        and close > 0
+        and _is_valid_num(resistance)
+        and resistance > 0
+        and close >= resistance * (1.0 - retest_tol * 0.5)
+        and abs(close - resistance) / resistance <= max(retest_tol * 4.0, 0.025)
+    )
+
+    breakout_confirmed = bool(
+        (current_at_or_above_res and not failed_retest)
+        or (prior_broke_out and retest_confirmed)
+    )
+    fresh_breakout = bool(current_at_or_above_res and not prior_broke_out)
 
     return {
         "timeframe": timeframe,
         "close": float(close) if _is_valid_num(close) else 0.0,
         "support": float(support) if _is_valid_num(support) and support > 0 else 0.0,
         "resistance": float(resistance) if _is_valid_num(resistance) and resistance > 0 else 0.0,
+        "above_resistance": above_res,
         "breakout": breakout_confirmed,
         "fresh_breakout": fresh_breakout,
         "retest": retest_confirmed,

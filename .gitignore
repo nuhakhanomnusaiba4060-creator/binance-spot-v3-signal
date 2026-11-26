@@ -15,8 +15,10 @@ ENV/
 .env.*
 !.env.example
 
-# Test cache
+# Test and linter cache
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .coverage
 .coverage.*
 htmlcov/
@@ -32,9 +34,10 @@ dist/
 *.log
 logs/
 
-# Runtime data
+# Runtime data and state files
 signal_history.json
 scanner_state.json
+*.state.json
 *.tmp
 *.bak
 

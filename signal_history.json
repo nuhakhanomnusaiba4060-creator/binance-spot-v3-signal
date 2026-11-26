@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-26T21:26:19.456142+00:00",
+  "updated_at": "2026-11-26T21:44:34.334582+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -750,7 +750,7 @@
         "t2": 3.110057039525,
         "t3": 3.14506844743
       },
-      "current_price": 3.096,
+      "current_price": 3.101,
       "status": "TARGET_1_HIT",
       "t1_hit": true,
       "t2_hit": false,
@@ -763,7 +763,7 @@
       "max_price_seen": 3.105,
       "result": "TARGET_1",
       "closed_at": null,
-      "last_updated": "2026-11-26T21:26:19.453017+00:00"
+      "last_updated": "2026-11-26T21:44:34.331841+00:00"
     },
     {
       "signal_id": "BTCUSDT_SWING_20261125T214221.040487+0000",
@@ -960,7 +960,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.151,
+      "current_price": 0.1506,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -973,7 +973,7 @@
       "max_price_seen": 0.151,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-26T21:26:19.456094+00:00"
+      "last_updated": "2026-11-26T21:44:34.334539+00:00"
     },
     {
       "signal_id": "XRPUSDT_SWING_20261126T035101.586796+0000",

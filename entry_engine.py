@@ -121,8 +121,6 @@ def _validate_market_context(market_context: dict[str, Any] | None) -> tuple[boo
     for val in raw_values:
         if val in ("HIGH_RISK", "HIGH", "EXTREME", "CRITICAL"):
             return False, "MARKET_HIGH_RISK"
-        if val in ("UNKNOWN", "INVALID", "NONE", ""):
-            continue
 
     status = next((v for v in raw_values if v), "UNKNOWN")
     if status in ("UNKNOWN", "INVALID"):
@@ -272,7 +270,7 @@ def _buyer_confirmation(source: pd.DataFrame | dict[str, Any] | None) -> bool:
 
 
 def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any]:
-    """Extract support, resistance, latest price, and breakout/retest status."""
+    """Extract support, resistance, latest price, and fresh breakout / retest status."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return {
             "timeframe": timeframe,
@@ -280,6 +278,7 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
             "support": 0.0,
             "resistance": 0.0,
             "breakout": False,
+            "fresh_breakout": False,
             "retest": False,
             "breakout_confirmed": False,
             "retest_confirmed": False,
@@ -287,12 +286,16 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
 
     latest = df.iloc[-1]
     close = _safe_float(latest.get("close"), 0.0)
+    open_p = _safe_float(latest.get("open"), close)
+    low_p = _safe_float(latest.get("low"), close)
+
     levels = support_resistance(df) if len(df) >= 5 else {}
     support = _safe_float(levels.get("support") if isinstance(levels, dict) else None)
     resistance = _safe_float(levels.get("resistance") if isinstance(levels, dict) else None)
 
     prior = df.iloc[:-1] if len(df) > 1 else df
     prior_highs = pd.to_numeric(prior.get("high"), errors="coerce").dropna() if "high" in prior.columns else pd.Series(dtype=float)
+    prior_closes = pd.to_numeric(prior.get("close"), errors="coerce").dropna() if "close" in prior.columns else pd.Series(dtype=float)
     prior_lows = pd.to_numeric(prior.get("low"), errors="coerce").dropna() if "low" in prior.columns else pd.Series(dtype=float)
 
     if not (_is_valid_num(resistance) and resistance > 0):
@@ -304,7 +307,14 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
     if not _is_valid_num(retest_tol) or retest_tol <= 0:
         retest_tol = 0.005
 
-    breakout_confirmed = bool(
+    prior_broke_out = bool(
+        not prior_closes.empty
+        and _is_valid_num(resistance)
+        and resistance > 0
+        and float(prior_closes.max()) >= resistance * (1.0 - retest_tol * 0.5)
+    )
+
+    current_above_res = bool(
         _is_valid_num(close)
         and close > 0
         and _is_valid_num(resistance)
@@ -315,21 +325,25 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
     retest_confirmed = bool(
         _is_valid_num(close)
         and close > 0
+        and close >= open_p * 0.998
         and (
             (
                 _is_valid_num(resistance)
                 and resistance > 0
-                and abs(close - resistance) / resistance <= retest_tol * 2.0
-                and close >= resistance * (1.0 - retest_tol)
+                and abs(close - resistance) / resistance <= max(retest_tol * 2.5, 0.015)
+                and close >= resistance * (1.0 - max(retest_tol * 1.5, 0.008))
             )
             or (
                 _is_valid_num(support)
                 and support > 0
-                and abs(close - support) / support <= retest_tol * 2.0
-                and close >= support * (1.0 - retest_tol)
+                and abs(low_p - support) / support <= max(retest_tol * 2.5, 0.015)
+                and close >= support * (1.0 - max(retest_tol * 1.5, 0.008))
             )
         )
     )
+
+    breakout_confirmed = bool(current_above_res or (prior_broke_out and retest_confirmed))
+    fresh_breakout = bool(current_above_res and not prior_broke_out)
 
     return {
         "timeframe": timeframe,
@@ -337,6 +351,7 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
         "support": float(support) if _is_valid_num(support) and support > 0 else 0.0,
         "resistance": float(resistance) if _is_valid_num(resistance) and resistance > 0 else 0.0,
         "breakout": breakout_confirmed,
+        "fresh_breakout": fresh_breakout,
         "retest": retest_confirmed,
         "breakout_confirmed": breakout_confirmed,
         "retest_confirmed": retest_confirmed,
@@ -557,6 +572,7 @@ def score_setup(
         "required_score": strong_min,
         "classification": classification,
         "breakdown": breakdown,
+        "components": breakdown,
         "confirmations": reasons,
     }
 

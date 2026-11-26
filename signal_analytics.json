@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-26T08:12:16.574325+00:00",
+  "updated_at": "2026-11-26T09:27:34.838403+00:00",
   "retention_days": 7,
   "summary": {
     "total_signals": 38,
@@ -767,7 +767,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T08:11:00+00:00",
+      "last_checked_at": "2026-11-26T09:26:00+00:00",
       "data_error": null
     },
     "BTCUSDT_SWING_20261125T214221.040487+0000": {
@@ -794,7 +794,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T08:11:00+00:00",
+      "last_checked_at": "2026-11-26T09:26:00+00:00",
       "data_error": null
     },
     "XRPUSDT_SWING_20261125T214221.679238+0000": {
@@ -848,7 +848,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T08:11:00+00:00",
+      "last_checked_at": "2026-11-26T09:26:00+00:00",
       "data_error": null
     },
     "MMTUSDT_SWING_20261126T015707.193555+0000": {
@@ -956,7 +956,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T08:11:00+00:00",
+      "last_checked_at": "2026-11-26T09:26:00+00:00",
       "data_error": null
     },
     "XRPUSDT_SWING_20261126T035101.586796+0000": {
@@ -983,7 +983,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T08:11:00+00:00",
+      "last_checked_at": "2026-11-26T09:26:00+00:00",
       "data_error": null
     },
     "ETHUSDT_SCALP_20261126T045525.062801+0000": {
@@ -1037,7 +1037,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T08:11:00+00:00",
+      "last_checked_at": "2026-11-26T09:26:00+00:00",
       "data_error": null
     },
     "NEARUSDT_SWING_20261126T055612.888385+0000": {
@@ -1064,7 +1064,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T08:11:00+00:00",
+      "last_checked_at": "2026-11-26T09:26:00+00:00",
       "data_error": null
     },
     "TRXUSDT_SWING_20261126T064636.181601+0000": {
@@ -1091,7 +1091,7 @@
       "exit_price": null,
       "exit_at": null,
       "return_pct": null,
-      "last_checked_at": "2026-11-26T07:45:00+00:00",
+      "last_checked_at": "2026-11-26T09:26:00+00:00",
       "data_error": null
     }
   }

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-27T21:19:31.920576+00:00",
+  "updated_at": "2026-11-27T21:34:11.312417+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -960,7 +960,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.1493,
+      "current_price": 0.149,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -973,7 +973,7 @@
       "max_price_seen": 0.1536,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T21:18:15.504482+00:00"
+      "last_updated": "2026-11-27T21:34:11.296392+00:00"
     },
     {
       "signal_id": "XRPUSDT_SWING_20261126T035101.586796+0000",
@@ -2130,7 +2130,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.1269,
+      "current_price": 0.1272,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -2140,10 +2140,10 @@
       "entry_expiry": "2026-11-27T19:32:50.908178+00:00",
       "entry_window_expired": false,
       "entry_reached_at": "2026-11-27T19:28:23.446506+00:00",
-      "max_price_seen": 0.1269,
+      "max_price_seen": 0.1272,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T21:18:15.508156+00:00"
+      "last_updated": "2026-11-27T21:34:11.300090+00:00"
     },
     {
       "signal_id": "PORTALUSDT_SCALP_20261127T192947.689472+0000",
@@ -2220,7 +2220,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 44.34,
+      "current_price": 44.38,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -2230,10 +2230,10 @@
       "entry_expiry": "2026-11-27T22:01:16.502993+00:00",
       "entry_window_expired": false,
       "entry_reached_at": "2026-11-27T21:18:15.511408+00:00",
-      "max_price_seen": 44.34,
+      "max_price_seen": 44.38,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T21:18:15.511408+00:00"
+      "last_updated": "2026-11-27T21:34:11.303332+00:00"
     },
     {
       "signal_id": "ANTBUSDT_SWING_20261127T210117.060230+0000",
@@ -2250,7 +2250,7 @@
         "t2": 95.03306515,
         "t3": null
       },
-      "current_price": 91.7,
+      "current_price": 91.53,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -2263,7 +2263,7 @@
       "max_price_seen": 91.73,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T21:18:15.514602+00:00"
+      "last_updated": "2026-11-27T21:34:11.306279+00:00"
     },
     {
       "signal_id": "PORTALUSDT_SCALP_20261127T211931.353109+0000",
@@ -2280,7 +2280,7 @@
         "t2": 0.04478476,
         "t3": 0.04598845
       },
-      "current_price": 0.03997,
+      "current_price": 0.03994,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -2293,7 +2293,7 @@
       "max_price_seen": 0.03997,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T21:19:31.353109+00:00"
+      "last_updated": "2026-11-27T21:34:11.309228+00:00"
     },
     {
       "signal_id": "TAOUSDT_SWING_20261127T211931.920507+0000",
@@ -2316,14 +2316,14 @@
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
-      "entry_reached": false,
+      "entry_reached": true,
       "entry_expiry": "2026-11-27T22:19:31.920507+00:00",
       "entry_window_expired": false,
-      "entry_reached_at": null,
+      "entry_reached_at": "2026-11-27T21:34:11.312384+00:00",
       "max_price_seen": 187.5,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T21:19:31.920507+00:00"
+      "last_updated": "2026-11-27T21:34:11.312384+00:00"
     }
   ]
 }

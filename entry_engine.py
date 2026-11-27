@@ -344,7 +344,7 @@ def _buyer_confirmation(source: pd.DataFrame | dict[str, Any] | None) -> bool:
 # =========================================================
 
 def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any]:
-    """Extract resistance, fresh breakout, and retest status."""
+    """Extract support, resistance, fresh breakout, and retest status."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return {}
 
@@ -352,64 +352,85 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
     if not required_columns.issubset(df.columns):
         return {}
 
-    latest = df.iloc[-1]
-    close = _safe_float(latest.get("close"))
-    retest_low = _safe_float(latest.get("low"))
+    minimum = 25
+    if len(df) < minimum:
+        return {}
 
-    if not (_is_valid_num(close) and _is_valid_num(retest_low)) or close <= 0:
+    retest_index = len(df) - 1
+    retest_row = df.iloc[retest_index]
+    retest_close = _safe_float(retest_row.get("close"))
+    retest_low = _safe_float(retest_row.get("low"))
+
+    if not (_is_valid_num(retest_close) and _is_valid_num(retest_low)) or retest_close <= 0:
         return {}
 
     lookback = _get_lookback(timeframe)
-    prior = df.iloc[:-1] if len(df) > 1 else df
 
-    if len(prior) == 0:
+    breakout_found = False
+    breakout_index = -1
+    resistance = None
+
+    for i in range(2, 12):
+        b_idx = len(df) - i
+        if b_idx < lookback:
+            continue
+
+        b_row = df.iloc[b_idx]
+        pre_b_row = df.iloc[b_idx - 1]
+
+        pre_close = _safe_float(pre_b_row.get("close"))
+        b_close = _safe_float(b_row.get("close"))
+
+        if not (_is_valid_num(pre_close) and _is_valid_num(b_close)):
+            continue
+
+        res_start = max(0, b_idx - lookback)
+        res_data = df.iloc[res_start:b_idx]
+        res_level = _safe_float(res_data["high"].max())
+
+        if not _is_valid_num(res_level) or res_level <= 0:
+            continue
+
+        if pre_close <= res_level and b_close > res_level:
+            breakout_found = True
+            breakout_index = b_idx
+            resistance = res_level
+            break
+
+    if not breakout_found:
         return {}
 
-    effective_lookback = min(lookback, len(prior))
-    if effective_lookback < 3:
-        effective_lookback = len(prior)
-
-    res_data = prior.tail(effective_lookback)
-    resistance = _safe_float(res_data["close"].max()) if not res_data.empty else 0.0
-
-    if not _is_valid_num(resistance) or resistance <= 0:
-        resistance = close * 1.01
-
-    support = _safe_float(prior["low"].min()) if "low" in prior.columns else 0.0
-    if not _is_valid_num(support) or support <= 0:
-        support = close * 0.99
-
-    # Fresh breakout: current close >= resistance
-    fresh_breakout = close >= resistance
-
-    # Retest: current low touched the resistance zone
     retest_tol = RETEST_TOLERANCE_PCT / 100.0
-    near_resistance = (
-        retest_low <= resistance * (1 + retest_tol)
-        and retest_low >= resistance * (1 - retest_tol)
+    lower_boundary = resistance * (1 - retest_tol)
+    upper_boundary = resistance * (1 + retest_tol)
+
+    retest_valid = (
+        retest_low >= lower_boundary
+        and retest_low <= upper_boundary
+        and retest_close >= resistance
     )
-    retest_confirmed = fresh_breakout and near_resistance
+
+    distance_pct = ((retest_close - resistance) / resistance) * 100
 
     return {
         "resistance": resistance,
-        "support": support,
-        "breakout": fresh_breakout,
-        "retest": retest_confirmed,
-        "above_resistance": close >= resistance * (1 - retest_tol),
-        "breakout_close": close,
-        "retest_close": close,
+        "support": _safe_float(df["low"].min(), 0.0),
+        "breakout": retest_valid,
+        "retest": retest_valid,
+        "above_resistance": retest_close >= resistance,
+        "breakout_close": _safe_float(df.iloc[breakout_index]["close"]),
+        "retest_close": retest_close,
         "retest_low": retest_low,
-        "distance_from_resistance_pct": ((close - resistance) / resistance) * 100,
-        "breakout_index": len(df) - 1,
-        "retest_index": len(df) - 1,
-        "candles_since_breakout": 0,
-        "lookback_used": effective_lookback,
+        "distance_from_resistance_pct": distance_pct,
+        "breakout_index": breakout_index,
+        "retest_index": retest_index,
+        "candles_since_breakout": retest_index - breakout_index,
+        "lookback_used": lookback,
         "timeframe": timeframe,
-        "breakout_confirmed": fresh_breakout,
-        "retest_confirmed": retest_confirmed,
-        "fresh_breakout": fresh_breakout,
+        "breakout_confirmed": retest_valid,
+        "retest_confirmed": retest_valid,
+        "fresh_breakout": retest_valid,
     }
-
 
 # =========================================================
 # PUMP & OVEREXTENSION

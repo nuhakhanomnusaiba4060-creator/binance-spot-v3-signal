@@ -1,4 +1,19 @@
 
+"""
+Binance Spot V3 - 24 Hour Signal Performance Report
+
+Compatible with V2 and V3 signal_analytics.json.
+
+- Uses analytics.updated_at as the exact report cutoff.
+- Reports signals generated during the previous 24 hours.
+- Separately reports AMBIGUOUS and invalidated signals.
+- Does not count ambiguous signals as wins or losses.
+- Correctly formats prices, including prices such as 100.
+- Separates estimated returns from actual USDT PNL.
+- Sends Telegram messages with retry handling.
+- Does not modify scanner, signal history or analytics files.
+"""
+
 import html
 import json
 import logging
@@ -14,6 +29,10 @@ from zoneinfo import ZoneInfo
 import requests
 
 
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
 ANALYTICS_FILE = Path("signal_analytics.json")
 HISTORY_FILE = Path("signal_history.json")
 
@@ -28,21 +47,27 @@ TELEGRAM_MAX_ATTEMPTS = 3
 RETRY_BASE_SECONDS = 2
 MAX_RETRY_AFTER_SECONDS = 30
 
-# Analytics-এর নির্ধারিত terminal outcomes.
+STALE_SNAPSHOT_MINUTES = 15
+
 COMPLETED_OUTCOMES = {
     "STOP_LOSS",
     "T3",
     "EXPIRED_AFTER_ENTRY",
 }
 
-# Analytics Snapshot এই সময়ের বেশি পুরোনো হলে সতর্কতা দেখাবে।
-STALE_SNAPSHOT_MINUTES = 15
+AMBIGUOUS_OUTCOMES = {
+    "AMBIGUOUS",
+}
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
+
+# =========================================================
+# HELPERS
+# =========================================================
 
 def parse_time(value):
     if not value:
@@ -81,12 +106,26 @@ def safe_float(value):
 
 
 def fmt_price(value):
+    """
+    Correct decimal formatting.
+
+    Examples:
+    100.00000000 -> 100
+    0.30440000   -> 0.3044
+    1.23000000   -> 1.23
+    """
+
     number = safe_float(value)
 
     if number is None or number <= 0:
         return "N/A"
 
-    return f"{number:.8f}".rstrip("0").rstrip(".")
+    formatted = f"{number:.8f}"
+
+    if "." in formatted:
+        formatted = formatted.rstrip("0").rstrip(".")
+
+    return formatted
 
 
 def fmt_pct(value):
@@ -100,7 +139,7 @@ def fmt_pct(value):
 
 def safe_text(value, default="N/A"):
     if value is None:
-        return html.escape(str(default))
+        value = default
 
     return html.escape(str(value))
 
@@ -111,50 +150,82 @@ def normalize_outcome(record):
     ).strip().upper()
 
 
-def status_label(record):
-    outcome = normalize_outcome(record)
+def is_entry_expired(item):
+    outcome = item["_outcome"]
 
-    labels = {
-        "PENDING": "চলমান",
-        "STOP_LOSS": "STOP LOSS HIT",
-        "T1": "T1 HIT - চলমান",
-        "T2": "T2 HIT - চলমান",
-        "T3": "T3 সম্পন্ন",
-        "EXPIRED_AFTER_ENTRY": "Entry-এর পর মেয়াদ শেষ",
-        "ENTRY_WINDOW_EXPIRED": "Entry হয়নি - Expired",
-    }
+    if outcome == "ENTRY_WINDOW_EXPIRED":
+        return True
 
-    return safe_text(labels.get(outcome, outcome))
+    return (
+        item.get("entry_expired") is True
+        and item.get("entry_reached") is not True
+    )
 
+
+def is_ambiguous(item):
+    return item["_outcome"] in AMBIGUOUS_OUTCOMES
+
+
+def is_completed(item):
+    return (
+        item["_outcome"] in COMPLETED_OUTCOMES
+        and item["_return"] is not None
+        and not is_ambiguous(item)
+    )
+
+
+def is_win(item):
+    return (
+        is_completed(item)
+        and item["_return"] > 0
+    )
+
+
+def is_loss(item):
+    return (
+        is_completed(item)
+        and item["_return"] < 0
+    )
+
+
+def is_breakeven(item):
+    return (
+        is_completed(item)
+        and item["_return"] == 0
+    )
+
+
+# =========================================================
+# SNAPSHOT
+# =========================================================
 
 def get_snapshot_time(analytics):
-    """
-    Analytics updated_at-কে Report Snapshot হিসেবে ব্যবহার করে।
-    Invalid timestamp হলে বর্তমান সময় দিয়ে প্রতিস্থাপন করা হবে না।
-    """
 
-    snapshot = parse_time(analytics.get("updated_at"))
+    snapshot = parse_time(
+        analytics.get("updated_at")
+    )
 
     if snapshot is None:
         raise ValueError(
             "Analytics updated_at missing or invalid. "
-            "Cannot create a reliable report cutoff."
+            "Reliable report cutoff is unavailable."
         )
 
     return snapshot
 
 
 def get_snapshot_warning(snapshot):
-    """
-    Snapshot পুরোনো হলে সতর্কতা দেখায়।
-    Report cutoff পরিবর্তন করে না।
-    """
 
     now = datetime.now(timezone.utc)
-    age_seconds = (now - snapshot).total_seconds()
+
+    age_seconds = (
+        now - snapshot
+    ).total_seconds()
 
     if age_seconds < 0:
-        return "⚠️ Analytics Snapshot ভবিষ্যতের সময় দেখাচ্ছে।"
+        return (
+            "⚠️ Analytics Snapshot ভবিষ্যতের সময় দেখাচ্ছে।"
+        )
 
     age_minutes = age_seconds / 60
 
@@ -167,16 +238,25 @@ def get_snapshot_warning(snapshot):
     return None
 
 
+# =========================================================
+# LOAD RECENT SIGNALS
+# =========================================================
+
 def get_recent_signals(analytics, history, snapshot):
+
     records = analytics.get("signals", {})
 
     if not isinstance(records, dict):
-        raise ValueError("Invalid analytics signals data")
+        raise ValueError(
+            "Invalid analytics signals data"
+        )
 
     history_signals = history.get("signals", [])
 
     if not isinstance(history_signals, list):
-        raise ValueError("Invalid history signals data")
+        raise ValueError(
+            "Invalid history signals data"
+        )
 
     score_map = {}
 
@@ -199,7 +279,9 @@ def get_recent_signals(analytics, history, snapshot):
         if not isinstance(record, dict):
             continue
 
-        created = parse_time(record.get("created_at"))
+        created = parse_time(
+            record.get("created_at")
+        )
 
         if created is None:
             continue
@@ -211,15 +293,21 @@ def get_recent_signals(analytics, history, snapshot):
 
         item["_signal_id"] = str(signal_id)
         item["_created"] = created
-        item["_score"] = score_map.get(str(signal_id))
-        item["_outcome"] = normalize_outcome(item)
+
+        item["_score"] = score_map.get(
+            str(signal_id)
+        )
+
+        item["_outcome"] = normalize_outcome(
+            item
+        )
 
         item["_return"] = safe_float(
             item.get("return_pct")
         )
 
         item["_strategy"] = str(
-            item.get("strategy", "UNKNOWN")
+            item.get("strategy") or "UNKNOWN"
         ).strip().upper() or "UNKNOWN"
 
         recent.append(item)
@@ -231,28 +319,12 @@ def get_recent_signals(analytics, history, snapshot):
     return recent, start
 
 
-def is_entry_expired(item):
-    """
-    Entry expiry-কে Final Loss হিসেবে গণনা করা হবে না।
-    """
-
-    if item["_outcome"] == "ENTRY_WINDOW_EXPIRED":
-        return True
-
-    return (
-        item.get("entry_expired") is True
-        and item.get("entry_reached") is not True
-    )
-
-
-def is_completed(item):
-    return (
-        item["_outcome"] in COMPLETED_OUTCOMES
-        and item["_return"] is not None
-    )
-
+# =========================================================
+# STATISTICS
+# =========================================================
 
 def calculate_statistics(recent):
+
     total = len(recent)
 
     entered = sum(
@@ -265,6 +337,11 @@ def calculate_statistics(recent):
         for item in recent
     )
 
+    invalidated = sum(
+        item["_outcome"] == "INVALIDATED_BEFORE_ENTRY"
+        for item in recent
+    )
+
     expired_after_entry = sum(
         item["_outcome"] == "EXPIRED_AFTER_ENTRY"
         for item in recent
@@ -272,6 +349,11 @@ def calculate_statistics(recent):
 
     pending = sum(
         item["_outcome"] == "PENDING"
+        for item in recent
+    )
+
+    ambiguous = sum(
+        is_ambiguous(item)
         for item in recent
     )
 
@@ -307,17 +389,17 @@ def calculate_statistics(recent):
 
     wins = [
         item for item in completed
-        if item["_return"] > 0
+        if is_win(item)
     ]
 
     losses = [
         item for item in completed
-        if item["_return"] < 0
+        if is_loss(item)
     ]
 
     breakeven = [
         item for item in completed
-        if item["_return"] == 0
+        if is_breakeven(item)
     ]
 
     returns = [
@@ -331,12 +413,18 @@ def calculate_statistics(recent):
     )
 
     average_profit = (
-        sum(item["_return"] for item in wins) / len(wins)
+        sum(
+            item["_return"]
+            for item in wins
+        ) / len(wins)
         if wins else None
     )
 
     average_loss = (
-        sum(item["_return"] for item in losses) / len(losses)
+        sum(
+            item["_return"]
+            for item in losses
+        ) / len(losses)
         if losses else None
     )
 
@@ -346,12 +434,18 @@ def calculate_statistics(recent):
     )
 
     best = (
-        max(completed, key=lambda item: item["_return"])
+        max(
+            completed,
+            key=lambda item: item["_return"],
+        )
         if completed else None
     )
 
     worst = (
-        min(completed, key=lambda item: item["_return"])
+        min(
+            completed,
+            key=lambda item: item["_return"],
+        )
         if completed else None
     )
 
@@ -359,8 +453,10 @@ def calculate_statistics(recent):
         "total": total,
         "entered": entered,
         "expired": expired,
+        "invalidated": invalidated,
         "expired_after_entry": expired_after_entry,
         "pending": pending,
+        "ambiguous": ambiguous,
         "sl_hits": sl_hits,
         "t1_hits": t1_hits,
         "t2_hits": t2_hits,
@@ -380,41 +476,74 @@ def calculate_statistics(recent):
 
 
 def calculate_strategy_statistics(recent):
-    """
-    SCALP, SWING এবং UNKNOWN আলাদা করে হিসাব করে।
-    """
 
     strategies = {}
 
     for item in recent:
+
         strategy = item["_strategy"]
 
-        strategies.setdefault(strategy, []).append(item)
+        strategies.setdefault(
+            strategy,
+            [],
+        ).append(item)
 
-    result = {}
+    return {
+        strategy: calculate_statistics(items)
+        for strategy, items in sorted(
+            strategies.items()
+        )
+    }
 
-    for strategy, items in sorted(strategies.items()):
-        result[strategy] = calculate_statistics(items)
 
-    return result
+# =========================================================
+# STATUS LABELS
+# =========================================================
+
+def status_label(item):
+
+    outcome = item["_outcome"]
+
+    labels = {
+        "PENDING": "চলমান",
+        "STOP_LOSS": "STOP LOSS HIT",
+        "T1": "T1 HIT - চলমান",
+        "T2": "T2 HIT - চলমান",
+        "T3": "T3 সম্পন্ন",
+        "EXPIRED_AFTER_ENTRY": "Entry-এর পর মেয়াদ শেষ",
+        "ENTRY_WINDOW_EXPIRED": "Entry হয়নি - Expired",
+        "INVALIDATED_BEFORE_ENTRY": "Entry-এর আগে Invalidated",
+        "AMBIGUOUS": "অনিশ্চিত - Win/Loss গণনায় নেই",
+    }
+
+    return safe_text(
+        labels.get(outcome, outcome)
+    )
 
 
 def signal_result_text(item):
-    result = item["_return"]
 
-    if result is None:
-        return "N/A"
+    if is_ambiguous(item):
+        return "AMBIGUOUS"
 
-    if result > 0:
+    if not is_completed(item):
+        return "NOT COMPLETED"
+
+    if is_win(item):
         return "WIN"
 
-    if result < 0:
+    if is_loss(item):
         return "LOSS"
 
     return "BREAK EVEN"
 
 
+# =========================================================
+# COIN DETAILS
+# =========================================================
+
 def signal_block(index, item):
+
     symbol = safe_text(
         item.get("symbol", "UNKNOWN")
     )
@@ -431,7 +560,9 @@ def signal_block(index, item):
         item.get("_signal_id")
     )
 
-    created = item["_created"].astimezone(DHAKA)
+    created = item["_created"].astimezone(
+        DHAKA
+    )
 
     score = item.get("_score")
 
@@ -450,14 +581,20 @@ def signal_block(index, item):
     for key in ("t1", "t2", "t3"):
 
         if item.get(f"{key}_hit") is True:
-            milestones.append(key.upper() + " HIT")
+            milestones.append(
+                key.upper() + " HIT"
+            )
 
     if item.get("stop_loss_hit") is True:
         milestones.append("SL HIT")
 
+    if is_ambiguous(item):
+        milestones.append("AMBIGUOUS")
+
     milestone_text = (
         ", ".join(milestones)
-        if milestones else "কোনো Target/SL Hit নেই"
+        if milestones
+        else "কোনো Target/SL Hit নেই"
     )
 
     if item.get("entry_reached") is True:
@@ -465,6 +602,9 @@ def signal_block(index, item):
 
     elif is_entry_expired(item):
         entry_status = "ENTRY EXPIRED"
+
+    elif item["_outcome"] == "INVALIDATED_BEFORE_ENTRY":
+        entry_status = "INVALIDATED BEFORE ENTRY"
 
     else:
         entry_status = "NOT HIT"
@@ -486,19 +626,32 @@ def signal_block(index, item):
         f"Target Status: {safe_text(milestone_text)}",
         f"Final Result: <b>{status_label(item)}</b>",
         f"Win/Loss: <b>{signal_result_text(item)}</b>",
-        f"Return: <b>{fmt_pct(item.get('return_pct'))}</b>",
+        f"Estimated Return: <b>{fmt_pct(item.get('return_pct'))}</b>",
     ]
+
+    if item.get("gross_return_pct") is not None:
+        lines.append(
+            "Gross Return: "
+            + fmt_pct(item.get("gross_return_pct"))
+        )
 
     if item.get("data_error"):
         lines.append(
             "⚠️ Data Error: "
-            + safe_text(str(item["data_error"])[:150])
+            + safe_text(
+                str(item["data_error"])[:150]
+            )
         )
 
     return "\n".join(lines)
 
 
+# =========================================================
+# STRATEGY REPORT
+# =========================================================
+
 def strategy_summary_block(strategy_stats):
+
     lines = [
         "━━━━━━━━━━━━━━━━",
         "📊 <b>STRATEGY-WISE PERFORMANCE</b>",
@@ -506,22 +659,30 @@ def strategy_summary_block(strategy_stats):
     ]
 
     if not strategy_stats:
-        lines.append("Strategy Data পাওয়া যায়নি।")
+        lines.append(
+            "Strategy Data পাওয়া যায়নি।"
+        )
+
         return "\n".join(lines)
 
     for strategy, stats in strategy_stats.items():
 
-        completed_count = len(stats["completed"])
+        completed_count = len(
+            stats["completed"]
+        )
 
-        if completed_count:
-            win_rate = (
-                len(stats["wins"])
-                / completed_count
-                * 100
-            )
-            win_rate_text = f"{win_rate:.2f}%"
-        else:
-            win_rate_text = "N/A"
+        win_rate = (
+            len(stats["wins"])
+            / completed_count
+            * 100
+            if completed_count else None
+        )
+
+        win_rate_text = (
+            f"{win_rate:.2f}%"
+            if win_rate is not None
+            else "N/A"
+        )
 
         lines.extend([
             "",
@@ -529,23 +690,41 @@ def strategy_summary_block(strategy_stats):
             f"মোট Signal: {stats['total']}",
             f"Entry Hit: {stats['entered']}",
             f"Entry Expired: {stats['expired']}",
+            f"Invalidated: {stats['invalidated']}",
+            f"Ambiguous: {stats['ambiguous']}",
             f"SL Hit: {stats['sl_hits']}",
-            f"T1/T2/T3: "
-            f"{stats['t1_hits']}/{stats['t2_hits']}/{stats['t3_hits']}",
+            (
+                f"T1/T2/T3: "
+                f"{stats['t1_hits']}/"
+                f"{stats['t2_hits']}/"
+                f"{stats['t3_hits']}"
+            ),
             f"Completed: {completed_count}",
-            f"Win/Loss/BE: "
-            f"{len(stats['wins'])}/"
-            f"{len(stats['losses'])}/"
-            f"{len(stats['breakeven'])}",
+            (
+                f"Win/Loss/BE: "
+                f"{len(stats['wins'])}/"
+                f"{len(stats['losses'])}/"
+                f"{len(stats['breakeven'])}"
+            ),
             f"Win Rate: {win_rate_text}",
-            f"Average Return: {fmt_pct(stats['average_return'])}",
+            (
+                "Average Return: "
+                + fmt_pct(stats["average_return"])
+            ),
         ])
 
     return "\n".join(lines)
 
 
+# =========================================================
+# REPORT BUILDER
+# =========================================================
+
 def build_report(analytics, history):
-    snapshot = get_snapshot_time(analytics)
+
+    snapshot = get_snapshot_time(
+        analytics
+    )
 
     recent, start = get_recent_signals(
         analytics,
@@ -553,16 +732,26 @@ def build_report(analytics, history):
         snapshot,
     )
 
-    stats = calculate_statistics(recent)
+    stats = calculate_statistics(
+        recent
+    )
 
-    strategy_stats = calculate_strategy_statistics(recent)
+    strategy_stats = calculate_strategy_statistics(
+        recent
+    )
 
     start_local = start.astimezone(DHAKA)
     end_local = snapshot.astimezone(DHAKA)
 
-    snapshot_warning = get_snapshot_warning(snapshot)
+    snapshot_warning = get_snapshot_warning(
+        snapshot
+    )
 
     blocks = []
+
+    # -----------------------------------------------------
+    # GENERAL SUMMARY
+    # -----------------------------------------------------
 
     header = [
         "📊 <b>BINANCE SPOT V3</b>",
@@ -584,11 +773,13 @@ def build_report(analytics, history):
         "━━━━━━━━━━━━━━━━",
         "📈 <b>সার্বিক পরিসংখ্যান</b>",
         "━━━━━━━━━━━━━━━━",
-        f"মোট সিগন্যাল: <b>{stats['total']}</b>",
+        f"মোট Signal: <b>{stats['total']}</b>",
         f"Entry Hit: <b>{stats['entered']}</b>",
         f"Entry Expired: <b>{stats['expired']}</b>",
+        f"Invalidated Before Entry: <b>{stats['invalidated']}</b>",
         f"Entry-এর পর Expired: <b>{stats['expired_after_entry']}</b>",
         f"Pending: <b>{stats['pending']}</b>",
+        f"Ambiguous: <b>{stats['ambiguous']}</b>",
         f"Data Error: <b>{stats['data_errors']}</b>",
         "",
         f"Stop Loss Hit: <b>{stats['sl_hits']}</b>",
@@ -612,13 +803,30 @@ def build_report(analytics, history):
 
         header.extend([
             f"Win Rate: <b>{win_rate:.2f}%</b>",
-            f"Average Return: <b>{fmt_pct(stats['average_return'])}</b>",
-            f"Average Profit: <b>{fmt_pct(stats['average_profit'])}</b>",
-            f"Average Loss: <b>{fmt_pct(stats['average_loss'])}</b>",
-            f"Completed Return-এর যোগফল: <b>{fmt_pct(stats['total_return'])}</b>",
+            (
+                "Average Return: <b>"
+                + fmt_pct(stats["average_return"])
+                + "</b>"
+            ),
+            (
+                "Average Profit: <b>"
+                + fmt_pct(stats["average_profit"])
+                + "</b>"
+            ),
+            (
+                "Average Loss: <b>"
+                + fmt_pct(stats["average_loss"])
+                + "</b>"
+            ),
+            (
+                "Completed Return-এর যোগফল: <b>"
+                + fmt_pct(stats["total_return"])
+                + "</b>"
+            ),
         ])
 
     else:
+
         header.extend([
             "Win Rate: <b>N/A</b>",
             "Average Return: <b>N/A</b>",
@@ -628,6 +836,7 @@ def build_report(analytics, history):
         ])
 
     header.extend([
+        "",
         "USDT Net PNL: <b>তথ্য সংরক্ষিত নেই</b>",
         "",
         "━━━━━━━━━━━━━━━━",
@@ -652,13 +861,25 @@ def build_report(analytics, history):
         ])
 
     else:
-        header.append("Completed ফলাফল নেই।")
+        header.append(
+            "Completed ফলাফল নেই।"
+        )
 
-    blocks.append("\n".join(header))
+    blocks.append(
+        "\n".join(header)
+    )
+
+    # -----------------------------------------------------
+    # STRATEGY BREAKDOWN
+    # -----------------------------------------------------
 
     blocks.append(
         strategy_summary_block(strategy_stats)
     )
+
+    # -----------------------------------------------------
+    # COIN DETAILS
+    # -----------------------------------------------------
 
     blocks.append(
         "\n".join([
@@ -669,48 +890,81 @@ def build_report(analytics, history):
     )
 
     if not recent:
+
         blocks.append(
-            "গত ২৪ ঘণ্টায় কোনো সিগন্যাল পাওয়া যায়নি।"
+            "গত ২৪ ঘণ্টায় কোনো Signal পাওয়া যায়নি।"
         )
 
     else:
 
-        for index, item in enumerate(recent, 1):
+        for index, item in enumerate(
+            recent,
+            1,
+        ):
+
             blocks.append(
                 signal_block(index, item)
             )
+
+    # -----------------------------------------------------
+    # EXPLANATION
+    # -----------------------------------------------------
+
+    accounting_type = str(
+        analytics.get(
+            "accounting_type",
+            "SIMULATED_CANDLE_BASED",
+        )
+    )
+
+    fee = safe_float(
+        analytics.get("round_trip_fee_pct")
+    )
 
     footer = [
         "━━━━━━━━━━━━━━━━",
         "ℹ️ <b>গুরুত্বপূর্ণ তথ্য</b>",
         "",
-        "Entry Hit মানে Binance-এর বন্ধ ১-মিনিটের Candle-এ Entry Price স্পর্শ করেছে।",
+        "Entry Hit মানে বন্ধ ১-মিনিটের Binance Candle-এ Entry Price স্পর্শ করেছে।",
         "এটি বাস্তবে Buy Order সম্পন্ন হওয়ার প্রমাণ নয়।",
         "",
-        "T1/T2/T3 ও SL Hit আলাদা Price Touch হিসাব।",
-        "একটি Signal Target Hit করার পরেও Stop Loss Hit করতে পারে।",
+        "T1/T2/T3 এবং SL Hit আলাদা Price Touch হিসাব।",
+        "একই Candle-এ SL ও Target দুটো স্পর্শ হলে AMBIGUOUS দেখানো হয়েছে।",
+        "AMBIGUOUS Signal Win/Loss হিসাবের মধ্যে নেই।",
+        "",
+        "Entry Expired এবং Invalidated Before Entry-কে Loss ধরা হয়নি।",
         "",
         "Win Rate = Win ÷ Completed × 100।",
-        "এই হিসাবে Break-even Completed-এর মধ্যে অন্তর্ভুক্ত।",
+        "Break-even Completed-এর মধ্যে অন্তর্ভুক্ত।",
         "",
-        "Entry Expired-কে Loss হিসেবে গণনা করা হয়নি।",
-        "Expired After Entry-এর Return একটি হিসাবভিত্তিক ফল; প্রকৃত Sell Order নয়।",
+        "Return হলো হিসাবভিত্তিক মূল্য পরিবর্তন; বাস্তব Trade PNL নয়।",
+        "USDT Net PNL দেখানো হয়নি, কারণ প্রকৃত Quantity, Capital ও Exchange Fill সংরক্ষিত নেই।",
         "",
-        "USDT Net PNL দেখানো হয়নি, কারণ প্রকৃত বিনিয়োগের পরিমাণ, Quantity ও Fee সংরক্ষিত নেই।",
-        "",
-        "Report cutoff: Analytics Snapshot-এর updated_at।",
+        f"Accounting: {safe_text(accounting_type)}",
     ]
 
-    blocks.append("\n".join(footer))
+    if fee is not None:
+        footer.append(
+            f"আনুমানিক Round-trip Fee: {fee:.3f}%"
+        )
+
+    footer.extend([
+        "",
+        "Report cutoff: Analytics Snapshot-এর updated_at।",
+    ])
+
+    blocks.append(
+        "\n".join(footer)
+    )
 
     return blocks
 
 
+# =========================================================
+# TELEGRAM MESSAGE SPLITTING
+# =========================================================
+
 def split_message(blocks):
-    """
-    Paragraph boundary-তে Message ভাগ করে।
-    HTML tag ভেঙে পাঠানো হবে না।
-    """
 
     chunks = []
     current = ""
@@ -718,7 +972,8 @@ def split_message(blocks):
     for block in blocks:
 
         candidate = (
-            block if not current
+            block
+            if not current
             else current + "\n\n" + block
         )
 
@@ -732,7 +987,7 @@ def split_message(blocks):
 
         if len(block) > MESSAGE_LIMIT:
             raise ValueError(
-                "A single report section exceeds Telegram message limit"
+                "A report section exceeds Telegram message limit"
             )
 
         current = block
@@ -743,15 +998,20 @@ def split_message(blocks):
     return chunks
 
 
+# =========================================================
+# TELEGRAM DELIVERY
+# =========================================================
+
 def send_telegram(blocks):
+
     token = os.getenv(
         "TELEGRAM_BOT_TOKEN",
-        ""
+        "",
     ).strip()
 
     chat_id = os.getenv(
         "TELEGRAM_CHAT_ID",
-        ""
+        "",
     ).strip()
 
     if not token or not chat_id:
@@ -765,13 +1025,20 @@ def send_telegram(blocks):
 
     with requests.Session() as session:
 
-        for index, chunk in enumerate(chunks, 1):
+        for index, chunk in enumerate(
+            chunks,
+            1,
+        ):
 
             sent = False
 
-            for attempt in range(1, TELEGRAM_MAX_ATTEMPTS + 1):
+            for attempt in range(
+                1,
+                TELEGRAM_MAX_ATTEMPTS + 1,
+            ):
 
                 try:
+
                     response = session.post(
                         url,
                         json={
@@ -787,6 +1054,7 @@ def send_telegram(blocks):
                         response.status_code == 429
                         or response.status_code >= 500
                     ):
+
                         if attempt == TELEGRAM_MAX_ATTEMPTS:
                             response.raise_for_status()
 
@@ -794,12 +1062,18 @@ def send_telegram(blocks):
 
                         try:
                             body = response.json()
+
                             retry_after = safe_float(
-                                body.get("parameters", {}).get(
-                                    "retry_after"
-                                )
+                                body.get(
+                                    "parameters",
+                                    {},
+                                ).get("retry_after")
                             )
-                        except (ValueError, AttributeError):
+
+                        except (
+                            ValueError,
+                            AttributeError,
+                        ):
                             pass
 
                         if retry_after is None:
@@ -850,7 +1124,9 @@ def send_telegram(blocks):
                     if attempt == TELEGRAM_MAX_ATTEMPTS:
                         raise
 
-                    delay = RETRY_BASE_SECONDS ** attempt
+                    delay = (
+                        RETRY_BASE_SECONDS ** attempt
+                    )
 
                     logging.warning(
                         "Telegram network error on part %s. "
@@ -875,7 +1151,12 @@ def send_telegram(blocks):
             )
 
 
+# =========================================================
+# MAIN
+# =========================================================
+
 def main():
+
     if not ANALYTICS_FILE.exists():
         raise FileNotFoundError(
             "signal_analytics.json not found"
@@ -886,14 +1167,33 @@ def main():
             "signal_history.json not found"
         )
 
-    analytics = read_json(ANALYTICS_FILE)
-    history = read_json(HISTORY_FILE)
+    analytics = read_json(
+        ANALYTICS_FILE
+    )
+
+    history = read_json(
+        HISTORY_FILE
+    )
 
     if not isinstance(analytics, dict):
-        raise ValueError("Invalid analytics JSON")
+        raise ValueError(
+            "Invalid analytics JSON"
+        )
 
     if not isinstance(history, dict):
-        raise ValueError("Invalid history JSON")
+        raise ValueError(
+            "Invalid history JSON"
+        )
+
+    # Validate snapshot before report creation.
+    snapshot = get_snapshot_time(
+        analytics
+    )
+
+    logging.info(
+        "Analytics snapshot: %s",
+        snapshot.isoformat(),
+    )
 
     blocks = build_report(
         analytics,
@@ -913,6 +1213,7 @@ if __name__ == "__main__":
         main()
 
     except Exception as exc:
+
         logging.exception(
             "24-hour report failed: %s",
             exc,

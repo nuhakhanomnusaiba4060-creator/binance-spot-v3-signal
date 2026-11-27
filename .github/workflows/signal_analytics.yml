@@ -2,14 +2,16 @@
 name: V3 Signal Performance Analytics
 
 on:
-  # Run shortly after the scanner persists new signal history.
+  # Run after scanner updates signal history.
   push:
+    branches:
+      - main
     paths:
       - "signal_history.json"
       - "signal_analytics.py"
       - ".github/workflows/signal_analytics.yml"
 
-  # Backup schedule.
+  # Backup schedule: every 15 minutes.
   schedule:
     - cron: "*/15 * * * *"
 
@@ -18,8 +20,10 @@ on:
 permissions:
   contents: write
 
+# Shared with the scanner workflow.
+# Prevents simultaneous writes to main.
 concurrency:
-  group: v3-signal-analytics
+  group: v3-main-branch-writes
   cancel-in-progress: false
 
 jobs:
@@ -47,11 +51,15 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run Signal Analytics
-        run: python signal_analytics.py
-
-      - name: Persist Analytics Data
-        if: success()
         run: |
+          python signal_analytics.py
+
+      - name: Persist Analytics Data Safely
+        if: success()
+        shell: bash
+        run: |
+          set -e
+
           if [ ! -f signal_analytics.json ]; then
             echo "ERROR: signal_analytics.json was not created."
             exit 1
@@ -69,6 +77,27 @@ jobs:
 
           git commit -m "Update V3 signal analytics"
 
-          # Preserve concurrent scanner history commits.
-          git pull --rebase --autostash origin main
-          git push origin HEAD:main
+          # Safely synchronize with remote main.
+          # Never overwrite remote commits.
+          for attempt in 1 2 3 4 5; do
+            echo "Push attempt: ${attempt}"
+
+            git fetch origin main
+
+            if ! git rebase origin/main; then
+              echo "ERROR: Rebase conflict detected."
+              git rebase --abort || true
+              exit 1
+            fi
+
+            if git push origin HEAD:main; then
+              echo "Analytics data pushed successfully."
+              exit 0
+            fi
+
+            echo "Push rejected. Retrying safely..."
+            sleep $((attempt * 2))
+          done
+
+          echo "ERROR: Analytics push failed after 5 attempts."
+          exit 1

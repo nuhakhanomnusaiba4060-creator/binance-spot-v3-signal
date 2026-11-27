@@ -1,3 +1,4 @@
+
 name: Binance Spot V3 Smart Signal Scanner
 
 on:
@@ -5,13 +6,13 @@ on:
     - cron: "*/5 * * * *"
 
   workflow_dispatch:
-  inputs:
-    dry_run:
-      description: "Test mode (no Telegram signals or history updates)"
-      required: true
-      type: boolean
-      default: false
-      
+    inputs:
+      dry_run:
+        description: "Test mode (no Telegram signals or history updates)"
+        required: true
+        type: boolean
+        default: false
+
 permissions:
   contents: write
 

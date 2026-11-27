@@ -268,7 +268,7 @@ def _buyer_confirmation(source: pd.DataFrame | dict[str, Any] | None) -> bool:
 
     return False
 
-def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any]:
+  def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any]:
     """Extract support, resistance, latest price, and fresh breakout / retest status."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return {}
@@ -283,17 +283,76 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
     minimum = lookback + 3
     if len(df) < minimum:
         return {}
-            "timeframe": timeframe,
-            "close": 0.0,
-            "support": 0.0,
-            "resistance": 0.0,
-            "above_resistance": False,
-            "breakout": False,
-            "fresh_breakout": False,
-            "retest": False,
-            "breakout_confirmed": False,
-            "retest_confirmed": False,
-        }
+
+    required_columns = {"high", "low", "close"}
+    if not required_columns.issubset(df.columns):
+        return {}
+
+    retest_index = len(df) - 1
+    retest_close = _number(df.iloc[retest_index]["close"])
+    retest_low = _number(df.iloc[retest_index]["low"])
+
+    if None in (retest_close, retest_low):
+        return {}
+
+    breakout_found = False
+    breakout_index = -1
+    resistance = None
+
+    for i in range(2, 12):
+        b_idx = len(df) - i
+        if b_idx < lookback:
+            continue
+
+        b_candle = df.iloc[b_idx]
+        pre_b_close = _number(df.iloc[b_idx - 1]["close"])
+        b_close = _number(b_candle["close"])
+
+        if None in (pre_b_close, b_close):
+            continue
+
+        res_start = b_idx - lookback
+        res_data = df.iloc[res_start:b_idx]
+        res_level = _number(res_data["close"].max())
+
+        if res_level is None or res_level <= 0:
+            continue
+
+        if pre_b_close <= res_level and b_close > res_level:
+            breakout_found = True
+            breakout_index = b_idx
+            resistance = res_level
+            break
+
+    if not breakout_found:
+        return {}
+
+    lower_boundary = resistance * (1 - RETEST_TOLERANCE_PCT / 100)
+    upper_boundary = resistance * (1 + RETEST_TOLERANCE_PCT / 100)
+
+    retest_valid = (
+        retest_low >= lower_boundary
+        and retest_low <= upper_boundary
+        and retest_close >= resistance * 0.995
+    )
+
+    distance_pct = ((retest_close - resistance) / resistance) * 100
+
+    return {
+        "resistance": resistance,
+        "breakout": retest_valid,
+        "retest": retest_valid,
+        "above_resistance": retest_close >= resistance * 0.995,
+        "breakout_close": _number(df.iloc[breakout_index]["close"]),
+        "retest_close": retest_close,
+        "retest_low": retest_low,
+        "distance_from_resistance_pct": distance_pct,
+        "breakout_index": breakout_index,
+        "retest_index": retest_index,
+        "candles_since_breakout": retest_index - breakout_index,
+        "lookback_used": lookback,
+        "timeframe": timeframe,
+    }
 
     latest = df.iloc[-1]
     close = _safe_float(latest.get("close"), 0.0)

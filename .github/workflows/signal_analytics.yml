@@ -11,9 +11,9 @@ on:
       - "signal_analytics.py"
       - ".github/workflows/signal_analytics.yml"
 
-  # Backup schedule: every 15 minutes.
+  # Analytics refresh every 5 minutes.
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
 
   workflow_dispatch:
 

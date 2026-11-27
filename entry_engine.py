@@ -356,16 +356,56 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
     if len(df) < minimum:
         return {}
 
-    retest_index = len(df) - 1
-    retest_row = df.iloc[retest_index]
-    retest_close = _safe_float(retest_row.get("close"))
-    retest_low = _safe_float(retest_row.get("low"))
+    lookback = _get_lookback(timeframe)
+    last_index = len(df) - 1
+    last_row = df.iloc[last_index]
+    last_close = _safe_float(last_row.get("close"))
+    last_low = _safe_float(last_row.get("low"))
 
-    if not (_is_valid_num(retest_close) and _is_valid_num(retest_low)) or retest_close <= 0:
+    if not (_is_valid_num(last_close) and _is_valid_num(last_low)) or last_close <= 0:
         return {}
 
-    lookback = _get_lookback(timeframe)
+    # ==========================================
+    # CASE 1: FRESH BREAKOUT (last candle itself breaks)
+    # ==========================================
+    prior_for_last = df.iloc[:-1]
+    if len(prior_for_last) >= 3:
+        res_start_last = max(0, last_index - lookback)
+        res_data_last = df.iloc[res_start_last:last_index]
+        resistance_last = _safe_float(res_data_last["high"].max()) if not res_data_last.empty else 0.0
 
+        if _is_valid_num(resistance_last) and resistance_last > 0:
+            # Previous close must be BELOW resistance, current close ABOVE
+            pre_close = _safe_float(df.iloc[last_index - 1].get("close"))
+            if (
+                _is_valid_num(pre_close)
+                and pre_close <= resistance_last
+                and last_close > resistance_last
+            ):
+                # Fresh breakout — valid
+                return {
+                    "resistance": resistance_last,
+                    "support": _safe_float(df["low"].min(), 0.0),
+                    "breakout": True,
+                    "retest": True,
+                    "above_resistance": True,
+                    "breakout_close": last_close,
+                    "retest_close": last_close,
+                    "retest_low": last_low,
+                    "distance_from_resistance_pct": ((last_close - resistance_last) / resistance_last) * 100,
+                    "breakout_index": last_index,
+                    "retest_index": last_index,
+                    "candles_since_breakout": 0,
+                    "lookback_used": lookback,
+                    "timeframe": timeframe,
+                    "breakout_confirmed": True,
+                    "retest_confirmed": True,
+                    "fresh_breakout": True,
+                }
+
+    # ==========================================
+    # CASE 2: SEPARATE-CANDLE BREAKOUT + RETEST
+    # ==========================================
     breakout_found = False
     breakout_index = -1
     resistance = None
@@ -400,31 +440,32 @@ def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any
     if not breakout_found:
         return {}
 
+    # Retest validation on last candle
     retest_tol = RETEST_TOLERANCE_PCT / 100.0
     lower_boundary = resistance * (1 - retest_tol)
     upper_boundary = resistance * (1 + retest_tol)
 
     retest_valid = (
-        retest_low >= lower_boundary
-        and retest_low <= upper_boundary
-        and retest_close >= resistance
+        last_low >= lower_boundary
+        and last_low <= upper_boundary
+        and last_close >= resistance
     )
 
-    distance_pct = ((retest_close - resistance) / resistance) * 100
+    distance_pct = ((last_close - resistance) / resistance) * 100
 
     return {
         "resistance": resistance,
         "support": _safe_float(df["low"].min(), 0.0),
         "breakout": retest_valid,
         "retest": retest_valid,
-        "above_resistance": retest_close >= resistance,
+        "above_resistance": last_close >= resistance,
         "breakout_close": _safe_float(df.iloc[breakout_index]["close"]),
-        "retest_close": retest_close,
-        "retest_low": retest_low,
+        "retest_close": last_close,
+        "retest_low": last_low,
         "distance_from_resistance_pct": distance_pct,
         "breakout_index": breakout_index,
-        "retest_index": retest_index,
-        "candles_since_breakout": retest_index - breakout_index,
+        "retest_index": last_index,
+        "candles_since_breakout": last_index - breakout_index,
         "lookback_used": lookback,
         "timeframe": timeframe,
         "breakout_confirmed": retest_valid,

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-27T02:53:57.143732+00:00",
+  "updated_at": "2026-11-27T03:52:42.770435+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -750,7 +750,7 @@
         "t2": 3.110057039525,
         "t3": 3.14506844743
       },
-      "current_price": 3.127,
+      "current_price": 3.104,
       "status": "TARGET_2_HIT",
       "t1_hit": true,
       "t2_hit": true,
@@ -763,7 +763,7 @@
       "max_price_seen": 3.127,
       "result": "TARGET_1",
       "closed_at": null,
-      "last_updated": "2026-11-27T02:52:46.855532+00:00"
+      "last_updated": "2026-11-27T03:51:40.095023+00:00"
     },
     {
       "signal_id": "BTCUSDT_SWING_20261125T214221.040487+0000",
@@ -960,7 +960,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.1514,
+      "current_price": 0.1512,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -973,7 +973,7 @@
       "max_price_seen": 0.1514,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T02:52:46.858115+00:00"
+      "last_updated": "2026-11-27T03:51:40.104993+00:00"
     },
     {
       "signal_id": "XRPUSDT_SWING_20261126T035101.586796+0000",
@@ -1320,20 +1320,20 @@
         "t2": 67.30429695,
         "t3": null
       },
-      "current_price": 64.94,
+      "current_price": 65.94,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
-      "entry_reached": false,
+      "entry_reached": true,
       "entry_expiry": "2026-11-27T03:53:55.437614+00:00",
       "entry_window_expired": false,
-      "entry_reached_at": null,
-      "max_price_seen": 64.94,
+      "entry_reached_at": "2026-11-27T03:51:40.107418+00:00",
+      "max_price_seen": 65.94,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T02:53:55.437614+00:00"
+      "last_updated": "2026-11-27T03:51:40.107418+00:00"
     },
     {
       "signal_id": "WLDUSDT_SWING_20261127T025356.580078+0000",
@@ -1350,20 +1350,20 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.2496,
+      "current_price": 0.2502,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
-      "entry_reached": false,
+      "entry_reached": true,
       "entry_expiry": "2026-11-27T03:53:56.580078+00:00",
       "entry_window_expired": false,
-      "entry_reached_at": null,
-      "max_price_seen": 0.2496,
+      "entry_reached_at": "2026-11-27T03:51:40.109368+00:00",
+      "max_price_seen": 0.2502,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T02:53:56.580078+00:00"
+      "last_updated": "2026-11-27T03:51:40.109368+00:00"
     },
     {
       "signal_id": "SUIUSDT_SWING_20261127T025357.143670+0000",
@@ -1380,7 +1380,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.6828,
+      "current_price": 0.6819,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -1393,7 +1393,37 @@
       "max_price_seen": 0.6828,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T02:53:57.143670+00:00"
+      "last_updated": "2026-11-27T03:51:40.111250+00:00"
+    },
+    {
+      "signal_id": "LTCUSDT_SWING_20261127T035242.770383+0000",
+      "symbol": "LTCUSDT",
+      "strategy": "SWING",
+      "classification": "STRONG BUY",
+      "score": 10,
+      "created_at": "2026-11-27T03:52:42.770383+00:00",
+      "expires_at": "2026-11-29T03:52:42.770383+00:00",
+      "entry_price": 44.49,
+      "stop_loss": 44.14906593,
+      "targets": {
+        "t1": 45.6264469,
+        "t2": null,
+        "t3": null
+      },
+      "current_price": 44.49,
+      "status": "ACTIVE",
+      "t1_hit": false,
+      "t2_hit": false,
+      "t3_hit": false,
+      "stop_loss_hit": false,
+      "entry_reached": false,
+      "entry_expiry": "2026-11-27T04:52:42.770383+00:00",
+      "entry_window_expired": false,
+      "entry_reached_at": null,
+      "max_price_seen": 44.49,
+      "result": null,
+      "closed_at": null,
+      "last_updated": "2026-11-27T03:52:42.770383+00:00"
     }
   ]
 }

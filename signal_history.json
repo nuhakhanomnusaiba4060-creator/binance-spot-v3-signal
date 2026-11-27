@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-27T09:56:32.509283+00:00",
+  "updated_at": "2026-11-27T10:43:38.686758+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -750,7 +750,7 @@
         "t2": 3.110057039525,
         "t3": 3.14506844743
       },
-      "current_price": 3.123,
+      "current_price": 3.139,
       "status": "TARGET_2_HIT",
       "t1_hit": true,
       "t2_hit": true,
@@ -760,10 +760,10 @@
       "entry_expiry": "2026-11-25T20:43:04.258912+00:00",
       "entry_window_expired": false,
       "entry_reached_at": "2026-11-25T20:39:40.007458+00:00",
-      "max_price_seen": 3.128,
+      "max_price_seen": 3.139,
       "result": "TARGET_1",
       "closed_at": null,
-      "last_updated": "2026-11-27T09:55:34.899443+00:00"
+      "last_updated": "2026-11-27T10:43:38.663543+00:00"
     },
     {
       "signal_id": "BTCUSDT_SWING_20261125T214221.040487+0000",
@@ -960,7 +960,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.1526,
+      "current_price": 0.1531,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -973,7 +973,7 @@
       "max_price_seen": 0.1536,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T09:55:34.902417+00:00"
+      "last_updated": "2026-11-27T10:43:38.666967+00:00"
     },
     {
       "signal_id": "XRPUSDT_SWING_20261126T035101.586796+0000",
@@ -1320,7 +1320,7 @@
         "t2": 67.30429695,
         "t3": null
       },
-      "current_price": 65.87,
+      "current_price": 66.03,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -1333,7 +1333,7 @@
       "max_price_seen": 66.24,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T09:55:34.904670+00:00"
+      "last_updated": "2026-11-27T10:43:38.669901+00:00"
     },
     {
       "signal_id": "WLDUSDT_SWING_20261127T025356.580078+0000",
@@ -1350,7 +1350,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.2525,
+      "current_price": 0.2536,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -1363,7 +1363,7 @@
       "max_price_seen": 0.2542,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T09:55:34.906981+00:00"
+      "last_updated": "2026-11-27T10:43:38.672739+00:00"
     },
     {
       "signal_id": "SUIUSDT_SWING_20261127T025357.143670+0000",
@@ -1620,7 +1620,7 @@
         "t2": 0.13247995,
         "t3": null
       },
-      "current_price": 0.1272,
+      "current_price": 0.1274,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -1633,7 +1633,7 @@
       "max_price_seen": 0.1285,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T09:55:34.909202+00:00"
+      "last_updated": "2026-11-27T10:43:38.675564+00:00"
     },
     {
       "signal_id": "SOLUSDT_SWING_20261127T084332.363175+0000",
@@ -1650,7 +1650,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 73.48,
+      "current_price": 73.45,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -1663,7 +1663,7 @@
       "max_price_seen": 73.57,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T09:55:34.911296+00:00"
+      "last_updated": "2026-11-27T10:43:38.678355+00:00"
     },
     {
       "signal_id": "SUIUSDT_SWING_20261127T084332.865768+0000",
@@ -1680,7 +1680,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 0.6894,
+      "current_price": 0.6929,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -1690,10 +1690,10 @@
       "entry_expiry": "2026-11-27T09:43:32.865768+00:00",
       "entry_window_expired": false,
       "entry_reached_at": "2026-11-27T09:24:37.566485+00:00",
-      "max_price_seen": 0.6894,
+      "max_price_seen": 0.6929,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T09:55:34.913539+00:00"
+      "last_updated": "2026-11-27T10:43:38.681256+00:00"
     },
     {
       "signal_id": "ENAUSDT_SWING_20261127T092552.850107+0000",
@@ -1711,19 +1711,19 @@
         "t3": null
       },
       "current_price": 0.107,
-      "status": "ACTIVE",
+      "status": "EXPIRED_BEFORE_ENTRY",
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
       "stop_loss_hit": false,
       "entry_reached": false,
       "entry_expiry": "2026-11-27T10:25:52.850107+00:00",
-      "entry_window_expired": false,
+      "entry_window_expired": true,
       "entry_reached_at": null,
       "max_price_seen": 0.1074,
-      "result": null,
-      "closed_at": null,
-      "last_updated": "2026-11-27T09:55:34.915701+00:00"
+      "result": "ENTRY_WINDOW_EXPIRED",
+      "closed_at": "2026-11-27T10:43:38.649926+00:00",
+      "last_updated": "2026-11-27T10:43:38.649926+00:00"
     },
     {
       "signal_id": "ZECUSDT_SWING_20261127T092553.523863+0000",
@@ -1740,7 +1740,7 @@
         "t2": 792.0007486,
         "t3": null
       },
-      "current_price": 755.2,
+      "current_price": 758.77,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -1750,10 +1750,10 @@
       "entry_expiry": "2026-11-27T10:25:53.523863+00:00",
       "entry_window_expired": false,
       "entry_reached_at": "2026-11-27T09:55:34.917846+00:00",
-      "max_price_seen": 755.2,
+      "max_price_seen": 758.77,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T09:55:34.917846+00:00"
+      "last_updated": "2026-11-27T10:43:38.684017+00:00"
     },
     {
       "signal_id": "HAEDALUSDT_SCALP_20261127T092554.133618+0000",
@@ -1800,7 +1800,7 @@
         "t2": 68.3445468,
         "t3": null
       },
-      "current_price": 66.19,
+      "current_price": 66.03,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -1813,7 +1813,7 @@
       "max_price_seen": 66.19,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-27T09:56:32.509236+00:00"
+      "last_updated": "2026-11-27T10:43:38.686729+00:00"
     }
   ]
 }

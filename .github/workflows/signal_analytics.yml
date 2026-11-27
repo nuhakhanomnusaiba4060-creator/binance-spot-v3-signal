@@ -1,10 +1,17 @@
-File: ".github/workflows/signal_analytics.yml"
 
 name: V3 Signal Performance Analytics
 
 on:
+  # Run shortly after the scanner persists new signal history.
+  push:
+    paths:
+      - "signal_history.json"
+      - "signal_analytics.py"
+      - ".github/workflows/signal_analytics.yml"
+
+  # Backup schedule.
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
 
   workflow_dispatch:
 
@@ -21,7 +28,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout repository
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
           ref: main
@@ -40,23 +47,28 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run Signal Analytics
-        run: |
-          python signal_analytics.py
+        run: python signal_analytics.py
 
       - name: Persist Analytics Data
         if: success()
         run: |
-          if [ -f signal_analytics.json ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-            git add -f signal_analytics.json
-
-            if ! git diff --cached --quiet; then
-              git commit -m "Update V3 signal analytics"
-              git pull --rebase --autostash origin main
-              git push origin main
-            else
-              echo "No analytics changes."
-            fi
+          if [ ! -f signal_analytics.json ]; then
+            echo "ERROR: signal_analytics.json was not created."
+            exit 1
           fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -f signal_analytics.json
+
+          if git diff --cached --quiet; then
+            echo "No analytics changes."
+            exit 0
+          fi
+
+          git commit -m "Update V3 signal analytics"
+
+          # Preserve concurrent scanner history commits.
+          git pull --rebase --autostash origin main
+          git push origin HEAD:main

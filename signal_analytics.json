@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "updated_at": "2026-11-27T18:12:00.459305+00:00",
+  "updated_at": "2026-11-27T18:39:45.331041+00:00",
   "retention_days": 7,
   "round_trip_fee_pct": 0.2,
   "accounting_type": "SIMULATED_CANDLE_BASED",
@@ -1113,9 +1113,9 @@
       "gross_return_pct": null,
       "return_pct": null,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-27T18:11:00+00:00",
-      "last_closed_candle_at": "2026-11-27T18:11:59.999000+00:00",
-      "last_closed_candle_close": 0.1491,
+      "last_checked_at": "2026-11-27T18:38:00+00:00",
+      "last_closed_candle_at": "2026-11-27T18:38:59.999000+00:00",
+      "last_closed_candle_close": 0.1489,
       "data_error": null
     },
     "XRPUSDT_SWING_20261126T035101.586796+0000": {
@@ -1454,9 +1454,9 @@
       "gross_return_pct": null,
       "return_pct": null,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-27T18:11:00+00:00",
-      "last_closed_candle_at": "2026-11-27T18:11:59.999000+00:00",
-      "last_closed_candle_close": 63.77,
+      "last_checked_at": "2026-11-27T18:38:00+00:00",
+      "last_closed_candle_at": "2026-11-27T18:38:59.999000+00:00",
+      "last_closed_candle_close": 63.51,
       "data_error": null
     },
     "HYPEUSDT_SWING_20261127T025355.437614+0000": {
@@ -2136,9 +2136,9 @@
       "gross_return_pct": null,
       "return_pct": null,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-27T18:11:00+00:00",
-      "last_closed_candle_at": "2026-11-27T18:11:59.999000+00:00",
-      "last_closed_candle_close": 2.764,
+      "last_checked_at": "2026-11-27T18:38:00+00:00",
+      "last_closed_candle_at": "2026-11-27T18:38:59.999000+00:00",
+      "last_closed_candle_close": 2.842,
       "data_error": null
     },
     "FETUSDT_SCALP_20261127T125000.220909+0000": {
@@ -2291,9 +2291,9 @@
       "gross_return_pct": null,
       "return_pct": null,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-27T18:11:00+00:00",
-      "last_closed_candle_at": "2026-11-27T18:11:59.999000+00:00",
-      "last_closed_candle_close": 91.62,
+      "last_checked_at": "2026-11-27T18:38:00+00:00",
+      "last_closed_candle_at": "2026-11-27T18:38:59.999000+00:00",
+      "last_closed_candle_close": 91.29,
       "data_error": null
     }
   }

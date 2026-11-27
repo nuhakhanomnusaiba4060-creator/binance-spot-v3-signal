@@ -1,40 +1,30 @@
-name: Binance Spot V3 Smart Signal Scanner
+File: ".github/workflows/signal_analytics.yml"
+
+name: V3 Signal Performance Analytics
 
 on:
   schedule:
     - cron: "*/5 * * * *"
 
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Run in dry-run mode without sending live Telegram alerts (true/false)"
-        required: false
-        default: "false"
-        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: binance-spot-v3-scanner
+  group: v3-signal-analytics
   cancel-in-progress: false
 
 jobs:
-  scanner:
+  analytics:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
-    env:
-      DRY_RUN: ${{ inputs.dry_run || 'false' }}
-      SCANNER_CAPITAL_USDT: ${{ vars.SCANNER_CAPITAL_USDT }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: main
           fetch-depth: 0
 
       - name: Set up Python
@@ -49,71 +39,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Validate live configuration
+      - name: Run Signal Analytics
         run: |
-          python - <<'PY'
-          import os
-          import sys
+          python signal_analytics.py
 
-          dry_run = os.getenv("DRY_RUN", "false").strip().lower() in ("1", "true", "yes")
-          capital_raw = os.getenv("SCANNER_CAPITAL_USDT", "").strip()
-
-          if not capital_raw:
-              print("ERROR: Missing SCANNER_CAPITAL_USDT variable.")
-              sys.exit(1)
-
-          try:
-              capital = float(capital_raw)
-          except ValueError:
-              print("ERROR: SCANNER_CAPITAL_USDT is invalid.")
-              sys.exit(1)
-
-          if capital <= 0:
-              print("ERROR: Capital must be greater than zero.")
-              sys.exit(1)
-
-          if not dry_run:
-              missing_secrets = [
-                  name for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
-                  if not os.getenv(name, "").strip()
-              ]
-              if missing_secrets:
-                  print("ERROR: Missing required GitHub Secrets for live mode:")
-                  for name in missing_secrets:
-                      print(f"- {name}")
-                  sys.exit(1)
-
-          print("Configuration validation successful.")
-          print(f"Capital: {capital:.2f} USDT")
-          print(f"Dry Run: {'ENABLED' if dry_run else 'DISABLED'}")
-          PY
-
-      - name: Run unit tests if present
+      - name: Persist Analytics Data
+        if: success()
         run: |
-          if [ -d "tests" ] || ls test_*.py 1>/dev/null 2>&1; then
-            pytest -q
-          else
-            echo "No pytest files found; skipping test step."
-          fi
-
-      - name: Run Binance Spot V3 Scanner
-        run: |
-          python scanner.py
-
-      - name: Persist signal history
-        if: ${{ success() }}
-        run: |
-          if [ -f signal_history.json ]; then
+          if [ -f signal_analytics.json ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-            git add -f signal_history.json
+            git add -f signal_analytics.json
 
             if ! git diff --cached --quiet; then
-              git commit -m "Update V3 signal history"
-              git pull --rebase --autostash origin "${{ github.ref_name }}"
-              git push origin "${{ github.ref_name }}"
+              git commit -m "Update V3 signal analytics"
+              git pull --rebase --autostash origin main
+              git push origin main
             else
-              echo "No changes in signal_history.json to commit."
+              echo "No analytics changes."
             fi
           fi

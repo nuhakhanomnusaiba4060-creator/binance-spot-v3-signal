@@ -23,12 +23,14 @@ from indicators import (
 logger = logging.getLogger(__name__)
 
 
+# =========================================================
+# CONFIG
+# =========================================================
+
 STRATEGY_CONFIG = getattr(cfg, "STRATEGY_CONFIG", {})
 MARKET_FILTER_CONFIG = getattr(cfg, "MARKET_FILTER_CONFIG", {})
 COIN_SELECTION_CONFIG = getattr(
-    cfg,
-    "COIN_SELECTION_CONFIG",
-    getattr(cfg, "FILTER_CONFIG", {}),
+    cfg, "COIN_SELECTION_CONFIG", getattr(cfg, "FILTER_CONFIG", {})
 )
 SCORING_CONFIG = getattr(cfg, "SCORING_CONFIG", {})
 INDICATOR_CONFIG = getattr(cfg, "INDICATOR_CONFIG", {})
@@ -59,6 +61,39 @@ SWING_CONFIG: dict[str, Any] = {
     **(STRATEGY_CONFIG.get("SWING", {}) if isinstance(STRATEGY_CONFIG, dict) else {}),
 }
 
+# 🔥 Global constants (previously missing)
+RETEST_TOLERANCE_PCT = 1.5
+MAX_CONSECUTIVE_BULLISH = 3
+MIN_CANDLE_BODY_PCT = 1.5
+RVOL_SPIKE_THRESHOLD = 2.0
+RVOL_COLLAPSE_RATIO = 0.70
+MIN_UPSIDE_TO_RESISTANCE_PCT = 1.0
+
+
+# =========================================================
+# TIMEFRAME-AWARE LOOKBACK
+# =========================================================
+
+TIMEFRAME_LOOKBACK_MAP = {
+    "1m": 30,
+    "3m": 25,
+    "5m": 20,
+    "15m": 10,
+    "30m": 8,
+    "1h": 6,
+    "2h": 6,
+    "4h": 5,
+    "1d": 4,
+}
+
+
+def _get_lookback(timeframe: str) -> int:
+    return TIMEFRAME_LOOKBACK_MAP.get(str(timeframe).lower(), 20)
+
+
+# =========================================================
+# HELPERS
+# =========================================================
 
 def _safe_float(value: Any, default: float = float("nan")) -> float:
     try:
@@ -66,6 +101,14 @@ def _safe_float(value: Any, default: float = float("nan")) -> float:
         return num if math.isfinite(num) else default
     except (TypeError, ValueError, OverflowError):
         return default
+
+
+def _number(value: Any, default: float | None = None) -> float | None:
+    """Alias for _safe_float but returns None instead of NaN."""
+    result = _safe_float(value, float("nan"))
+    if math.isnan(result):
+        return default
+    return result
 
 
 def _is_valid_num(value: Any) -> bool:
@@ -89,12 +132,12 @@ def _get_dynamic_config(strategy_name: str, market_status: str = "BULLISH") -> d
     base["MARKET_STATUS"] = status
 
     if status == "NEUTRAL":
-        base["MIN_RVOL"] = round(_safe_float(base.get("MIN_RVOL"), 1.2) * 1.1, 4)
-        base["SCORE_PENALTY"] = int(_safe_float(MARKET_FILTER_CONFIG.get("NEUTRAL_SCORE_PENALTY"), 2))
+        base["MIN_RVOL"] = round(_safe_float(base.get("MIN_RVOL"), 1.2) * 0.7, 4)
+        base["SCORE_PENALTY"] = int(_safe_float(MARKET_FILTER_CONFIG.get("NEUTRAL_SCORE_PENALTY"), 1))
     elif status == "BEARISH":
-        base["MIN_RVOL"] = round(_safe_float(base.get("MIN_RVOL"), 1.2) * 1.2, 4)
-        base["SCORE_PENALTY"] = int(_safe_float(MARKET_FILTER_CONFIG.get("BEARISH_SCORE_PENALTY"), 2))
-        base["ALLOW_BEARISH"] = bool(MARKET_FILTER_CONFIG.get("ALLOW_BEARISH_SIGNALS", False))
+        base["MIN_RVOL"] = round(_safe_float(base.get("MIN_RVOL"), 1.2) * 0.6, 4)
+        base["SCORE_PENALTY"] = int(_safe_float(MARKET_FILTER_CONFIG.get("BEARISH_SCORE_PENALTY"), 1))
+        base["ALLOW_BEARISH"] = bool(MARKET_FILTER_CONFIG.get("ALLOW_BEARISH_SIGNALS", True))
     else:
         base["SCORE_PENALTY"] = 0
         base["ALLOW_BEARISH"] = True
@@ -119,26 +162,29 @@ def _validate_market_context(market_context: dict[str, Any] | None) -> tuple[boo
         return False, "MARKET_HIGH_RISK"
 
     for val in raw_values:
-        if val in ("HIGH_RISK", "HIGH", "EXTREME", "CRITICAL"):
+        if val in ("HIGH_RISK", "EXTREME", "CRITICAL"):
             return False, "MARKET_HIGH_RISK"
 
     status = next((v for v in raw_values if v), "UNKNOWN")
     if status in ("UNKNOWN", "INVALID"):
         return False, f"MARKET_{status}"
 
-    allow_bearish = bool(MARKET_FILTER_CONFIG.get("ALLOW_BEARISH_SIGNALS", False))
+    allow_bearish = bool(MARKET_FILTER_CONFIG.get("ALLOW_BEARISH_SIGNALS", True))
     if status == "BEARISH" and not allow_bearish:
         return False, "BEARISH_MARKET_REJECTED"
 
     return True, status
 
 
+# =========================================================
+# PUMP PROTECTION
+# =========================================================
+
 def _has_insufficient_upside(
     entry_price: float,
     resistance_level: float | None,
     min_upside_pct: float | None = None,
 ) -> bool:
-    """Return True only when a known nearby resistance leaves too little upside."""
     if not _is_valid_num(entry_price) or entry_price <= 0:
         return True
     if resistance_level is None or not _is_valid_num(resistance_level):
@@ -149,10 +195,13 @@ def _has_insufficient_upside(
     req_pct = (
         min_upside_pct
         if min_upside_pct is not None
-        else _safe_float(COIN_SELECTION_CONFIG.get("MIN_NEXT_RESISTANCE_DISTANCE_PERCENT"), 1.5)
+        else _safe_float(
+            COIN_SELECTION_CONFIG.get("MIN_NEXT_RESISTANCE_DISTANCE_PERCENT"),
+            MIN_UPSIDE_TO_RESISTANCE_PCT,
+        )
     )
     if not _is_valid_num(req_pct):
-        req_pct = 1.5
+        req_pct = MIN_UPSIDE_TO_RESISTANCE_PCT
 
     upside_pct = ((resistance_level - entry_price) / entry_price) * 100.0
     return upside_pct < max(0.5, req_pct * 0.65)
@@ -163,22 +212,27 @@ def _has_consecutive_bullish_candles(
     max_candles: int | None = None,
     min_body_pct: float | None = None,
 ) -> bool:
-    """Detect consecutive strong bullish candles that indicate late pump chase."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return False
 
     count_limit = int(
         max_candles
         if max_candles is not None
-        else _safe_float(COIN_SELECTION_CONFIG.get("MAX_CONSECUTIVE_STRONG_BULL_CANDLES"), 3)
+        else _safe_float(
+            COIN_SELECTION_CONFIG.get("MAX_CONSECUTIVE_STRONG_BULL_CANDLES"),
+            MAX_CONSECUTIVE_BULLISH,
+        )
     )
     body_thresh = (
         min_body_pct
         if min_body_pct is not None
-        else _safe_float(COIN_SELECTION_CONFIG.get("STRONG_BULL_CANDLE_BODY_PERCENT"), 1.5)
+        else _safe_float(
+            COIN_SELECTION_CONFIG.get("STRONG_BULL_CANDLE_BODY_PERCENT"),
+            MIN_CANDLE_BODY_PCT,
+        )
     )
     if not _is_valid_num(body_thresh):
-        body_thresh = 1.5
+        body_thresh = MIN_CANDLE_BODY_PCT
 
     if count_limit < 2 or len(df) < count_limit:
         return False
@@ -201,7 +255,6 @@ def _has_rvol_collapse(
     spike_threshold: float | None = None,
     collapse_ratio: float | None = None,
 ) -> bool:
-    """Detect RVOL spike followed by sharp volume drop-off."""
     if df is None or not isinstance(df, pd.DataFrame) or "relative_volume" not in df.columns:
         return False
     if len(df) < 4:
@@ -210,17 +263,23 @@ def _has_rvol_collapse(
     spike_thresh = (
         spike_threshold
         if spike_threshold is not None
-        else _safe_float(COIN_SELECTION_CONFIG.get("RVOL_SPIKE_THRESHOLD"), 2.0)
+        else _safe_float(
+            COIN_SELECTION_CONFIG.get("RVOL_SPIKE_THRESHOLD"),
+            RVOL_SPIKE_THRESHOLD,
+        )
     )
     ratio_thresh = (
         collapse_ratio
         if collapse_ratio is not None
-        else _safe_float(COIN_SELECTION_CONFIG.get("RVOL_COLLAPSE_RATIO_OF_PEAK"), 0.70)
+        else _safe_float(
+            COIN_SELECTION_CONFIG.get("RVOL_COLLAPSE_RATIO_OF_PEAK"),
+            RVOL_COLLAPSE_RATIO,
+        )
     )
     if not _is_valid_num(spike_thresh):
-        spike_thresh = 2.0
+        spike_thresh = RVOL_SPIKE_THRESHOLD
     if not _is_valid_num(ratio_thresh):
-        ratio_thresh = 0.70
+        ratio_thresh = RVOL_COLLAPSE_RATIO
 
     rvol_series = pd.to_numeric(df["relative_volume"], errors="coerce").tail(4)
     current_rvol = _safe_float(rvol_series.iloc[-1])
@@ -233,7 +292,6 @@ def _has_rvol_collapse(
 
 
 def _buyer_confirmation(source: pd.DataFrame | dict[str, Any] | None) -> bool:
-    """Check buyer pressure on latest closed candle or indicator snapshot dict."""
     if source is None:
         return False
 
@@ -268,7 +326,12 @@ def _buyer_confirmation(source: pd.DataFrame | dict[str, Any] | None) -> bool:
 
     return False
 
-  def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any]:
+
+# =========================================================
+# BREAKOUT DETECTION (FIXED — SINGLE DEFINITION)
+# =========================================================
+
+def _get_breakout_data(df: pd.DataFrame, timeframe: str = "5m") -> dict[str, Any]:
     """Extract support, resistance, latest price, and fresh breakout / retest status."""
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return {}
@@ -352,135 +415,21 @@ def _buyer_confirmation(source: pd.DataFrame | dict[str, Any] | None) -> bool:
         "candles_since_breakout": retest_index - breakout_index,
         "lookback_used": lookback,
         "timeframe": timeframe,
+        "breakout_confirmed": retest_valid,
+        "retest_confirmed": retest_valid,
+        "support": 0.0,
+        "fresh_breakout": retest_valid,
     }
 
-    latest = df.iloc[-1]
-    close = _safe_float(latest.get("close"), 0.0)
-    open_p = _safe_float(latest.get("open"), close)
-    high_p = _safe_float(latest.get("high"), close)
-    low_p = _safe_float(latest.get("low"), close)
 
-    prior = df.iloc[:-1] if len(df) > 1 else df
-    prior_highs = (
-        pd.to_numeric(prior.get("high"), errors="coerce").dropna()
-        if "high" in prior.columns
-        else pd.Series(dtype=float)
-    )
-    prior_closes = (
-        pd.to_numeric(prior.get("close"), errors="coerce").dropna()
-        if "close" in prior.columns
-        else pd.Series(dtype=float)
-    )
-    prior_lows = (
-        pd.to_numeric(prior.get("low"), errors="coerce").dropna()
-        if "low" in prior.columns
-        else pd.Series(dtype=float)
-    )
-
-    levels = support_resistance(prior if len(prior) >= 5 else df)
-    support = _safe_float(levels.get("support") if isinstance(levels, dict) else None)
-    resistance = _safe_float(levels.get("resistance") if isinstance(levels, dict) else None)
-
-    if not (_is_valid_num(resistance) and resistance > 0):
-        if len(prior_highs) >= 3:
-            resistance = float(prior_highs.iloc[:-1].max())
-        elif not prior_highs.empty:
-            resistance = float(prior_highs.max())
-        else:
-            resistance = max(close * 1.02, 1.0)
-
-    if not (_is_valid_num(support) and support > 0):
-        support = float(prior_lows.min()) if not prior_lows.empty else max(close * 0.98, 0.5)
-
-    retest_tol = _safe_float(INDICATOR_CONFIG.get("RETEST_TOLERANCE_PERCENT"), 0.5) / 100.0
-    if not _is_valid_num(retest_tol) or retest_tol <= 0:
-        retest_tol = 0.005
-    band_tol = max(retest_tol * 2.0, 0.01)
-
-    above_res = bool(
-        _is_valid_num(close)
-        and close > 0
-        and _is_valid_num(resistance)
-        and resistance > 0
-        and close >= resistance
-    )
-
-    current_at_or_above_res = bool(
-        _is_valid_num(close)
-        and close > 0
-        and _is_valid_num(resistance)
-        and resistance > 0
-        and close >= resistance * (1.0 - retest_tol * 0.5)
-    )
-
-    prior_broke_out = bool(
-        not prior_closes.empty
-        and _is_valid_num(resistance)
-        and resistance > 0
-        and float(prior_closes.max()) >= resistance * (1.0 - retest_tol * 0.25)
-    )
-
-    # A valid retest must hold at/near the broken level without breaking down or closing weak below it
-    near_resistance = bool(
-        _is_valid_num(resistance)
-        and resistance > 0
-        and abs(close - resistance) / resistance <= band_tol
-        and close >= resistance * (1.0 - retest_tol)
-        and (_is_valid_num(open_p) and close >= open_p * 0.999)
-    )
-
-    near_support_after_breakout = bool(
-        prior_broke_out
-        and _is_valid_num(support)
-        and support > 0
-        and abs(low_p - support) / support <= band_tol
-        and close >= support
-        and (_is_valid_num(open_p) and close >= open_p * 0.999)
-    )
-
-    retest_confirmed = bool(near_resistance or near_support_after_breakout)
-
-    # Failed retest: close drops below resistance band or rejects downward
-    failed_retest = bool(
-        _is_valid_num(resistance)
-        and resistance > 0
-        and (
-            close < resistance * (1.0 - retest_tol)
-            or (_is_valid_num(open_p) and close < open_p and abs(high_p - resistance) / resistance <= band_tol * 1.5)
-        )
-    )
-
-    if failed_retest:
-        retest_confirmed = False
-
-    breakout_confirmed = bool(
-        (current_at_or_above_res and not failed_retest)
-        or (prior_broke_out and retest_confirmed)
-    )
-    fresh_breakout = bool(current_at_or_above_res and not prior_broke_out)
-
-    return {
-        "timeframe": timeframe,
-        "close": float(close) if _is_valid_num(close) else 0.0,
-        "support": float(support) if _is_valid_num(support) and support > 0 else 0.0,
-        "resistance": float(resistance) if _is_valid_num(resistance) and resistance > 0 else 0.0,
-        "above_resistance": above_res,
-        "breakout": breakout_confirmed,
-        "fresh_breakout": fresh_breakout,
-        "retest": retest_confirmed,
-        "breakout_confirmed": breakout_confirmed,
-        "retest_confirmed": retest_confirmed,
-    }
-
+# =========================================================
+# PUMP & OVEREXTENSION CHECK
+# =========================================================
 
 def _check_pump_and_overextension(
     df: pd.DataFrame,
     strat_cfg: dict[str, Any],
 ) -> tuple[bool, str]:
-    """
-    Reject clear late-stage pump chases or collapsed volume spikes
-    without blocking early breakouts or valid pullbacks.
-    """
     latest = df.iloc[-1]
     close = _safe_float(latest.get("close"))
     if not _is_valid_num(close) or close <= 0:
@@ -522,15 +471,16 @@ def _check_pump_and_overextension(
     return True, "OK"
 
 
+# =========================================================
+# SCORING
+# =========================================================
+
 def score_setup(
     trigger_source: pd.DataFrame | dict[str, Any],
     conf_dfs: list[pd.DataFrame] | None = None,
     market_context: dict[str, Any] | None = None,
     strat_cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """
-    Compute 15-point setup score from a DataFrame or indicator snapshot dict.
-    """
     conf_list = conf_dfs if isinstance(conf_dfs, list) else []
     s_cfg = strat_cfg if isinstance(strat_cfg, dict) else {}
 
@@ -665,7 +615,7 @@ def score_setup(
 
     penalty = 0
     if market_status == "NEUTRAL":
-        penalty = int(_safe_float(MARKET_FILTER_CONFIG.get("NEUTRAL_SCORE_PENALTY"), 2))
+        penalty = int(_safe_float(MARKET_FILTER_CONFIG.get("NEUTRAL_SCORE_PENALTY"), 1))
     elif market_status == "BEARISH":
         penalty = int(_safe_float(MARKET_FILTER_CONFIG.get("BEARISH_SCORE_PENALTY"), 1))
 
@@ -692,13 +642,16 @@ def score_setup(
     }
 
 
+# =========================================================
+# ENTRY VALIDATION
+# =========================================================
+
 def validate_entry(
     strategy_name: str,
     symbol: str,
     data_by_tf: dict[str, pd.DataFrame],
     market_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate and score a candidate setup for SCALP or SWING."""
     sym = str(symbol).upper().strip()
     if not sym.endswith("USDT"):
         return {"eligible": False, "classification": "REJECT", "reason": "INVALID_USDT_SYMBOL"}
@@ -775,6 +728,10 @@ def validate_entry(
         "reason": "SETUP_QUALIFIED",
     }
 
+
+# =========================================================
+# PUBLIC FUNCTIONS
+# =========================================================
 
 def evaluate_scalp(
     symbol: str,

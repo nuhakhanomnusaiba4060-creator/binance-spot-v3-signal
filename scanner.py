@@ -1,37 +1,44 @@
+
 """
 Binance Spot V3 Smart Signal Scanner
-Main Scanner Controller
+V4 Formula Integration Controller
 
-Integration fixes:
-- Validate dictionary responses from register_signal() and send_signal().
-- Do not count failed Telegram deliveries as sent.
-- Refresh history after successful registration.
-- Prioritize higher-score setups and block entries during HIGH_RISK regimes.
+System Version: 4.0.0
+Formula Version: 4.0
+Python: 3.11+
+Market: Binance Spot USDT ONLY
+Test Status: NOT RUN
+
+Responsibilities:
+- Fetch Binance Spot market data and closed candles.
+- Analyze BTC market regime.
+- Select liquid USDT Spot candidates.
+- Run the V4 seven-layer, 100-point signal engine.
+- Normalize V4 risk plans for existing tracker and Telegram interfaces.
+- Register approved signals and deliver Telegram notifications.
+- Update existing tracked signals without blocking new signal analysis.
 """
+
+from __future__ import annotations
 
 import logging
 import math
 import os
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
 import config as cfg
-from coin_selector import (
-    select_coins,
-    validate_candidate,
-)
+
+from coin_selector import select_coins
 from data_provider import (
     get_24h_ticker,
     get_klines,
     get_order_book,
     get_usdt_symbols,
 )
-from entry_engine import (
-    evaluate_scalp,
-    evaluate_swing,
-)
+from entry_engine import evaluate_scalp, evaluate_swing
 from market_filter import analyze_market
-from risk_manager import build_risk_plan
 from signal_tracker import (
     check_duplicate,
     expire_old_signals,
@@ -46,8 +53,16 @@ from telegram_bot import (
 )
 
 
+# ============================================================
+# LOGGING
+# ============================================================
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(
+        logging,
+        str(os.getenv("LOG_LEVEL", "INFO")).upper(),
+        logging.INFO,
+    ),
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
@@ -55,24 +70,85 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# CONFIG ACCESSORS
+# VERSION AND CONFIGURATION
 # ============================================================
 
-CORE_CONFIG = getattr(cfg, "CORE_CONFIG", {})
-API_CONFIG = getattr(cfg, "API_CONFIG", {})
-RISK_CONFIG = getattr(cfg, "RISK_CONFIG", {})
-COIN_SELECTION_CONFIG = getattr(
-    cfg,
-    "COIN_SELECTION_CONFIG",
-    getattr(cfg, "FILTER_CONFIG", {}),
-)
+CODE_VERSION = "4.0.0"
+FORMULA_VERSION = "4.0"
+
+QUOTE_ASSET = "USDT"
+
+KLINE_LIMIT = 300
+ORDER_BOOK_LIMIT = 100
+
+MAX_ORDERBOOK_CANDIDATES = 30
+MAX_SIGNALS_PER_RUN = 3
+
+STRATEGIES_ENABLED = {
+    "SCALP": True,
+    "SWING": True,
+}
+
+TIMEFRAME_MAP = {
+    "SCALP": {
+        "entry": "5m",
+        "confirmation": "15m",
+        "structure": "30m",
+    },
+    "SWING": {
+        "entry": "15m",
+        "confirmation": "30m",
+        "structure": "1h",
+    },
+}
 
 
 # ============================================================
-# ENVIRONMENT AND CONFIGURATION
+# BASIC HELPERS
 # ============================================================
 
-def _env_bool(name: str, default: bool) -> bool:
+def _safe_float(
+    value: Any,
+    default: float | None = None,
+) -> float | None:
+    try:
+        number = float(value)
+
+        if not math.isfinite(number):
+            return default
+
+        return number
+
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _safe_int(
+    value: Any,
+    default: int = 0,
+) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _positive(
+    value: Any,
+    default: float = 0.0,
+) -> float:
+    number = _safe_float(value, default)
+
+    if number is None or number <= 0:
+        return default
+
+    return number
+
+
+def _env_bool(
+    name: str,
+    default: bool,
+) -> bool:
     value = os.getenv(name)
 
     if value is None:
@@ -87,159 +163,142 @@ def _env_bool(name: str, default: bool) -> bool:
         return False
 
     raise ValueError(
-        f"Invalid {name} value: {value!r}."
+        f"Invalid Boolean environment variable: {name}"
     )
 
 
-def _normalize_key(value: str) -> str:
-    return (
-        str(value)
-        .lower()
-        .replace("_", "")
-        .replace("-", "")
-        .replace(" ", "")
-    )
+def _get_config_section(name: str) -> dict:
+    value = getattr(cfg, name, {})
+
+    return value if isinstance(value, dict) else {}
 
 
-def _find_config_value(
-    config_obj: Any,
-    names: tuple,
-    default: Any,
-) -> Any:
-    if not isinstance(config_obj, dict):
-        return default
-
-    wanted = {
-        _normalize_key(name)
-        for name in names
-    }
-
-    for key, value in config_obj.items():
-        if _normalize_key(key) in wanted:
-            return value
-
-    for value in config_obj.values():
-        if isinstance(value, dict):
-            result = _find_config_value(
-                value,
-                names,
-                None,
-            )
-            if result is not None:
-                return result
-
-    return default
-
-
-def _safe_float(
-    value: Any,
-    default: float = 0.0,
+def _config_number(
+    section: dict,
+    key: str,
+    default: float,
 ) -> float:
-    try:
-        result = float(value)
-        if not math.isfinite(result):
-            return default
-        return result
-    except (TypeError, ValueError, OverflowError):
+    value = _safe_float(section.get(key), default)
+
+    if value is None:
         return default
 
-
-DRY_RUN = _env_bool(
-    "DRY_RUN",
-    bool(
-        _find_config_value(
-            CORE_CONFIG,
-            ("DRY_RUN", "DEFAULT_DRY_RUN"),
-            True,
-        )
-    ),
-)
+    return value
 
 
-def _parse_capital() -> float:
-    raw = os.getenv("SCANNER_CAPITAL_USDT")
-
-    if raw is None or not raw.strip():
-        if DRY_RUN:
-            capital = _find_config_value(
-                RISK_CONFIG,
-                ("DEFAULT_CAPITAL_USDT", "SIMULATION_CAPITAL_USDT"),
-                100.0,
-            )
-        else:
-            capital = 0.0
-    else:
-        try:
-            capital = float(raw.strip())
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(
-                "SCANNER_CAPITAL_USDT must be a valid number."
-            ) from exc
-
-    try:
-        capital = float(capital)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(
-            "Configured capital is invalid."
-        ) from exc
-
-    if not math.isfinite(capital) or capital < 0:
-        raise ValueError(
-            "Capital must be finite and non-negative."
-        )
-
-    return capital
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-CAPITAL_USDT = _parse_capital()
-
-MAX_ORDERBOOK_CANDIDATES = 30
-KLINE_LIMIT = 300
-ORDER_BOOK_LIMIT = 100
-MAX_SIGNALS_PER_RUN = 3
-
-STRATEGIES_ENABLED = {
-    "SCALP": True,
-    "SWING": True,
-}
-
-
-# ============================================================
-# GENERAL HELPERS
-# ============================================================
-
-def _get_field(
-    data: dict,
-    *names: str,
-    default=None,
-):
-    if not isinstance(data, dict):
-        return default
-
-    normalized = {
-        _normalize_key(key): value
-        for key, value in data.items()
-    }
-
-    for name in names:
-        key = _normalize_key(name)
-        if key in normalized:
-            return normalized[key]
-
-    return default
+def _valid_dataframe(frame: Any) -> bool:
+    return (
+        frame is not None
+        and hasattr(frame, "empty")
+        and not frame.empty
+        and len(frame) >= 50
+    )
 
 
 def _operation_succeeded(result: Any) -> bool:
-    """
-    Strictly validate module operation responses.
-
-    A non-empty dictionary is truthy in Python.
-    Therefore, bool(result) is not sufficient.
-    """
     return (
         isinstance(result, dict)
         and result.get("success") is True
     )
+
+
+def _get_ticker_map(tickers: Any) -> dict[str, dict]:
+    """
+    Convert Binance's 24h ticker LIST into a symbol-indexed map.
+    """
+    if isinstance(tickers, dict):
+        if "symbol" in tickers:
+            symbol = str(tickers.get("symbol", "")).upper()
+            return {symbol: tickers} if symbol else {}
+
+        return {
+            str(symbol).upper(): value
+            for symbol, value in tickers.items()
+            if isinstance(value, dict)
+        }
+
+    if not isinstance(tickers, list):
+        raise ValueError("Invalid Binance 24h ticker response.")
+
+    result = {}
+
+    for ticker in tickers:
+        if not isinstance(ticker, dict):
+            continue
+
+        symbol = str(ticker.get("symbol", "")).upper().strip()
+
+        if symbol:
+            result[symbol] = ticker
+
+    return result
+
+
+def _ticker_price(ticker: dict) -> float:
+    return _positive(
+        ticker.get("lastPrice", ticker.get("last_price"))
+    )
+
+
+def _ticker_quote_volume(ticker: dict) -> float:
+    return _positive(
+        ticker.get(
+            "quoteVolume",
+            ticker.get("quote_volume"),
+        )
+    )
+
+
+def _is_usdt_symbol(symbol: str) -> bool:
+    symbol = str(symbol or "").upper().strip()
+
+    return (
+        symbol.endswith(QUOTE_ASSET)
+        and len(symbol) > len(QUOTE_ASSET)
+    )
+
+
+# ============================================================
+# ENVIRONMENT
+# ============================================================
+
+RUNTIME_CONFIG = _get_config_section("RUNTIME_CONFIG")
+RISK_CONFIG = _get_config_section("RISK_CONFIG")
+SYMBOL_CONFIG = _get_config_section("SYMBOL_CONFIG")
+SIGNAL_CONFIG = _get_config_section("SIGNAL_CONFIG")
+EXECUTION_COST_CONFIG = _get_config_section(
+    "EXECUTION_COST_CONFIG"
+)
+
+DRY_RUN = _env_bool(
+    "DRY_RUN",
+    bool(RUNTIME_CONFIG.get("dry_run", False)),
+)
+
+CAPITAL_USDT = _positive(
+    os.getenv(
+        "SCANNER_CAPITAL_USDT",
+        RUNTIME_CONFIG.get("capital_usdt", 100.0),
+    ),
+    100.0,
+)
+
+MAX_SIGNALS_PER_RUN = _safe_int(
+    os.getenv(
+        "MAX_SIGNALS_PER_RUN",
+        RUNTIME_CONFIG.get("max_signals_per_run", 3),
+    ),
+    3,
+)
+
+MAX_SIGNALS_PER_RUN = max(
+    1,
+    min(MAX_SIGNALS_PER_RUN, 10),
+)
 
 
 # ============================================================
@@ -247,29 +306,9 @@ def _operation_succeeded(result: Any) -> bool:
 # ============================================================
 
 def validate_scanner_configuration() -> None:
-    if not math.isfinite(CAPITAL_USDT):
-        raise ValueError("Capital must be finite.")
-
-    if CAPITAL_USDT < 0:
+    if CAPITAL_USDT <= 0:
         raise ValueError(
-            "SCANNER_CAPITAL_USDT cannot be negative."
-        )
-
-    if not DRY_RUN and CAPITAL_USDT <= 0:
-        raise ValueError(
-            "Live mode requires a positive "
-            "SCANNER_CAPITAL_USDT value."
-        )
-
-    if not DRY_RUN:
-        if not credentials_available():
-            raise ValueError(
-                "Telegram credentials are missing."
-            )
-
-    if MAX_ORDERBOOK_CANDIDATES < 1:
-        raise ValueError(
-            "MAX_ORDERBOOK_CANDIDATES must be positive."
+            "SCANNER_CAPITAL_USDT must be greater than zero."
         )
 
     if KLINE_LIMIT < 220:
@@ -277,11 +316,40 @@ def validate_scanner_configuration() -> None:
             "KLINE_LIMIT must be at least 220."
         )
 
-    logger.info("Scanner configuration validated.")
+    if MAX_SIGNALS_PER_RUN < 1:
+        raise ValueError(
+            "MAX_SIGNALS_PER_RUN must be positive."
+        )
+
+    if not DRY_RUN and not credentials_available():
+        raise ValueError(
+            "Telegram credentials are missing."
+        )
+
+    if not bool(RUNTIME_CONFIG.get("spot_only", True)):
+        raise ValueError(
+            "This scanner must remain Spot-only."
+        )
+
+    logger.info(
+        "Scanner configuration validated."
+    )
+
+    logger.info(
+        "Code Version: %s | Formula Version: %s",
+        CODE_VERSION,
+        FORMULA_VERSION,
+    )
+
     logger.info(
         "Mode: %s",
         "DRY RUN" if DRY_RUN else "LIVE",
     )
+
+    logger.info(
+        "Market: Binance Spot USDT"
+    )
+
     logger.info(
         "Capital: %.2f USDT",
         CAPITAL_USDT,
@@ -295,160 +363,192 @@ def validate_scanner_configuration() -> None:
 def fetch_btc_market_data() -> dict:
     logger.info("Fetching BTC market data.")
 
-    btc_data = {}
+    result = {}
 
     for timeframe in ("15m", "1h", "4h"):
-        try:
-            btc_data[timeframe] = get_klines(
-                "BTCUSDT",
-                timeframe,
-                limit=KLINE_LIMIT,
-            )
-        except Exception as exc:
-            logger.error(
-                "BTC %s data failed: %s",
-                timeframe,
-                exc,
-            )
-            btc_data[timeframe] = None
-
-    if any(
-        btc_data.get(tf) is None
-        or btc_data[tf].empty
-        for tf in ("15m", "1h", "4h")
-    ):
-        raise RuntimeError(
-            "Required BTC market data is incomplete."
+        frame = get_klines(
+            "BTCUSDT",
+            timeframe,
+            limit=KLINE_LIMIT,
+            closed_only=True,
         )
 
-    return btc_data
+        if not _valid_dataframe(frame):
+            raise RuntimeError(
+                f"Invalid BTC {timeframe} closed candles."
+            )
+
+        result[timeframe] = frame
+
+    return result
 
 
 def fetch_market_context() -> dict:
     btc_data = fetch_btc_market_data()
 
-    market_context = analyze_market(
+    context = analyze_market(
         btc_data,
         external_data=None,
     )
 
-    if not isinstance(market_context, dict):
+    if not isinstance(context, dict):
         raise RuntimeError(
-            "Market filter returned invalid data."
+            "Market filter returned invalid context."
         )
+
+    regime = str(
+        context.get(
+            "regime",
+            context.get("market_status", "UNKNOWN"),
+        )
+    ).upper()
+
+    if regime == "UNKNOWN":
+        raise RuntimeError(
+            "BTC market regime is unverified."
+        )
+
+    context = deepcopy(context)
+
+    # The entry engine reads risk_level before regime.
+    # Normalize it to the actual BTC regime so that
+    # LOW/MEDIUM/ELEVATED risk labels are not mistaken
+    # for UNKNOWN directional regimes.
+    context["regime"] = regime
+    context["risk_level"] = regime
+
+    context["market_status"] = regime
+
+    context["allow_new_buy"] = bool(
+        context.get("allow_new_buy", True)
+    )
+
+    if regime == "HIGH_RISK":
+        context["allow_new_buy"] = False
+
+    trend_analysis = context.get(
+        "btc_trend_analysis",
+        {},
+    )
+
+    if isinstance(trend_analysis, dict):
+        context["btc_trend"] = trend_analysis.get(
+            "trend",
+            regime,
+        )
+    else:
+        context["btc_trend"] = regime
 
     logger.info(
-        "BTC trend: %s | Market: %s | Risk: %s",
-        market_context.get("btc_trend"),
-        market_context.get("market_status"),
-        market_context.get("risk_level"),
+        "BTC regime: %s | Trend: %s | New BUY: %s",
+        regime,
+        context.get("btc_trend"),
+        context["allow_new_buy"],
     )
 
-    return market_context
+    return context
 
 
 # ============================================================
-# TICKER AND CANDIDATE SELECTION
+# MARKET CANDIDATE SELECTION
 # ============================================================
 
-def get_ticker_value(
-    ticker: dict,
-    *names,
-) -> float:
-    return _safe_float(
-        _get_field(ticker, *names)
-    )
-
-
-def prefilter_symbols(
+def prefilter_tickers(
+    ticker_map: dict,
     symbols: list,
-    ticker_data: Any,
 ) -> list:
-    min_volume = _safe_float(
-        _find_config_value(
-            COIN_SELECTION_CONFIG,
-            (
-                "MIN_24H_QUOTE_VOLUME_USDT",
-                "MIN_QUOTE_VOLUME_USDT",
-            ),
-            3_000_000,
-        ),
-        3_000_000,
+    minimum_volume = _config_number(
+        SYMBOL_CONFIG,
+        "minimum_24h_quote_volume_usdt",
+        1_000_000.0,
     )
 
-    min_trades = int(
-        _safe_float(
-            _find_config_value(
-                COIN_SELECTION_CONFIG,
-                (
-                    "MIN_TRADE_COUNT_24H",
-                    "MIN_24H_TRADES",
-                    "MIN_TRADES",
-                ),
-                1000,
-            ),
-            1000,
+    excluded_symbols = {
+        str(item).upper()
+        for item in SYMBOL_CONFIG.get(
+            "exclude_symbols",
+            [],
+        )
+    }
+
+    excluded_suffixes = tuple(
+        str(item).upper()
+        for item in SYMBOL_CONFIG.get(
+            "excluded_suffixes",
+            [],
         )
     )
 
-    if not isinstance(ticker_data, dict):
-        return []
+    allowed_symbols = {
+        str(item).upper()
+        for item in symbols
+    }
 
     eligible = []
 
-    for symbol in symbols:
-        ticker = ticker_data.get(symbol)
+    for symbol, ticker in ticker_map.items():
+        if symbol not in allowed_symbols:
+            continue
+
+        if not _is_usdt_symbol(symbol):
+            continue
+
+        if symbol in excluded_symbols:
+            continue
+
+        if excluded_suffixes and symbol.endswith(
+            excluded_suffixes
+        ):
+            continue
+
         if not isinstance(ticker, dict):
             continue
 
-        quote_volume = get_ticker_value(
-            ticker,
-            "quote_volume",
-            "quoteVolume",
-        )
+        quote_volume = _ticker_quote_volume(ticker)
 
-        trade_count = int(
-            get_ticker_value(
-                ticker,
-                "trade_count",
-                "count",
-            )
-        )
+        if quote_volume < minimum_volume:
+            continue
 
-        if (
-            quote_volume >= min_volume
-            and trade_count >= min_trades
-        ):
-            eligible.append((symbol, quote_volume))
+        if _ticker_price(ticker) <= 0:
+            continue
+
+        eligible.append(ticker)
 
     eligible.sort(
-        key=lambda item: item[1],
+        key=_ticker_quote_volume,
         reverse=True,
     )
 
-    return [
-        symbol
-        for symbol, _ in eligible[:MAX_ORDERBOOK_CANDIDATES]
-    ]
+    return eligible[:MAX_ORDERBOOK_CANDIDATES]
 
 
-def fetch_order_books(symbols: list) -> dict:
+def fetch_order_books(
+    tickers: list,
+) -> dict:
     order_books = {}
 
     logger.info(
-        "Fetching order books for %s candidates.",
-        len(symbols),
+        "Fetching order books for %d candidates.",
+        len(tickers),
     )
 
-    for symbol in symbols:
+    for ticker in tickers:
+        symbol = str(
+            ticker.get("symbol", "")
+        ).upper()
+
+        if not symbol:
+            continue
+
         try:
             order_books[symbol] = get_order_book(
                 symbol,
                 limit=ORDER_BOOK_LIMIT,
             )
+
         except Exception as exc:
             logger.warning(
-                "Order book failed for %s: %s",
+                "Order book unavailable for %s: %s",
                 symbol,
                 exc,
             )
@@ -456,36 +556,32 @@ def fetch_order_books(symbols: list) -> dict:
     return order_books
 
 
-def collect_candidates(ticker_data: dict | None = None) -> list:
-    logger.info("Loading Binance Spot USDT symbols.")
+def collect_candidates(
+    ticker_map: dict | None = None,
+) -> list:
+    logger.info(
+        "Loading eligible Binance Spot USDT symbols."
+    )
 
     symbols = get_usdt_symbols()
 
-    if not symbols:
+    if not isinstance(symbols, list) or not symbols:
         raise RuntimeError(
-            "No eligible USDT Spot symbols returned."
+            "No eligible Binance Spot USDT symbols."
         )
 
-    logger.info(
-        "Eligible symbols received: %s",
-        len(symbols),
-    )
-
-    if ticker_data is None:
-        ticker_data = get_24h_ticker()
-
-    if not isinstance(ticker_data, dict):
-        raise RuntimeError(
-            "Invalid 24h ticker response."
+    if ticker_map is None:
+        ticker_map = _get_ticker_map(
+            get_24h_ticker()
         )
 
-    shortlisted = prefilter_symbols(
+    shortlisted = prefilter_tickers(
+        ticker_map,
         symbols,
-        ticker_data,
     )
 
     logger.info(
-        "Candidates after volume filter: %s",
+        "Candidates after 24h volume filter: %d",
         len(shortlisted),
     )
 
@@ -494,202 +590,589 @@ def collect_candidates(ticker_data: dict | None = None) -> list:
 
     order_books = fetch_order_books(shortlisted)
 
-    candidates = select_coins(
-        shortlisted,
-        ticker_data,
-        order_books,
+    selector_config = {}
+
+    try:
+        from coin_selector import get_coin_selector_config
+
+        selector_config = get_coin_selector_config()
+
+        if not isinstance(selector_config, dict):
+            selector_config = {}
+
+    except Exception:
+        selector_config = {}
+
+    selection = select_coins(
+        tickers=shortlisted,
+        order_books=order_books,
+        max_symbols=MAX_ORDERBOOK_CANDIDATES,
+        order_value_usdt=min(
+            CAPITAL_USDT,
+            100.0,
+        ),
     )
 
-    valid_candidates = [
-        candidate
-        for candidate in candidates
-        if validate_candidate(candidate)
-    ]
+    if not isinstance(selection, list):
+        raise RuntimeError(
+            "Coin selector returned an invalid result."
+        )
+
+    candidates = []
+
+    for candidate in selection:
+        if not isinstance(candidate, dict):
+            continue
+
+        if candidate.get("selection_status") != "ACCEPTED":
+            continue
+
+        symbol = str(
+            candidate.get("symbol", "")
+        ).upper()
+
+        if not _is_usdt_symbol(symbol):
+            continue
+
+        if _ticker_price(ticker_map.get(symbol, {})) <= 0:
+            continue
+
+        candidates.append(candidate)
 
     logger.info(
-        "Final eligible candidates: %s",
-        len(valid_candidates),
+        "Final liquidity-approved candidates: %d",
+        len(candidates),
     )
 
-    return valid_candidates
+    return candidates
 
 
 # ============================================================
-# SYMBOL MARKET DATA
+# SYMBOL CANDLE DATA
 # ============================================================
 
 def fetch_symbol_market_data(
     symbol: str,
 ) -> dict:
+    if not _is_usdt_symbol(symbol):
+        raise ValueError(
+            "Only USDT Spot symbols are supported."
+        )
+
     market_data = {}
 
-    timeframes = (
-        "5m",
-        "15m",
-        "30m",
-        "1h",
-    )
-
-    for timeframe in timeframes:
-        market_data[timeframe] = get_klines(
+    for timeframe in ("5m", "15m", "30m", "1h"):
+        frame = get_klines(
             symbol,
             timeframe,
             limit=KLINE_LIMIT,
+            closed_only=True,
         )
 
-        if (
-            market_data[timeframe] is None
-            or market_data[timeframe].empty
-        ):
+        if not _valid_dataframe(frame):
             raise RuntimeError(
-                f"Missing {timeframe} candles for {symbol}"
+                f"Invalid {timeframe} closed candles for {symbol}."
             )
+
+        market_data[timeframe] = frame
 
     return market_data
 
 
 # ============================================================
-# SIGNAL VALIDATION
+# CANDIDATE MARKET CONTEXT
 # ============================================================
 
-def is_eligible_signal(
-    signal: Any,
-) -> bool:
-    if not isinstance(signal, dict):
-        return False
+def build_candidate_market_context(
+    btc_context: dict,
+    candidate: dict,
+) -> dict:
+    context = deepcopy(btc_context)
+
+    context["liquidity"] = {
+        "spread_percent": _safe_float(
+            candidate.get("spread_percent")
+        ),
+        "imbalance": _safe_float(
+            candidate.get("order_book_imbalance")
+        ),
+        "minimum_side_depth_usdt": _safe_float(
+            candidate.get("minimum_side_depth_usdt")
+        ),
+        "buy_slippage_percent": _safe_float(
+            candidate.get("buy_slippage_percent")
+        ),
+    }
+
+    context["order_book_analysis"] = context["liquidity"]
+
+    context["spread_percent"] = context["liquidity"][
+        "spread_percent"
+    ]
+
+    context["formula_version"] = FORMULA_VERSION
+
+    return context
+
+
+# ============================================================
+# RISK PLAN NORMALIZATION
+# ============================================================
+
+def _risk_cost_rates() -> tuple[float, float, float]:
+    """
+    Return fee and slippage rates as decimal fractions
+    for Telegram's net-profit estimator.
+
+    Config values are percentage units.
+    """
+    entry_fee_pct = _config_number(
+        EXECUTION_COST_CONFIG,
+        "entry_fee_pct",
+        0.1,
+    )
+
+    exit_fee_pct = _config_number(
+        EXECUTION_COST_CONFIG,
+        "exit_fee_pct",
+        0.1,
+    )
+
+    slippage_pct = _config_number(
+        EXECUTION_COST_CONFIG,
+        "slippage_pct",
+        0.1,
+    )
+
+    return (
+        max(0.0, entry_fee_pct / 100.0),
+        max(0.0, exit_fee_pct / 100.0),
+        max(0.0, slippage_pct / 200.0),
+    )
+
+
+def normalize_risk_plan(
+    raw_plan: dict,
+    entry_price: float,
+) -> dict:
+    """
+    Convert risk_manager.build_risk_plan() output into
+    the established signal_tracker and telegram_bot format.
+    """
+    if not isinstance(raw_plan, dict):
+        raise ValueError(
+            "Risk manager returned invalid data."
+        )
+
+    if raw_plan.get("valid") is not True:
+        raise ValueError(
+            "Risk manager rejected the plan: "
+            + str(raw_plan.get("reason", "UNKNOWN"))
+        )
+
+    stop = _positive(raw_plan.get("stop_loss"))
+
+    if stop <= 0 or stop >= entry_price:
+        raise ValueError(
+            "Invalid Spot BUY Stop Loss."
+        )
+
+    raw_targets = raw_plan.get("targets", {})
+    raw_position = raw_plan.get("position", {})
+    raw_validation = raw_plan.get(
+        "risk_validation",
+        {},
+    )
+
+    if not isinstance(raw_targets, dict):
+        raise ValueError("Invalid target data.")
+
+    if not isinstance(raw_position, dict):
+        raise ValueError("Invalid position data.")
+
+    if not isinstance(raw_validation, dict):
+        raise ValueError("Invalid risk validation.")
+
+    if raw_validation.get("valid") is not True:
+        raise ValueError("Risk validation failed.")
+
+    entry_fee_rate, exit_fee_rate, slippage_rate = (
+        _risk_cost_rates()
+    )
+
+    quantity = _positive(
+        raw_position.get("quantity")
+    )
+
+    position_value = _positive(
+        raw_position.get("position_value_usdt")
+    )
+
+    estimated_loss = _positive(
+        raw_position.get("estimated_loss_usdt")
+    )
+
+    if quantity <= 0 or position_value <= 0:
+        raise ValueError(
+            "Position size is invalid."
+        )
+
+    if estimated_loss <= 0:
+        raise ValueError(
+            "Estimated risk amount is invalid."
+        )
+
+    target_checks = raw_validation.get(
+        "target_checks",
+        {},
+    )
+
+    if not isinstance(target_checks, dict):
+        target_checks = {}
+
+    targets = {}
+
+    for name in ("t1", "t2", "t3"):
+        price = _positive(raw_targets.get(name))
+
+        if price <= entry_price:
+            targets[name] = None
+            continue
+
+        check = target_checks.get(name, {})
+
+        if not isinstance(check, dict):
+            check = {}
+
+        net_rr = _safe_float(
+            check.get("net_rr")
+        )
+
+        targets[name] = {
+            "price": price,
+            "risk_reward": net_rr,
+        }
+
+    if not isinstance(targets.get("t1"), dict):
+        raise ValueError(
+            "A valid T1 target is required."
+        )
+
+    stop_distance_pct = (
+        (entry_price - stop) / entry_price
+    ) * 100.0
+
+    actual_risk_pct = (
+        estimated_loss / CAPITAL_USDT
+    ) * 100.0
+
+    effective_entry = entry_price * (
+        1.0 + entry_fee_rate + slippage_rate
+    )
+
+    normalized_position = {
+        "quantity": quantity,
+        "position_value_usdt": position_value,
+        "actual_estimated_loss_usdt": estimated_loss,
+        "actual_risk_percent": actual_risk_pct,
+        "effective_entry_price": effective_entry,
+        "fee_rate_per_side": entry_fee_rate,
+        "slippage_rate_per_side": slippage_rate,
+        "estimated_loss_within_budget": bool(
+            raw_position.get(
+                "estimated_loss_within_budget",
+                False,
+            )
+        ),
+    }
+
+    normalized_validation = {
+        "valid": True,
+        "reason": "VALID",
+        "target_checks": target_checks,
+    }
+
+    return {
+        "status": "VALID",
+        "valid": True,
+        "direction": "BUY",
+        "spot_only": True,
+        "formula_version": FORMULA_VERSION,
+        "entry_price": entry_price,
+        "stop_loss": {
+            "stop_loss": stop,
+            "risk_percent": stop_distance_pct,
+            "method": "ATR + SUPPORT STRUCTURE",
+        },
+        "targets": targets,
+        "position_size": normalized_position,
+        "validation": normalized_validation,
+        "risk_distance_pct": stop_distance_pct,
+        "execution_cost_pct": raw_plan.get(
+            "execution_cost_pct"
+        ),
+        "raw_risk_plan": raw_plan,
+    }
+
+
+# ============================================================
+# SIGNAL NORMALIZATION
+# ============================================================
+
+def normalize_engine_signal(
+    result: dict,
+    symbol: str,
+    strategy: str,
+    candidate: dict,
+    market_context: dict,
+) -> dict | None:
+    if not isinstance(result, dict):
+        return None
 
     classification = str(
-        signal.get("classification", "")
-    ).upper()
+        result.get("classification", "")
+    ).upper().strip()
 
     if classification not in (
         "STRONG BUY",
         "EXCELLENT BUY",
     ):
-        return False
+        return None
 
-    symbol = str(
-        signal.get("symbol", "")
-    ).upper()
+    if result.get("valid") is not True:
+        return None
 
-    if not symbol.endswith("USDT"):
-        return False
+    score = _safe_float(result.get("score"))
 
-    if _safe_float(signal.get("entry_price")) <= 0:
-        return False
+    if score is None or not 0 <= score <= 100:
+        return None
 
-    return True
+    entry_data = result.get("entry", {})
 
+    if not isinstance(entry_data, dict):
+        return None
 
-# ============================================================
-# RISK PLAN HELPERS
-# ============================================================
-
-def get_signal_support(signal: dict):
-    return (
-        signal.get("support_level")
-        or signal.get("nearest_support")
-        or signal.get("support")
+    entry_price = _positive(
+        entry_data.get("price")
     )
 
-
-def get_signal_atr(signal: dict):
-    return (
-        signal.get("atr_value")
-        or signal.get("atr")
+    atr = _positive(
+        entry_data.get("atr")
     )
 
+    if entry_price <= 0 or atr <= 0:
+        return None
 
-def get_signal_resistances(
-    signal: dict,
-) -> list:
-    levels = signal.get("resistance_levels", [])
+    raw_risk_plan = result.get("risk_plan")
 
-    if not isinstance(levels, list):
-        return []
+    risk_plan = normalize_risk_plan(
+        raw_risk_plan,
+        entry_price,
+    )
 
-    return [
-        _safe_float(level)
-        for level in levels
-        if _safe_float(level) > 0
-    ]
+    structure = result.get("structure", {})
 
+    if not isinstance(structure, dict):
+        structure = {}
 
-def attach_risk_plan(
-    signal: dict,
-) -> dict:
-    entry_price = _safe_float(signal.get("entry_price"))
+    layer_scores = result.get("layers", {})
 
-    if entry_price <= 0:
-        raise ValueError("Invalid signal entry price.")
+    if not isinstance(layer_scores, dict):
+        layer_scores = {}
 
-    risk_percent = _safe_float(
-        _find_config_value(
-            RISK_CONFIG,
-            ("MAX_RISK_PERCENT", "MAX_RISK_PER_TRADE"),
-            1.0,
+    mtf = result.get("mtf_confirmation", {})
+
+    if not isinstance(mtf, dict):
+        mtf = {}
+
+    signal = {
+        "symbol": symbol,
+        "strategy": strategy,
+        "classification": classification,
+        "signal": classification,
+        "decision": "BUY",
+        "status": "APPROVED",
+        "score": round(score, 2),
+        "max_score": 100,
+        "formula_version": FORMULA_VERSION,
+        "code_version": CODE_VERSION,
+        "score_is_win_probability": False,
+
+        "entry_price": entry_price,
+        "current_price": _positive(
+            candidate.get("last_price"),
+            entry_price,
         ),
-        1.0,
-    )
-    if 0 < risk_percent <= 0.1:
-        risk_percent = risk_percent * 100.0
-
-    fee_rate = _safe_float(
-        _find_config_value(
-            RISK_CONFIG,
-            (
-                "FEE_RATE_PER_SIDE",
-                "FEE_RATE",
-                "TRADING_FEE_RATE",
-            ),
-            0.001,
+        "last_price": _positive(
+            candidate.get("last_price"),
+            entry_price,
         ),
-        0.001,
-    )
 
-    slippage_rate = _safe_float(
-        _find_config_value(
-            RISK_CONFIG,
-            ("SLIPPAGE_RATE_PER_SIDE", "SLIPPAGE_RATE"),
-            0.001,
+        "atr": atr,
+        "atr_value": atr,
+        "rsi": entry_data.get("rsi"),
+        "rvol": entry_data.get("rvol"),
+        "adx": entry_data.get("adx"),
+
+        "support_level": structure.get("support"),
+        "nearest_support": structure.get("support"),
+        "resistance_levels": (
+            [structure["resistance"]]
+            if structure.get("resistance") is not None
+            else []
         ),
-        0.001,
-    )
 
-    risk_plan = build_risk_plan(
-        capital=CAPITAL_USDT,
-        entry_price=entry_price,
-        support_level=get_signal_support(signal),
-        atr=get_signal_atr(signal),
-        resistance_levels=get_signal_resistances(signal),
-        risk_percent=risk_percent,
-        fee_rate=fee_rate,
-        slippage_rate=slippage_rate,
-    )
+        "quote_volume_24h": candidate.get(
+            "quote_volume_24h"
+        ),
+        "spread_percent": candidate.get(
+            "spread_percent"
+        ),
+        "liquidity_score": candidate.get(
+            "liquidity_score"
+        ),
 
-    if not isinstance(risk_plan, dict):
-        raise ValueError("Invalid risk plan response.")
+        "btc_trend": market_context.get(
+            "btc_trend",
+            "UNKNOWN",
+        ),
+        "market_status": market_context.get(
+            "market_status",
+            "UNKNOWN",
+        ),
+        "risk_level": market_context.get(
+            "risk_level",
+            "UNKNOWN",
+        ),
 
-    signal["risk_plan"] = risk_plan
-    signal["risk_status"] = risk_plan.get("status", "REJECT")
-    signal["strategy"] = signal.get("strategy", "UNKNOWN")
+        "layers": layer_scores,
+        "mtf_confirmation": mtf,
+        "hard_gates": result.get("hard_gates", {}),
+        "fundamental_status": result.get(
+            "fundamental_status",
+            "UNVERIFIED",
+        ),
 
-    if risk_plan.get("status") != "VALID":
-        raise ValueError("Risk manager rejected the setup.")
+        "risk_plan": risk_plan,
+        "generated_at": _utc_now(),
+        "created_at": _utc_now(),
 
-    validation = risk_plan.get("validation", {})
-
-    if not isinstance(validation, dict):
-        raise ValueError("Missing risk validation.")
-
-    if validation.get("valid") is not True:
-        raise ValueError("Risk validation failed.")
+        "warnings": [
+            "Fundamental ও on-chain তথ্য সম্পূর্ণ যাচাই করা হয়নি।"
+        ] if result.get("fundamental_status") == "UNVERIFIED" else [],
+    }
 
     return signal
 
 
 # ============================================================
-# DUPLICATE SIGNAL CHECK
+# SIGNAL EVALUATION
+# ============================================================
+
+def evaluate_candidate(
+    candidate: dict,
+    btc_context: dict,
+) -> list:
+    symbol = str(
+        candidate.get("symbol", "")
+    ).upper()
+
+    if not _is_usdt_symbol(symbol):
+        return []
+
+    try:
+        market_data = fetch_symbol_market_data(symbol)
+
+    except Exception as exc:
+        logger.warning(
+            "Candle data failed for %s: %s",
+            symbol,
+            exc,
+        )
+        return []
+
+    candidate_context = build_candidate_market_context(
+        btc_context,
+        candidate,
+    )
+
+    strategies = []
+
+    if STRATEGIES_ENABLED["SCALP"]:
+        strategies.append(
+            (
+                "SCALP",
+                evaluate_scalp,
+                market_data["5m"],
+                {
+                    "15m": market_data["15m"],
+                    "30m": market_data["30m"],
+                },
+            )
+        )
+
+    if STRATEGIES_ENABLED["SWING"]:
+        strategies.append(
+            (
+                "SWING",
+                evaluate_swing,
+                market_data["15m"],
+                {
+                    "30m": market_data["30m"],
+                    "1h": market_data["1h"],
+                },
+            )
+        )
+
+    signals = []
+
+    for strategy, evaluator, trigger_df, confirm_frames in strategies:
+        try:
+            result = evaluator(
+                trigger_df=trigger_df,
+                confirm_frames=confirm_frames,
+                market_context=candidate_context,
+                breakout_data=None,
+                fundamental_data=None,
+                capital_usdt=CAPITAL_USDT,
+            )
+
+            if not isinstance(result, dict):
+                continue
+
+            signal = normalize_engine_signal(
+                result=result,
+                symbol=symbol,
+                strategy=strategy,
+                candidate=candidate,
+                market_context=candidate_context,
+            )
+
+            if signal is None:
+                logger.info(
+                    "%s %s: %s | Score: %s",
+                    symbol,
+                    strategy,
+                    result.get("reason", result.get("classification")),
+                    result.get("score"),
+                )
+                continue
+
+            signals.append(signal)
+
+        except Exception as exc:
+            logger.exception(
+                "%s %s evaluation failed: %s",
+                symbol,
+                strategy,
+                exc,
+            )
+
+    return signals
+
+
+# ============================================================
+# DUPLICATE PREVENTION
 # ============================================================
 
 def is_duplicate_signal(
@@ -700,26 +1183,29 @@ def is_duplicate_signal(
     try:
         return bool(
             check_duplicate(
-                symbol,
-                strategy,
+                symbol=symbol,
+                strategy=strategy,
                 history=history,
             )
         )
+
     except Exception as exc:
         logger.error(
             "Duplicate check failed for %s: %s",
             symbol,
             exc,
         )
+
+        # Fail closed: do not send if duplicate status is unknown.
         return True
 
 
 # ============================================================
-# UPDATE EXISTING SIGNALS
+# EXISTING SIGNAL TRACKING
 # ============================================================
 
 def update_existing_signals(
-    ticker_data: dict,
+    ticker_map: dict,
 ) -> None:
     try:
         expire_old_signals()
@@ -739,7 +1225,9 @@ def update_existing_signals(
             if not isinstance(item, dict):
                 continue
 
-            status = str(item.get("status", "")).upper()
+            status = str(
+                item.get("status", "")
+            ).upper()
 
             if status not in (
                 "ACTIVE",
@@ -748,24 +1236,25 @@ def update_existing_signals(
             ):
                 continue
 
-            symbol = item.get("symbol")
-            if not symbol:
-                continue
+            symbol = str(
+                item.get("symbol", "")
+            ).upper()
 
-            ticker = ticker_data.get(symbol)
+            ticker = ticker_map.get(symbol)
+
             if not isinstance(ticker, dict):
                 continue
 
-            current_price = get_ticker_value(
-                ticker,
-                "last_price",
-                "lastPrice",
-            )
+            current_price = _ticker_price(ticker)
 
             if current_price <= 0:
                 continue
 
-            signal_id = item.get("signal_id") or item.get("id")
+            signal_id = (
+                item.get("signal_id")
+                or item.get("id")
+            )
+
             if not signal_id:
                 continue
 
@@ -776,34 +1265,63 @@ def update_existing_signals(
 
             if not _operation_succeeded(result):
                 logger.warning(
-                    "Signal tracking update failed for %s: %s",
+                    "Tracking update failed for %s: %s",
                     symbol,
                     result,
                 )
 
     except Exception as exc:
-        logger.error(
-            "Signal tracking update failed: %s",
+        logger.exception(
+            "Existing signal tracking failed: %s",
             exc,
         )
 
 
 # ============================================================
-# SIGNAL REGISTRATION AND TELEGRAM DELIVERY
+# REGISTRATION AND TELEGRAM DELIVERY
 # ============================================================
 
 def deliver_signal(
     signal: dict,
     history: dict,
 ) -> bool:
-    if not is_eligible_signal(signal):
-        logger.warning("Ineligible signal rejected.")
+    symbol = str(
+        signal.get("symbol", "")
+    ).upper()
+
+    strategy = str(
+        signal.get("strategy", "")
+    ).upper()
+
+    if not _is_usdt_symbol(symbol):
         return False
 
-    symbol = signal["symbol"]
-    strategy = str(signal.get("strategy", "")).upper()
+    if signal.get("classification") not in (
+        "STRONG BUY",
+        "EXCELLENT BUY",
+    ):
+        return False
 
-    if is_duplicate_signal(symbol, strategy, history):
+    if not isinstance(
+        signal.get("risk_plan"),
+        dict,
+    ):
+        return False
+
+    if DRY_RUN:
+        logger.info(
+            "[DRY RUN] %s | %s | %.2f/100",
+            symbol,
+            signal.get("classification"),
+            _safe_float(signal.get("score"), 0.0),
+        )
+        return False
+
+    if is_duplicate_signal(
+        symbol,
+        strategy,
+        history,
+    ):
         logger.info(
             "Duplicate signal skipped: %s %s",
             symbol,
@@ -811,24 +1329,14 @@ def deliver_signal(
         )
         return False
 
-    if DRY_RUN:
-        logger.info(
-            "[DRY RUN] Valid signal: %s | %s | Score %s",
-            symbol,
-            signal.get("classification"),
-            signal.get("score"),
-        )
-        return False
-
-    # --------------------------------------------------------
-    # STEP 1: REGISTER SIGNAL
-    # --------------------------------------------------------
-
+    # Register before Telegram delivery so that a notification
+    # retry cannot create duplicate ledger entries.
     try:
         registration = register_signal(signal)
+
     except Exception as exc:
         logger.exception(
-            "Signal registration exception for %s: %s",
+            "Signal registration failed for %s: %s",
             symbol,
             exc,
         )
@@ -836,7 +1344,7 @@ def deliver_signal(
 
     if not _operation_succeeded(registration):
         logger.error(
-            "Signal registration failed: %s | Result: %s",
+            "Signal registration rejected for %s: %s",
             symbol,
             registration,
         )
@@ -849,22 +1357,21 @@ def deliver_signal(
     )
 
     try:
-        refreshed_history = load_history()
-        if isinstance(refreshed_history, dict):
+        refreshed = load_history()
+
+        if isinstance(refreshed, dict):
             history.clear()
-            history.update(refreshed_history)
+            history.update(refreshed)
+
     except Exception as exc:
         logger.warning(
-            "History refresh failed after registration: %s",
+            "History refresh failed: %s",
             exc,
         )
 
-    # --------------------------------------------------------
-    # STEP 2: SEND TELEGRAM MESSAGE
-    # --------------------------------------------------------
-
     try:
         telegram_result = send_signal(signal)
+
     except Exception as exc:
         logger.exception(
             "Telegram delivery exception for %s: %s",
@@ -875,7 +1382,7 @@ def deliver_signal(
 
     if not _operation_succeeded(telegram_result):
         logger.error(
-            "Telegram delivery failed: %s | Result: %s",
+            "Telegram delivery failed for %s: %s",
             symbol,
             telegram_result,
         )
@@ -890,101 +1397,6 @@ def deliver_signal(
 
 
 # ============================================================
-# CANDIDATE EVALUATION
-# ============================================================
-
-def evaluate_candidate(
-    candidate: dict,
-    market_context: dict,
-) -> list:
-    symbol = candidate["symbol"]
-    results = []
-
-    try:
-        market_data = fetch_symbol_market_data(symbol)
-    except Exception as exc:
-        logger.warning(
-            "Candle data failed for %s: %s",
-            symbol,
-            exc,
-        )
-        return results
-
-    strategies = []
-
-    if STRATEGIES_ENABLED["SCALP"]:
-        strategies.append(
-            (
-                "SCALP",
-                evaluate_scalp,
-                {
-                    "5m": market_data["5m"],
-                    "15m": market_data["15m"],
-                    "30m": market_data["30m"],
-                },
-            )
-        )
-
-    if STRATEGIES_ENABLED["SWING"]:
-        strategies.append(
-            (
-                "SWING",
-                evaluate_swing,
-                {
-                    "15m": market_data["15m"],
-                    "30m": market_data["30m"],
-                    "1h": market_data["1h"],
-                },
-            )
-        )
-
-    for strategy_name, evaluator, strategy_data in strategies:
-        try:
-            signal = evaluator(
-                symbol,
-                strategy_data,
-                indicators=None,
-                market_context=market_context,
-            )
-
-            if not is_eligible_signal(signal):
-                reason = (
-                    signal.get("reason", "UNKNOWN_REASON")
-                    if isinstance(signal, dict)
-                    else "INVALID_RESPONSE"
-                )
-                logger.info(
-                    "%s evaluation rejected for %s: %s",
-                    strategy_name,
-                    symbol,
-                    reason,
-                )
-                continue
-
-            signal["strategy"] = strategy_name
-            signal["current_price"] = candidate["last_price"]
-            signal["last_price"] = candidate["last_price"]
-            signal["quote_volume_24h"] = candidate["quote_volume_24h"]
-            signal["spread_percent"] = candidate["spread_percent"]
-            signal["market_status"] = market_context.get("market_status")
-            signal["btc_trend"] = market_context.get("btc_trend")
-            signal["generated_at"] = datetime.now(timezone.utc).isoformat()
-
-            signal = attach_risk_plan(signal)
-            results.append(signal)
-
-        except Exception as exc:
-            logger.info(
-                "%s evaluation rejected for %s: %s",
-                strategy_name,
-                symbol,
-                exc,
-            )
-
-    return results
-
-
-# ============================================================
 # MAIN SCANNER
 # ============================================================
 
@@ -992,8 +1404,11 @@ def run_scanner() -> dict:
     started_at = datetime.now(timezone.utc)
 
     report = {
+        "code_version": CODE_VERSION,
+        "formula_version": FORMULA_VERSION,
         "started_at": started_at.isoformat(),
         "mode": "DRY_RUN" if DRY_RUN else "LIVE",
+        "market": "BINANCE_SPOT_USDT",
         "market_status": "UNKNOWN",
         "btc_trend": "UNKNOWN",
         "symbols_scanned": 0,
@@ -1003,74 +1418,69 @@ def run_scanner() -> dict:
         "errors": [],
     }
 
-    logger.info("=" * 55)
-    logger.info("BINANCE SPOT V3 SCANNER STARTED")
-    logger.info("=" * 55)
+    logger.info("=" * 60)
+    logger.info("BINANCE SPOT V4 FORMULA SCANNER STARTED")
+    logger.info("=" * 60)
 
     try:
         validate_scanner_configuration()
 
-        market_context = fetch_market_context()
+        # 1. BTC regime
+        btc_context = fetch_market_context()
 
-        report["market_status"] = market_context.get(
+        report["market_status"] = btc_context.get(
             "market_status",
             "UNKNOWN",
         )
-        report["btc_trend"] = market_context.get(
+
+        report["btc_trend"] = btc_context.get(
             "btc_trend",
             "UNKNOWN",
         )
 
-        market_status = report["market_status"]
-
-        if market_status == "UNKNOWN":
+        if (
+            report["market_status"] == "HIGH_RISK"
+            or btc_context.get("allow_new_buy") is False
+        ):
             logger.warning(
-                "Market filter rejected scanning: UNKNOWN"
+                "BTC HIGH RISK: New Spot BUY signals blocked."
             )
             return report
 
-        if market_status == "HIGH_RISK":
-            logger.warning(
-                "Market filter in HIGH_RISK: Skipping new spot entries."
-            )
-            return report
+        # 2. Fetch 24h ticker once.
+        ticker_map = _get_ticker_map(
+            get_24h_ticker()
+        )
 
-        # ----------------------------------------------------
-        # FETCH TICKER ONCE AND COLLECT CANDIDATES
-        # ----------------------------------------------------
-
-        ticker_data = get_24h_ticker()
-        if not isinstance(ticker_data, dict):
+        if not ticker_map:
             raise RuntimeError(
-                "Invalid 24h ticker response."
+                "Binance returned no valid 24h ticker data."
             )
 
-        candidates = collect_candidates(ticker_data=ticker_data)
+        # 3. Update previous signals.
+        if not DRY_RUN:
+            update_existing_signals(ticker_map)
+
+        # 4. Select liquid candidates.
+        candidates = collect_candidates(
+            ticker_map=ticker_map,
+        )
+
         report["candidates_selected"] = len(candidates)
 
         if not candidates:
-            logger.info("No eligible candidates found.")
+            logger.info(
+                "No liquidity-approved candidates found."
+            )
             return report
 
-        # ----------------------------------------------------
-        # UPDATE EXISTING TRACKED SIGNALS
-        # ----------------------------------------------------
-
-        if not DRY_RUN:
-            update_existing_signals(ticker_data)
-
-        # ----------------------------------------------------
-        # LOAD HISTORY
-        # ----------------------------------------------------
-
+        # 5. Load signal history.
         history = load_history()
+
         if not isinstance(history, dict):
             history = {"signals": []}
 
-        # ----------------------------------------------------
-        # EVALUATE CANDIDATES
-        # ----------------------------------------------------
-
+        # 6. Run V4 seven-layer engine.
         all_signals = []
 
         for candidate in candidates:
@@ -1078,58 +1488,82 @@ def run_scanner() -> dict:
 
             candidate_signals = evaluate_candidate(
                 candidate,
-                market_context,
+                btc_context,
             )
+
             all_signals.extend(candidate_signals)
 
-        # Rank highest-score setups first and keep best setup per symbol.
+        # 7. Highest score first.
         all_signals.sort(
-            key=lambda item: _safe_float(item.get("score"), 0.0),
+            key=lambda item: (
+                _safe_float(item.get("score"), 0.0),
+                1 if item.get("strategy") == "SWING" else 0,
+            ),
             reverse=True,
         )
 
-        deduped_signals = []
+        # Avoid duplicate symbol signals in the same run.
+        selected_signals = []
         seen_symbols = set()
-        for sig in all_signals:
-            sym = str(sig.get("symbol", "")).upper()
-            if sym and sym not in seen_symbols:
-                seen_symbols.add(sym)
-                deduped_signals.append(sig)
 
-        signals = deduped_signals[:MAX_SIGNALS_PER_RUN]
-        report["signals_generated"] = len(signals)
+        for signal in all_signals:
+            symbol = signal["symbol"]
 
-        # ----------------------------------------------------
-        # DELIVER SIGNALS
-        # ----------------------------------------------------
+            if symbol in seen_symbols:
+                continue
 
-        for signal in signals:
+            seen_symbols.add(symbol)
+            selected_signals.append(signal)
+
+            if len(selected_signals) >= MAX_SIGNALS_PER_RUN:
+                break
+
+        report["signals_generated"] = len(
+            selected_signals
+        )
+
+        # 8. Register and send.
+        for signal in selected_signals:
             try:
-                sent = deliver_signal(signal, history)
-                if sent is True:
+                delivered = deliver_signal(
+                    signal,
+                    history,
+                )
+
+                if delivered:
                     report["signals_sent"] += 1
+
             except Exception as exc:
                 logger.exception(
-                    "Unexpected delivery error for %s: %s",
+                    "Signal delivery failed for %s",
                     signal.get("symbol", "UNKNOWN"),
-                    exc,
                 )
-                report["errors"].append(str(exc))
+
+                report["errors"].append(
+                    str(exc)
+                )
 
         return report
 
     except Exception as exc:
-        logger.exception("Scanner execution failed.")
-        report["errors"].append(str(exc))
+        logger.exception(
+            "Scanner execution failed."
+        )
+
+        report["errors"].append(
+            str(exc)
+        )
+
         return report
 
     finally:
-        finished_at = datetime.now(timezone.utc)
-        report["finished_at"] = finished_at.isoformat()
+        report["finished_at"] = (
+            datetime.now(timezone.utc).isoformat()
+        )
 
         logger.info(
             "Scanner finished | Candidates: %s | "
-            "Signals: %s | Sent: %s | Errors: %s",
+            "Generated: %s | Sent: %s | Errors: %s",
             report["candidates_selected"],
             report["signals_generated"],
             report["signals_sent"],
@@ -1142,5 +1576,9 @@ def run_scanner() -> dict:
 # ============================================================
 
 if __name__ == "__main__":
-    result = run_scanner()
-    logger.info("FINAL SCAN REPORT: %s", result)
+    final_report = run_scanner()
+
+    logger.info(
+        "FINAL SCAN REPORT: %s",
+        final_report,
+    )

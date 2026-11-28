@@ -2,7 +2,7 @@
 """
 File: market_filter.py
 System: Binance Spot V4 Smart Signal Scanner
-Version: 4.0.1
+Version: 4.0.2
 Formula Version: 4.0
 Python: 3.11+
 
@@ -15,6 +15,10 @@ V4 rules:
 - Bearish market remains eligible for evaluation, subject to
   stricter downstream entry and risk validation.
 - Only closed-candle data should be supplied.
+
+Compatibility:
+- Standard self-check result includes "ok" and "passed".
+- Existing V4 function signatures and output fields preserved.
 """
 
 from __future__ import annotations
@@ -185,7 +189,9 @@ def analyze_btc_timeframe(
         enriched = calculate_all_indicators(df)
 
         if not isinstance(enriched, pd.DataFrame) or enriched.empty:
-            raise ValueError("Indicator calculation returned empty data.")
+            raise ValueError(
+                "Indicator calculation returned empty data."
+            )
 
         row = enriched.iloc[-1]
 
@@ -243,7 +249,9 @@ def analyze_btc_timeframe(
             raise ValueError("Invalid close or ATR value.")
 
         if not 0 <= rsi <= 100:
-            raise ValueError("RSI value is outside the valid range.")
+            raise ValueError(
+                "RSI value is outside the valid range."
+            )
 
         alignment = _ema_alignment(snapshot)
         direction_score = _direction_from_alignment(alignment)
@@ -456,7 +464,6 @@ def detect_high_risk(
     """
     Detect abnormal BTC market risk.
 
-    IMPORTANT:
     Three bearish timeframes do NOT automatically trigger HIGH_RISK.
 
     HIGH_RISK is triggered by:
@@ -880,7 +887,7 @@ def analyze_market(
         "market_breadth_analysis": external_result,
         "risk_level": determine_risk_level(market_result),
         "formula_version": "4.0",
-        "code_version": "4.0.1",
+        "code_version": "4.0.2",
     })
 
     return market_result
@@ -953,9 +960,14 @@ def self_check() -> dict[str, Any]:
     """
     Lightweight internal logic checks.
     Does not fetch market data or generate trading signals.
+
+    Standard result contract:
+    - ok: Boolean used by test_system.py
+    - passed: Backward-compatible Boolean
+    - tests: Individual test results
     """
 
-    results = {}
+    results: dict[str, bool] = {}
 
     bearish_frames = {
         timeframe: {
@@ -1022,8 +1034,14 @@ def self_check() -> dict[str, Any]:
         and missing_risk["high_risk"]
     )
 
+    passed = all(results.values())
+
+    # FIX:
+    # test_system.py expects result.get("ok").
+    # Keep "passed" to preserve existing compatibility.
     return {
-        "passed": all(results.values()),
+        "ok": passed,
+        "passed": passed,
         "tests": results,
         "passed_count": sum(bool(v) for v in results.values()),
         "total_count": len(results),
@@ -1033,7 +1051,7 @@ def self_check() -> dict[str, Any]:
 if __name__ == "__main__":
     print("Binance Spot V4 Market Regime Engine")
     print("Formula Version: 4.0")
-    print("Code Version: 4.0.1")
+    print("Code Version: 4.0.2")
 
     report = self_check()
 
@@ -1043,4 +1061,8 @@ if __name__ == "__main__":
     print(
         f"Self-check: {report['passed_count']}/"
         f"{report['total_count']} passed"
+    )
+
+    print(
+        f"Overall: {'PASS' if report['ok'] else 'FAIL'}"
     )

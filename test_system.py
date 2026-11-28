@@ -543,13 +543,36 @@ class EntryEngineTests(unittest.TestCase):
             places=4,
         )
 
+    
     def test_entry_engine_classification_thresholds(self):
+        import inspect
 
-        thresholds = getattr(
-            entry_engine,
-            "CLASSIFICATION_THRESHOLDS",
-            None,
+        source = inspect.getsource(entry_engine)
+
+        required_labels = (
+            "EXCELLENT BUY",
+            "STRONG BUY",
+            "WATCHLIST",
+            "WAIT",
+            "REJECT",
         )
+
+        for label in required_labels:
+            self.assertIn(
+                label,
+                source,
+                f"Missing classification label: {label}",
+            )
+
+        required_thresholds = (90, 85, 75, 60)
+
+        for threshold in required_thresholds:
+            self.assertRegex(
+                source,
+                rf"(?<!\d){threshold}(?!\d)",
+                f"Missing classification threshold: {threshold}",
+            )
+
 
         if thresholds is None:
             thresholds = getattr(

@@ -1,11 +1,10 @@
+
 """
 File: coin_selector.py
-System: Binance Spot V3 Smart Signal Scanner
-Code Version: 4.0.0
+System: Binance Spot V4 Smart Signal Scanner
+Code Version: 4.0.1
 Formula Version: 4.0
 Python: 3.11+
-Compatibility: New V4 internal architecture
-Test Status: NOT RUN
 
 Purpose:
 - Select eligible Binance Spot USDT pairs.
@@ -43,7 +42,6 @@ DEFAULT_ORDER_BOOK_LEVELS = 10
 DEFAULT_DEPTH_LEVELS = 5
 DEFAULT_MAX_CANDIDATES = 80
 
-# Stablecoin and cash-like base assets are excluded.
 EXCLUDED_BASE_ASSETS = {
     "USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USDP",
     "DAI", "USDE", "USDS", "UST", "USTC", "USDD",
@@ -52,7 +50,6 @@ EXCLUDED_BASE_ASSETS = {
     "PAXG",
 }
 
-# Leveraged tokens and derivatives-like symbols.
 LEVERAGED_SUFFIXES = (
     "UP", "DOWN", "BULL", "BEAR",
 )
@@ -62,7 +59,6 @@ EXCLUDED_SYMBOL_PATTERNS = (
     r".*_[0-9]+$",
 )
 
-# Known tokenized equity / ETF symbol fragments.
 TOKENIZED_ASSET_BASES = {
     "AAPL", "AMZN", "GOOGL", "GOOG", "META", "MSFT",
     "NVDA", "TSLA", "COIN", "MSTR", "SPY", "QQQ",
@@ -75,7 +71,6 @@ TOKENIZED_ASSET_BASES = {
 # ============================================================
 
 def _number(value: Any, default: Optional[float] = None) -> Optional[float]:
-    """Convert a value to a finite float."""
     try:
         result = float(value)
         if not math.isfinite(result):
@@ -114,12 +109,7 @@ def is_eligible_spot_usdt_symbol(
     quote_asset: str = "USDT",
     is_spot_trading_allowed: bool = True,
 ) -> bool:
-    """
-    Validate a Binance Spot USDT symbol.
 
-    The exchangeInfo endpoint should be used by the data provider
-    for authoritative Spot trading permission.
-    """
     symbol = str(symbol or "").upper().strip()
     quote_asset = str(quote_asset or "").upper().strip()
 
@@ -136,6 +126,7 @@ def is_eligible_spot_usdt_symbol(
         return False
 
     base = _extract_base_asset(symbol)
+
     if not base:
         return False
 
@@ -152,7 +143,6 @@ def is_eligible_spot_usdt_symbol(
         if re.fullmatch(pattern, symbol):
             return False
 
-    # Reject symbols containing unexpected characters.
     if not re.fullmatch(r"[A-Z0-9]+USDT", symbol):
         return False
 
@@ -168,11 +158,13 @@ def _ticker_value(
     *keys: str,
     default: float = 0.0,
 ) -> float:
+
     for key in keys:
         if key in ticker:
             value = _number(ticker.get(key))
             if value is not None:
                 return value
+
     return default
 
 
@@ -185,31 +177,31 @@ def validate_ticker(
     min_quote_volume: float = DEFAULT_MIN_QUOTE_VOLUME_24H,
     min_trades: int = DEFAULT_MIN_TRADES_24H,
 ) -> Tuple[bool, str, Dict[str, float]]:
-    """
-    Validate 24h ticker data.
 
-    Supports Binance ticker fields:
-    quoteVolume, volume, lastPrice, count, priceChangePercent.
-    """
     if not isinstance(ticker, dict):
         return False, "INVALID_TICKER", {}
 
     symbol = _ticker_symbol(ticker)
+
     if not is_eligible_spot_usdt_symbol(symbol):
         return False, "INELIGIBLE_SYMBOL", {}
 
     quote_volume = _ticker_value(
         ticker, "quoteVolume", "quote_volume", default=0.0
     )
+
     base_volume = _ticker_value(
         ticker, "volume", "baseVolume", "base_volume", default=0.0
     )
+
     last_price = _ticker_value(
         ticker, "lastPrice", "last_price", "price", default=0.0
     )
+
     trade_count = _ticker_value(
         ticker, "count", "tradeCount", "trade_count", default=0.0
     )
+
     change_percent = _ticker_value(
         ticker, "priceChangePercent", "change_percent", default=0.0
     )
@@ -241,16 +233,14 @@ def validate_ticker(
 def _parse_book_side(
     levels: Any,
 ) -> List[Tuple[float, float]]:
-    """
-    Parse Binance order-book side:
-    [[price, quantity], ...]
-    """
+
     parsed: List[Tuple[float, float]] = []
 
     if not isinstance(levels, (list, tuple)):
         return parsed
 
     for item in levels:
+
         if not isinstance(item, (list, tuple)) or len(item) < 2:
             continue
 
@@ -271,6 +261,7 @@ def _parse_book_side(
 def validate_order_book(
     order_book: Dict[str, Any],
 ) -> Tuple[bool, str, Dict[str, Any]]:
+
     if not isinstance(order_book, dict):
         return False, "ORDER_BOOK_MISSING", {}
 
@@ -304,13 +295,9 @@ def validate_order_book(
 def compute_spread_percent(
     order_book: Dict[str, Any],
 ) -> Optional[float]:
-    """
-    Calculate percentage spread using best bid and best ask.
 
-    Formula:
-    ((best ask - best bid) / midpoint) * 100
-    """
     valid, _, data = validate_order_book(order_book)
+
     if not valid:
         return None
 
@@ -332,20 +319,24 @@ def compute_top_depth_usdt(
     order_book: Dict[str, Any],
     levels: int = DEFAULT_DEPTH_LEVELS,
 ) -> Optional[Dict[str, float]]:
-    """
-    Calculate quote-currency depth on both sides.
 
-    Bid depth = sum(price * quantity) for top bid levels.
-    Ask depth = sum(price * quantity) for top ask levels.
-    """
     valid, _, data = validate_order_book(order_book)
+
     if not valid:
         return None
 
     levels = max(1, int(levels))
 
-    bids = sorted(data["bids"], key=lambda x: x[0], reverse=True)[:levels]
-    asks = sorted(data["asks"], key=lambda x: x[0])[:levels]
+    bids = sorted(
+        data["bids"],
+        key=lambda x: x[0],
+        reverse=True,
+    )[:levels]
+
+    asks = sorted(
+        data["asks"],
+        key=lambda x: x[0],
+    )[:levels]
 
     bid_depth = sum(price * quantity for price, quantity in bids)
     ask_depth = sum(price * quantity for price, quantity in asks)
@@ -366,13 +357,9 @@ def compute_order_book_imbalance(
     order_book: Dict[str, Any],
     levels: int = DEFAULT_DEPTH_LEVELS,
 ) -> Optional[float]:
-    """
-    Return imbalance in range [-1, +1].
 
-    Positive: bid-side notional is larger.
-    Negative: ask-side notional is larger.
-    """
     depth = compute_top_depth_usdt(order_book, levels)
+
     if not depth:
         return None
 
@@ -395,19 +382,14 @@ def estimate_market_order_slippage(
     order_value_usdt: float,
     side: str = "BUY",
 ) -> Optional[float]:
-    """
-    Estimate market-order slippage from visible order-book levels.
 
-    BUY consumes asks.
-    SELL consumes bids.
-
-    This is an estimate from the current snapshot, not a fill guarantee.
-    """
     valid, _, data = validate_order_book(order_book)
+
     if not valid:
         return None
 
     order_value = _positive(order_value_usdt)
+
     if order_value <= 0:
         return None
 
@@ -416,9 +398,15 @@ def estimate_market_order_slippage(
     if side == "BUY":
         levels = sorted(data["asks"], key=lambda x: x[0])
         reference_price = data["best_ask"]
+
     elif side == "SELL":
-        levels = sorted(data["bids"], key=lambda x: x[0], reverse=True)
+        levels = sorted(
+            data["bids"],
+            key=lambda x: x[0],
+            reverse=True,
+        )
         reference_price = data["best_bid"]
+
     else:
         return None
 
@@ -427,6 +415,7 @@ def estimate_market_order_slippage(
     spent_or_received = 0.0
 
     for price, quantity in levels:
+
         available_value = price * quantity
         take_value = min(remaining, available_value)
 
@@ -434,6 +423,7 @@ def estimate_market_order_slippage(
             continue
 
         take_quantity = take_value / price
+
         filled_quantity += take_quantity
         spent_or_received += take_value
         remaining -= take_value
@@ -442,7 +432,6 @@ def estimate_market_order_slippage(
             break
 
     if remaining > max(0.01, order_value * 0.001):
-        # Visible book does not contain enough liquidity.
         return None
 
     if filled_quantity <= 0:
@@ -454,9 +443,14 @@ def estimate_market_order_slippage(
         return None
 
     if side == "BUY":
-        slippage = ((average_price - reference_price) / reference_price) * 100
+        slippage = (
+            (average_price - reference_price) / reference_price
+        ) * 100
+
     else:
-        slippage = ((reference_price - average_price) / reference_price) * 100
+        slippage = (
+            (reference_price - average_price) / reference_price
+        ) * 100
 
     return max(0.0, slippage)
 
@@ -470,6 +464,7 @@ def analyze_order_book(
     depth_levels: int = DEFAULT_DEPTH_LEVELS,
     order_value_usdt: float = 100.0,
 ) -> Dict[str, Any]:
+
     valid, reason, parsed = validate_order_book(order_book)
 
     if not valid:
@@ -488,14 +483,27 @@ def analyze_order_book(
         }
 
     spread = compute_spread_percent(order_book)
-    depth = compute_top_depth_usdt(order_book, depth_levels)
-    imbalance = compute_order_book_imbalance(order_book, depth_levels)
+
+    depth = compute_top_depth_usdt(
+        order_book,
+        depth_levels,
+    )
+
+    imbalance = compute_order_book_imbalance(
+        order_book,
+        depth_levels,
+    )
 
     buy_slippage = estimate_market_order_slippage(
-        order_book, order_value_usdt, "BUY"
+        order_book,
+        order_value_usdt,
+        "BUY",
     )
+
     sell_slippage = estimate_market_order_slippage(
-        order_book, order_value_usdt, "SELL"
+        order_book,
+        order_value_usdt,
+        "SELL",
     )
 
     return {
@@ -527,14 +535,9 @@ def calculate_liquidity_score(
     minimum_side_depth_usdt: Optional[float],
     slippage_percent: Optional[float],
 ) -> float:
-    """
-    Candidate-selection score from 0 to 100.
 
-    This is NOT the final seven-layer signal score.
-    """
     score = 0.0
 
-    # 24h quote volume: maximum 30 points.
     if quote_volume_24h >= 50_000_000:
         score += 30
     elif quote_volume_24h >= 20_000_000:
@@ -548,7 +551,6 @@ def calculate_liquidity_score(
     elif quote_volume_24h >= 1_000_000:
         score += 13
 
-    # Spread: maximum 25 points.
     if spread_percent is not None:
         if spread_percent <= 0.03:
             score += 25
@@ -561,7 +563,6 @@ def calculate_liquidity_score(
         elif spread_percent <= 0.25:
             score += 7
 
-    # Depth: maximum 25 points.
     if minimum_side_depth_usdt is not None:
         if minimum_side_depth_usdt >= 500_000:
             score += 25
@@ -574,7 +575,6 @@ def calculate_liquidity_score(
         elif minimum_side_depth_usdt >= 10_000:
             score += 8
 
-    # Slippage: maximum 20 points.
     if slippage_percent is not None:
         if slippage_percent <= 0.02:
             score += 20
@@ -600,19 +600,16 @@ def validate_candidate(
     min_depth_usdt: float = DEFAULT_MIN_DEPTH_USDT,
     max_slippage_percent: float = DEFAULT_MAX_SLIPPAGE_PERCENT,
 ) -> Tuple[bool, str]:
-    """
-    Validate a ticker candidate and, when supplied, its order book.
 
-    Missing order-book data is not treated as verified liquidity.
-    """
     if not isinstance(candidate, dict):
         return False, "INVALID_CANDIDATE"
 
     symbol = _ticker_symbol(candidate)
+
     if not is_eligible_spot_usdt_symbol(symbol):
         return False, "INELIGIBLE_SYMBOL"
 
-    valid_ticker, ticker_reason, metrics = validate_ticker(
+    valid_ticker, ticker_reason, _ = validate_ticker(
         candidate,
         min_quote_volume=min_quote_volume,
         min_trades=DEFAULT_MIN_TRADES_24H,
@@ -654,6 +651,7 @@ def build_candidate(
     order_book: Optional[Dict[str, Any]] = None,
     order_value_usdt: float = 100.0,
 ) -> Dict[str, Any]:
+
     valid, reason, ticker_metrics = validate_ticker(ticker)
 
     result: Dict[str, Any] = {
@@ -719,7 +717,10 @@ def build_candidate(
         order_book=order_book,
     )
 
-    result["selection_status"] = "ACCEPTED" if accepted else "REJECTED"
+    result["selection_status"] = (
+        "ACCEPTED" if accepted else "REJECTED"
+    )
+
     result["rejection_reason"] = (
         "NONE" if accepted else validation_reason
     )
@@ -741,18 +742,7 @@ def select_coins(
     max_slippage_percent: float = DEFAULT_MAX_SLIPPAGE_PERCENT,
     order_value_usdt: float = 100.0,
 ) -> List[Dict[str, Any]]:
-    """
-    Select the most liquid eligible Spot USDT pairs.
 
-    order_books format:
-    {
-        "BTCUSDT": {"bids": [...], "asks": [...]},
-        "ETHUSDT": {"bids": [...], "asks": [...]}
-    }
-
-    Returns accepted candidates sorted by liquidity score,
-    then 24h quote volume.
-    """
     order_books = order_books or {}
     selected: List[Dict[str, Any]] = []
 
@@ -760,6 +750,7 @@ def select_coins(
         max_symbols = DEFAULT_MAX_CANDIDATES
 
     for ticker in tickers or []:
+
         if not isinstance(ticker, dict):
             continue
 
@@ -775,7 +766,6 @@ def select_coins(
         if not candidate.get("eligible"):
             continue
 
-        # Apply the selection call's requested thresholds.
         accepted, reason = validate_candidate(
             ticker,
             order_book=book,
@@ -788,7 +778,10 @@ def select_coins(
         candidate["selection_status"] = (
             "ACCEPTED" if accepted else "REJECTED"
         )
-        candidate["rejection_reason"] = "NONE" if accepted else reason
+
+        candidate["rejection_reason"] = (
+            "NONE" if accepted else reason
+        )
 
         if accepted:
             selected.append(candidate)
@@ -811,6 +804,7 @@ def select_coins(
 def get_selection_summary(
     candidates: Iterable[Dict[str, Any]],
 ) -> Dict[str, Any]:
+
     items = list(candidates or [])
 
     accepted = [
@@ -861,8 +855,12 @@ def get_coin_selector_config() -> Dict[str, Any]:
 # SELF-CHECK
 # ============================================================
 
-def self_check() -> bool:
+def self_check() -> Dict[str, Any]:
     """Run deterministic local checks without network access."""
+
+    tests: Dict[str, bool] = {}
+    error = None
+
     sample_book = {
         "bids": [
             ["100.00", "1000"],
@@ -880,43 +878,107 @@ def self_check() -> bool:
         ],
     }
 
-    assert is_eligible_spot_usdt_symbol("BTCUSDT")
-    assert is_eligible_spot_usdt_symbol("ETHUSDT")
-    assert not is_eligible_spot_usdt_symbol("BTCBUSD")
-    assert not is_eligible_spot_usdt_symbol("BTCUPUSDT")
-    assert not is_eligible_spot_usdt_symbol("USDCUSDT")
+    try:
+        tests["btc_spot_symbol"] = (
+            is_eligible_spot_usdt_symbol("BTCUSDT")
+        )
 
-    spread = compute_spread_percent(sample_book)
-    assert spread is not None and spread > 0
+        tests["eth_spot_symbol"] = (
+            is_eligible_spot_usdt_symbol("ETHUSDT")
+        )
 
-    depth = compute_top_depth_usdt(sample_book, levels=5)
-    assert depth is not None
-    assert depth["bid_depth_usdt"] > 0
-    assert depth["ask_depth_usdt"] > 0
+        tests["non_usdt_rejected"] = (
+            not is_eligible_spot_usdt_symbol("BTCBUSD")
+        )
 
-    imbalance = compute_order_book_imbalance(sample_book)
-    assert imbalance is not None
-    assert -1.0 <= imbalance <= 1.0
+        tests["leveraged_token_rejected"] = (
+            not is_eligible_spot_usdt_symbol("BTCUPUSDT")
+        )
 
-    slippage = estimate_market_order_slippage(
-        sample_book,
-        order_value_usdt=100.0,
-        side="BUY",
-    )
-    assert slippage is not None and slippage >= 0
+        tests["stablecoin_rejected"] = (
+            not is_eligible_spot_usdt_symbol("USDCUSDT")
+        )
 
-    invalid_book = {"bids": [], "asks": []}
-    assert compute_spread_percent(invalid_book) is None
+        tests["tokenized_equity_rejected"] = (
+            not is_eligible_spot_usdt_symbol("TSLAUSDT")
+        )
 
-    return True
+        spread = compute_spread_percent(sample_book)
+
+        tests["spread_calculation"] = (
+            spread is not None
+            and math.isfinite(spread)
+            and spread > 0
+        )
+
+        depth = compute_top_depth_usdt(sample_book, levels=5)
+
+        tests["order_book_depth"] = (
+            isinstance(depth, dict)
+            and depth.get("bid_depth_usdt", 0) > 0
+            and depth.get("ask_depth_usdt", 0) > 0
+        )
+
+        imbalance = compute_order_book_imbalance(sample_book)
+
+        tests["order_book_imbalance"] = (
+            imbalance is not None
+            and math.isfinite(imbalance)
+            and -1.0 <= imbalance <= 1.0
+        )
+
+        slippage = estimate_market_order_slippage(
+            sample_book,
+            order_value_usdt=100.0,
+            side="BUY",
+        )
+
+        tests["buy_slippage"] = (
+            slippage is not None
+            and math.isfinite(slippage)
+            and slippage >= 0
+        )
+
+        tests["invalid_book_rejected"] = (
+            compute_spread_percent({
+                "bids": [],
+                "asks": [],
+            }) is None
+        )
+
+        tests["candidate_builder_available"] = callable(build_candidate)
+        tests["candidate_validator_available"] = callable(validate_candidate)
+        tests["coin_selector_available"] = callable(select_coins)
+
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        tests["runtime_exception"] = False
+
+    passed_count = sum(bool(value) for value in tests.values())
+    total_count = len(tests)
+    passed = passed_count == total_count and error is None
+
+    return {
+        "ok": passed,
+        "passed": passed,
+        "tests": tests,
+        "passed_count": passed_count,
+        "total_count": total_count,
+        "error": error,
+    }
 
 
 if __name__ == "__main__":
-    try:
-        self_check()
-        print("COIN SELECTOR SELF-CHECK: PASS")
-        print("Formula Version: 4.0")
-        print("Spot Only: YES")
-    except Exception as exc:
-        print(f"COIN SELECTOR SELF-CHECK: FAIL - {exc}")
-        raise
+    result = self_check()
+
+    print("COIN SELECTOR SELF-CHECK:", "PASS" if result["ok"] else "FAIL")
+    print(f"Passed: {result['passed_count']}/{result['total_count']}")
+    print("Formula Version: 4.0")
+    print("Spot Only: YES")
+
+    if not result["ok"]:
+        for name, status in result["tests"].items():
+            if not status:
+                print("FAILED:", name)
+
+        raise SystemExit(1)

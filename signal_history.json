@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-11-28T09:18:49.049955+00:00",
+  "updated_at": "2026-11-28T09:41:07.006666+00:00",
   "signals": [
     {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -2220,7 +2220,7 @@
         "t2": null,
         "t3": null
       },
-      "current_price": 44.16,
+      "current_price": 44.14,
       "status": "ACTIVE",
       "t1_hit": false,
       "t2_hit": false,
@@ -2233,7 +2233,7 @@
       "max_price_seen": 44.73,
       "result": null,
       "closed_at": null,
-      "last_updated": "2026-11-28T09:18:49.049903+00:00"
+      "last_updated": "2026-11-28T09:41:07.006624+00:00"
     },
     {
       "signal_id": "ANTBUSDT_SWING_20261127T210117.060230+0000",

@@ -61,11 +61,12 @@ else:
 # Shared test helpers
 # ---------------------------------------------------------
 
+
 def require_module(test_case, module, error, name):
-    test_case.assertIsNotNone(
-        module,
-        msg=f"{name} import failed: {error}",
-    )
+    if module is None:
+        raise AssertionError(
+            f"{name} import failed: {error}"
+        )
 
 
 def finite_positive(value):

@@ -1,979 +1,1385 @@
+
 """
-Binance Spot V3 Smart Signal Scanner
-Central Configuration Module
+File: config.py
+System: Binance Spot V3 Smart Signal Scanner
+Version: 4.0.0
+Formula Version: 4.0
+Python: 3.11+
+Compatibility: New 7-Layer Signal Architecture
+Test Status: NOT RUN
 
-Version: 3.2.1
-Python: 3.11
-Market: Binance Spot Only
-
-Balanced signal sensitivity:
-- Avoid excessive filtering that starves valid setups.
-- Reduce false entries in weak/bearish conditions.
-- Preserve liquidity, fee, and risk controls.
+Central configuration for:
+- 7-Layer weighted signal intelligence
+- BTC market regime
+- Multi-timeframe confirmation
+- Liquidity and order-flow analysis
+- Entry and risk management
+- Spot-only position sizing
+- Backtesting and paper trading
+- Telegram notification
 """
 
-from copy import deepcopy
-import math
+from __future__ import annotations
+
+import copy
+import os
+from typing import Any
 
 
 # ============================================================
-# 1. CORE CONFIGURATION
+# 1. SYSTEM INFORMATION
 # ============================================================
 
-CONFIG = {
-    "VERSION": "3.2.1",
-    "EXCHANGE": "BINANCE",
-    "MARKET_TYPE": "SPOT",
-    "QUOTE_ASSET": "USDT",
+SYSTEM_NAME = "Binance Spot V3 Smart Signal Scanner"
 
-    "SCAN_INTERVAL_SECONDS": 300,
+CODE_VERSION = "4.0.0"
+FORMULA_VERSION = "4.0"
 
-    "TARGET_SIGNALS_PER_DAY": (5, 7),
-    "TARGET_SIGNALS_MANDATORY": False,
+PYTHON_MIN_VERSION = (3, 11)
 
-    "MAX_TRADE_DURATION_HOURS": 48,
-    "SIGNAL_TRACKING_HOURS": 48,
+EXCHANGE = "BINANCE"
+MARKET_TYPE = "SPOT"
+QUOTE_ASSET = "USDT"
 
-    "TIMEZONE": "UTC",
-    "PYTHON_VERSION": "3.11",
+BASE_URL = "https://data-api.binance.vision"
 
-    "SPOT_ONLY": True,
-    "USDT_ONLY": True,
+TIMEZONE = "Asia/Dhaka"
 
-    "DEFAULT_DRY_RUN": True,
-    "SIMULATION_CAPITAL_USDT": 100.0,
+# Public market data only.
+# No API key is required for public Binance Spot endpoints.
 
-    "ALLOWED_SIGNAL_TYPES": [
-        "STRONG BUY",
-        "EXCELLENT BUY",
-    ],
 
-    "EXCLUDED_MARKETS": [
-        "FUTURES",
-        "MARGIN",
-        "STOCKS",
-        "SHARES",
-        "EQUITIES",
-        "TOKENIZED_STOCKS",
-        "NON_CRYPTO_ASSETS",
-    ],
+# ============================================================
+# 2. ENVIRONMENT HELPERS
+# ============================================================
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    value = value.strip().lower()
+
+    if value in {"1", "true", "yes", "on"}:
+        return True
+
+    if value in {"0", "false", "no", "off"}:
+        return False
+
+    return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+# ============================================================
+# 3. RUNTIME CONFIGURATION
+# ============================================================
+
+RUNTIME_CONFIG = {
+    "environment": os.getenv("ENVIRONMENT", "production").lower(),
+
+    "dry_run": _env_bool("DRY_RUN", False),
+
+    "capital_usdt": _env_float(
+        "SCANNER_CAPITAL_USDT",
+        100.0
+    ),
+
+    "log_level": os.getenv("LOG_LEVEL", "INFO").upper(),
+
+    "max_candidates_per_run": _env_int(
+        "MAX_CANDIDATES_PER_RUN",
+        30
+    ),
+
+    "max_signals_per_run": _env_int(
+        "MAX_SIGNALS_PER_RUN",
+        3
+    ),
+
+    "spot_only": True,
+
+    "allow_futures": False,
+
+    "allow_margin": False,
+
+    "allow_short_signals": False,
 }
 
 
 # ============================================================
-# 2. TIMEFRAME CONFIGURATION
+# 4. TIMEFRAME CONFIGURATION
 # ============================================================
 
-TIMEFRAMES = {
+TIMEFRAME_CONFIG = {
+
     "SCALP": {
-        "TRIGGER": "5m",
-        "CONFIRMATION": "15m",
-        "ADDITIONAL_CONFIRMATION": "30m",
-        "ENTRY_VALIDITY_MINUTES": 15,
-    },
+        "entry": "5m",
+        "confirmation": "15m",
+        "structure": "30m",
 
-    "SWING": {
-        "TRIGGER": "15m",
-        "CONFIRMATION": "30m",
-        "TREND_CONFIRMATION": "1h",
-        "ENTRY_VALIDITY_MINUTES": 60,
-    },
-
-    "BTC_MARKET": [
-        "15m",
-        "1h",
-        "4h",
-    ],
-
-    "REQUIRE_CLOSED_CANDLES": True,
-}
-
-
-# ============================================================
-# 3. STRATEGY CONFIGURATION
-# ============================================================
-
-STRATEGIES = {
-    "SCALP": {
-        "ENABLED": True,
-        "MAX_DURATION": "SEVERAL_HOURS",
-        "TRIGGER_TIMEFRAME": "5m",
-        "CONFIRMATION_TIMEFRAMES": [
+        "required_timeframes": [
+            "5m",
             "15m",
             "30m",
         ],
-        "ENTRY_VALIDITY_MINUTES": 15,
+
+        "candle_limit": 300,
     },
 
     "SWING": {
-        "ENABLED": True,
-        "MAX_DURATION_HOURS": 48,
-        "TRIGGER_TIMEFRAME": "15m",
-        "CONFIRMATION_TIMEFRAMES": [
+        "entry": "15m",
+        "confirmation": "30m",
+        "structure": "1h",
+
+        "required_timeframes": [
+            "15m",
             "30m",
             "1h",
         ],
-        "ENTRY_VALIDITY_MINUTES": 60,
+
+        "candle_limit": 300,
     },
 
-    # Retest is preferred but not mandatory.
-    "ENTRY_SEQUENCE": [
-        "BREAKOUT",
-        "CANDLE_CLOSE",
-        "BUYER_CONFIRMATION",
-        "ENTRY",
-    ],
-
-    "PREFER_RETEST": True,
-
-    "REQUIRE_BREAKOUT_CONFIRMATION": True,
-    "REQUIRE_RETEST": False,
-    "REQUIRE_BUYER_CONFIRMATION": True,
-
-    "REJECT_LATE_ENTRY": True,
-
-    "MAX_ENTRY_EXTENSION_PERCENT": 2.5,
-    "RETEST_TOLERANCE_PERCENT": 0.5,
-    "BREAKOUT_LOOKBACK_CANDLES": 20,
-}
-
-
-# ============================================================
-# 4. RISK CONFIGURATION
-# ============================================================
-
-RISK_CONFIG = {
-    "MAX_RISK_PER_TRADE_PERCENT": 1.0,
-    "MIN_RISK_REWARD_RATIO": 1.5,
-
-    "MAX_RISK_PERCENT": 1.0,
-    "MIN_RISK_REWARD": 1.5,
-
-    "POSITION_SIZING_METHOD": "STOP_LOSS_DISTANCE",
-
-    "INCLUDE_TRADING_FEES": True,
-    "INCLUDE_ESTIMATED_SLIPPAGE": True,
-
-    "FEE_RATE": 0.001,
-    "SLIPPAGE_RATE": 0.001,
-
-    "ATR_MULTIPLIER": 1.5,
-
-    "MAX_STOP_LOSS_DISTANCE_PERCENT": 8.0,
-
-    "STOP_LOSS_METHOD": [
-        "TECHNICAL_INVALIDATION",
-        "CONFIRMED_SUPPORT",
-        "ATR14",
-        "MARKET_VOLATILITY",
-    ],
-
-    "TARGET_METHOD": {
-        "T1": "FIRST_MEANINGFUL_RESISTANCE",
-        "T2": "NEXT_RESISTANCE",
-        "T3": "EXTENDED_RESISTANCE",
-    },
-
-    "REQUIRE_MINIMUM_RR_AT_T1": True,
-}
-
-
-# ============================================================
-# 5. FILTER CONFIGURATION
-# ============================================================
-
-FILTER_CONFIG = {
-    "ALLOWED_QUOTE_ASSET": "USDT",
-
-    # Preserve liquidity protection.
-    "MIN_24H_QUOTE_VOLUME_USDT": 3_000_000,
-    "MIN_QUOTE_VOLUME_USDT": 3_000_000,
-    "MIN_QUOTE_VOLUME": 3_000_000,
-
-    # Balanced volume filter: avoids noise without starving setups.
-    "MIN_RELATIVE_VOLUME": 1.15,
-    "PREFERRED_RELATIVE_VOLUME": 1.35,
-
-    "MAX_SPREAD_PERCENT": 0.15,
-
-    "MIN_24H_TRADE_COUNT": 1000,
-    "MIN_24H_TRADES": 1000,
-    "MIN_TRADES": 1000,
-
-    "REQUIRE_ORDER_BOOK": True,
-    "MIN_ORDER_BOOK_DEPTH": 0,
-
-    "RSI": {
-        "PERIOD": 14,
-
-        "WEAK_BELOW": 45,
-        "CAUTION_MIN": 45,
-
-        "PREFERRED_MIN": 50,
-        "PREFERRED_MAX": 68,
-
-        "OVEREXTENSION_MIN": 69,
-        "OVEREXTENSION_MAX": 74,
-
-        "REJECT_ABOVE": 74,
-    },
-
-    "ORDER_BOOK": {
-        "VALIDATE_SPREAD": True,
-        "VALIDATE_DEPTH": True,
-
-        "VALIDATE_BUY_LIQUIDITY": True,
-        "VALIDATE_SELL_LIQUIDITY": True,
-
-        "ESTIMATE_SLIPPAGE": True,
-        "CHECK_IMBALANCE": True,
-    },
-
-    "PUMP_PROTECTION": {
-        "ENABLED": True,
-
-        "CHECK_PRICE_SPIKES": True,
-        "CHECK_VOLUME_SPIKES": True,
-        "CHECK_RAPID_REVERSALS": True,
-        "CHECK_THIN_ORDER_BOOK": True,
-        "CHECK_ABNORMAL_VOLATILITY": True,
-
-        "REJECT_STALE_DATA": True,
-
-        "MAX_ROC_PERCENT": 3.5,
-        "MAX_BB_WIDTH": 0.20,
-    },
-}
-
-
-# ============================================================
-# 6. INDICATOR CONFIGURATION
-# ============================================================
-
-INDICATOR_CONFIG = {
-    "EMA": {
-        "FAST": 9,
-        "SLOW": 20,
-    },
-
-    "SMA": {
-        "PERIODS": [
-            20,
-            50,
-            200,
+    "BTC": {
+        "required_timeframes": [
+            "15m",
+            "1h",
+            "4h",
         ],
-    },
 
-    "RSI": {
-        "PERIOD": 14,
+        "candle_limit": 300,
     },
-
-    "MACD": {
-        "FAST": 12,
-        "SLOW": 26,
-        "SIGNAL": 9,
-    },
-
-    "ADX": {
-        "PERIOD": 14,
-    },
-
-    "ATR": {
-        "PERIOD": 14,
-    },
-
-    "BOLLINGER": {
-        "PERIOD": 20,
-        "STANDARD_DEVIATION": 2,
-    },
-
-    "VWAP": {
-        "METHOD": "SESSION_BASED",
-    },
-
-    "RELATIVE_VOLUME": {
-        "BASELINE_CANDLES": 20,
-    },
-
-    "OBV": {
-        "METHOD": "STANDARD",
-    },
-
-    "CMF": {
-        "PERIOD": 20,
-    },
-
-    "ROC": {
-        "PERIOD": 5,
-    },
-
-    "VOLUME_MOMENTUM": {
-        "PERIOD": 3,
-    },
-
-    "SUPPORT_RESISTANCE": {
-        "METHOD": "RECENT_CONFIRMED_SWING_LEVELS",
-        "PIVOT_LOOKBACK": 5,
-    },
-
-    "MIN_REQUIRED_CANDLES": 220,
 }
 
 
 # ============================================================
-# 7. MARKET FILTER CONFIGURATION
+# 5. FORMULA WEIGHTS — TOTAL 100
 # ============================================================
 
-MARKET_CONFIG = {
-    "BTC_SYMBOL": "BTCUSDT",
+LAYER_WEIGHTS = {
 
-    "REQUIRED_TIMEFRAMES": [
-        "15m",
-        "1h",
-        "4h",
-    ],
+    "btc_market_regime": {
+        "total": 15,
 
-    "REQUIRED_INDICATORS": [
-        "MA20",
-        "MA50",
-        "MA200",
-        "RSI14",
-        "MACD",
-        "ADX14",
-        "ATR14",
-        "VOLUME_TREND",
-    ],
+        "btc_ema_alignment": 5,
+        "btc_rsi_adx": 3,
+        "btc_atr_risk": 2,
+        "market_breadth": 5,
+    },
 
-    "MARKET_STATUSES": [
+    "technical_structure": {
+        "total": 20,
+
+        "ema_alignment": 5,
+        "rsi": 3,
+        "macd_momentum": 3,
+        "adx": 3,
+        "market_structure": 4,
+        "bollinger_bands": 2,
+    },
+
+    "volume_momentum": {
+        "total": 15,
+
+        "relative_volume": 5,
+        "obv": 4,
+        "volume_expansion": 3,
+        "roc": 3,
+    },
+
+    "liquidity_order_flow": {
+        "total": 15,
+
+        "bid_ask_spread": 3,
+        "order_book_imbalance": 4,
+        "order_book_depth": 3,
+        "trade_flow_cvd": 3,
+        "slippage": 2,
+    },
+
+    "entry_quality": {
+        "total": 15,
+
+        "support_resistance": 4,
+        "breakout_confirmation": 3,
+        "retest_quality": 3,
+        "vwap": 2,
+        "atr_entry_distance": 3,
+    },
+
+    "risk_reward": {
+        "total": 10,
+
+        "atr_stop_loss": 3,
+        "net_risk_reward": 4,
+        "position_sizing": 2,
+        "fees_slippage": 1,
+    },
+
+    "fundamental_onchain": {
+        "total": 10,
+
+        "token_unlock_supply": 2,
+        "market_cap_fdv": 2,
+        "exchange_flows": 2,
+        "holder_whale_concentration": 2,
+        "security_development_health": 2,
+    },
+}
+
+
+TOTAL_FORMULA_SCORE = 100
+
+
+# ============================================================
+# 6. SIGNAL CLASSIFICATION
+# ============================================================
+
+CLASSIFICATION_CONFIG = {
+
+    "EXCELLENT BUY": {
+        "minimum_score": 90,
+        "maximum_score": 100,
+        "telegram_enabled": True,
+    },
+
+    "STRONG BUY": {
+        "minimum_score": 85,
+        "maximum_score": 89,
+        "telegram_enabled": True,
+    },
+
+    "WATCHLIST": {
+        "minimum_score": 75,
+        "maximum_score": 84,
+        "telegram_enabled": False,
+    },
+
+    "WAIT": {
+        "minimum_score": 60,
+        "maximum_score": 74,
+        "telegram_enabled": False,
+    },
+
+    "REJECT": {
+        "minimum_score": 0,
+        "maximum_score": 59,
+        "telegram_enabled": False,
+    },
+}
+
+# Score is a weighted assessment, NOT a probability of profit.
+# Hard gates always override the score.
+
+
+# ============================================================
+# 7. BTC MARKET REGIME
+# ============================================================
+
+BTC_REGIME_CONFIG = {
+
+    "regimes": [
+        "STRONG_BULLISH",
         "BULLISH",
         "NEUTRAL",
         "BEARISH",
         "HIGH_RISK",
-        "UNKNOWN",
     ],
 
-    "UNKNOWN_DATA_POLICY": "CONSERVATIVE",
-
-    "REJECT_NEW_SIGNALS_ON": [
-        "HIGH_RISK",
-        "UNKNOWN",
+    "ema_periods": [
+        20,
+        50,
+        200,
     ],
 
-    # Spot long signals perform poorly in bearish regimes.
-    "ALLOW_SELECTIVE_SIGNALS_ON_BEARISH": False,
+    "rsi_period": 14,
 
-    "REQUIRE_COMPLETE_BTC_DATA": True,
+    "adx_period": 14,
+
+    "atr_period": 14,
+
+    "high_risk_blocks_new_buy": True,
+
+    "bearish_requires_stronger_confirmation": True,
+
+    "use_market_breadth": True,
+
+    "breadth_sample_size": 50,
+
+    "avoid_duplicate_btc_penalty": True,
 }
 
 
 # ============================================================
-# 8. SIGNAL SCORING CONFIGURATION
+# 8. TECHNICAL INDICATORS
+# ============================================================
+
+INDICATOR_CONFIG = {
+
+    "ema_periods": [
+        20,
+        50,
+        200,
+    ],
+
+    "rsi": {
+        "period": 14,
+        "oversold": 30,
+        "neutral_low": 45,
+        "neutral_high": 55,
+        "overbought": 70,
+    },
+
+    "macd": {
+        "fast": 12,
+        "slow": 26,
+        "signal": 9,
+    },
+
+    "adx": {
+        "period": 14,
+        "trend_threshold": 20,
+        "strong_trend_threshold": 25,
+    },
+
+    "atr": {
+        "period": 14,
+    },
+
+    "bollinger": {
+        "period": 20,
+        "standard_deviation": 2.0,
+    },
+
+    "rvol": {
+        "period": 20,
+        "minimum_reference": 1.0,
+    },
+
+    "obv": {
+        "enabled": True,
+    },
+
+    "roc": {
+        "period": 12,
+    },
+
+    "vwap": {
+        "enabled": True,
+    },
+
+    "support_resistance": {
+        "lookback": 50,
+        "pivot_left": 3,
+        "pivot_right": 3,
+    },
+}
+
+
+# ============================================================
+# 9. MARKET STRUCTURE
+# ============================================================
+
+MARKET_STRUCTURE_CONFIG = {
+
+    "enabled": True,
+
+    "detect_higher_high": True,
+
+    "detect_higher_low": True,
+
+    "detect_lower_high": True,
+
+    "detect_lower_low": True,
+
+    "detect_bos": True,
+
+    "detect_choch": True,
+
+    "structure_lookback": 50,
+
+    # Closed candle confirmation only.
+    "use_closed_candles": True,
+}
+
+
+# ============================================================
+# 10. LIQUIDITY AND ORDER FLOW
+# ============================================================
+
+LIQUIDITY_CONFIG = {
+
+    "order_book_limit": 100,
+
+    "depth_levels": 10,
+
+    "maximum_spread_percent": 0.15,
+
+    "minimum_top_depth_usdt": 5000.0,
+
+    "maximum_estimated_slippage_percent": 0.15,
+
+    "maximum_imbalance_ratio": 5.0,
+
+    "minimum_order_book_levels": 5,
+
+    "use_trade_flow_proxy": True,
+
+    "use_cvd_proxy": True,
+
+    "reject_invalid_order_book": True,
+}
+
+
+# ============================================================
+# 11. ENTRY QUALITY
+# ============================================================
+
+ENTRY_CONFIG = {
+
+    "use_support_resistance": True,
+
+    "use_breakout_confirmation": True,
+
+    "use_retest_confirmation": True,
+
+    "use_vwap": True,
+
+    "use_atr_entry_distance": True,
+
+    "maximum_entry_extension_atr": 1.5,
+
+    "maximum_entry_distance_from_ema20_percent": 3.0,
+
+    "require_closed_candle_breakout": True,
+
+    "reject_chasing_price": True,
+
+    "entry_validity_minutes": {
+        "SCALP": 15,
+        "SWING": 60,
+    },
+}
+
+
+# ============================================================
+# 12. RISK MANAGEMENT
+# ============================================================
+
+RISK_CONFIG = {
+
+    # Maximum planned capital risk per trade.
+    "risk_percent": 1.0,
+
+    "maximum_risk_percent": 1.0,
+
+    "maximum_open_positions": 3,
+
+    "maximum_signals_per_run": 3,
+
+    "minimum_net_risk_reward": 1.5,
+
+    "atr_stop_loss": {
+        "period": 14,
+
+        "SCALP": {
+            "multiplier": 1.5,
+            "minimum_distance_percent": 0.30,
+            "maximum_distance_percent": 3.0,
+        },
+
+        "SWING": {
+            "multiplier": 2.0,
+            "minimum_distance_percent": 0.50,
+            "maximum_distance_percent": 5.0,
+        },
+    },
+
+    "position_sizing": {
+        "method": "FIXED_RISK",
+
+        "risk_based": True,
+
+        "include_entry_fee": True,
+
+        "include_exit_fee": True,
+
+        "include_slippage": True,
+
+        "minimum_order_value_usdt": 10.0,
+    },
+
+    "targets": {
+        "minimum_targets": 1,
+        "maximum_targets": 3,
+
+        "allow_partial_targets": True,
+
+        "use_resistance_levels": True,
+
+        "use_atr_fallback": True,
+    },
+
+    "cooldown_hours": 6,
+
+    "maximum_tracking_hours": 48,
+}
+
+
+# ============================================================
+# 13. FEES AND EXECUTION COST
+# ============================================================
+
+EXECUTION_COST_CONFIG = {
+
+    # Initial estimate. Actual account fee may differ.
+    "entry_fee_percent": 0.10,
+
+    "exit_fee_percent": 0.10,
+
+    "round_trip_fee_percent": 0.20,
+
+    "estimated_slippage_percent": 0.05,
+
+    "include_fees_in_net_rr": True,
+
+    "include_slippage_in_net_rr": True,
+
+    "include_costs_in_position_size": True,
+
+    "assume_market_order": True,
+
+    "fee_note": (
+        "Estimated fee configuration. "
+        "Actual Binance account fee must be verified."
+    ),
+}
+
+
+# ============================================================
+# 14. FUNDAMENTAL AND ON-CHAIN DATA
+# ============================================================
+
+FUNDAMENTAL_CONFIG = {
+
+    "enabled": True,
+
+    "missing_data_policy": "UNVERIFIED_ZERO_SCORE",
+
+    "never_fabricate_data": True,
+
+    "token_unlock": {
+        "enabled": True,
+        "weight": 2,
+    },
+
+    "market_cap_fdv": {
+        "enabled": True,
+        "weight": 2,
+    },
+
+    "exchange_flows": {
+        "enabled": True,
+        "weight": 2,
+    },
+
+    "holder_whale_concentration": {
+        "enabled": True,
+        "weight": 2,
+    },
+
+    "security_development_health": {
+        "enabled": True,
+        "weight": 2,
+    },
+
+    "critical_security_incident_blocks_buy": True,
+
+    "severe_liquidity_problem_blocks_buy": True,
+
+    # Missing optional data alone does not block every signal.
+    "missing_data_blocks_buy": False,
+}
+
+
+# ============================================================
+# 15. HARD GATES
+# ============================================================
+
+HARD_GATE_CONFIG = {
+
+    "block_high_risk_btc_regime": True,
+
+    "require_closed_candles": True,
+
+    "reject_stale_data": True,
+
+    "reject_invalid_ohlcv": True,
+
+    "reject_insufficient_history": True,
+
+    "reject_excessive_spread": True,
+
+    "reject_insufficient_depth": True,
+
+    "reject_excessive_slippage": True,
+
+    "reject_overextended_entry": True,
+
+    "reject_invalid_stop_loss": True,
+
+    "reject_invalid_net_risk_reward": True,
+
+    "reject_position_risk_violation": True,
+
+    "reject_duplicate_signal": True,
+
+    "reject_cooldown_violation": True,
+
+    "reject_non_spot_symbols": True,
+
+    "reject_stablecoin_pairs": True,
+
+    "reject_leveraged_tokens": True,
+}
+
+
+# ============================================================
+# 16. MARKET DATA
+# ============================================================
+
+DATA_CONFIG = {
+
+    "base_url": BASE_URL,
+
+    "timeout_seconds": 15,
+
+    "max_retries": 3,
+
+    "retry_delay_seconds": 1.0,
+
+    "klines_limit": 300,
+
+    "ticker_endpoint": "/api/v3/ticker/24hr",
+
+    "klines_endpoint": "/api/v3/klines",
+
+    "exchange_info_endpoint": "/api/v3/exchangeInfo",
+
+    "depth_endpoint": "/api/v3/depth",
+
+    "ticker_price_endpoint": "/api/v3/ticker/price",
+
+    "use_closed_candles_only": True,
+
+    "drop_current_open_candle": True,
+
+    "maximum_data_age_seconds": 180,
+
+    "require_positive_prices": True,
+
+    "require_valid_volume": True,
+
+    "cache_exchange_info_minutes": 60,
+
+    "cache_ticker_seconds": 30,
+}
+
+
+# ============================================================
+# 17. SYMBOL FILTER
+# ============================================================
+
+SYMBOL_CONFIG = {
+
+    "quote_asset": "USDT",
+
+    "spot_only": True,
+
+    "exclude_stablecoins": True,
+
+    "exclude_tokenized_stocks": True,
+
+    "exclude_leveraged_tokens": True,
+
+    "exclude_low_liquidity": True,
+
+    "exclude_symbols": [
+        "USDCUSDT",
+        "FDUSDUSDT",
+        "TUSDUSDT",
+        "USDPUSDT",
+        "DAIUSDT",
+    ],
+
+    "excluded_suffixes": [
+        "UPUSDT",
+        "DOWNUSDT",
+        "BULLUSDT",
+        "BEARUSDT",
+    ],
+
+    "minimum_24h_quote_volume_usdt": 1_000_000.0,
+
+    "maximum_symbols_to_analyze": 100,
+}
+
+
+# ============================================================
+# 18. SIGNAL MANAGEMENT
 # ============================================================
 
 SIGNAL_CONFIG = {
-    "SCORE_COMPONENTS": [
-        "market_condition",
-        "btc_context",
-        "multi_timeframe_trend",
-        "ema_trend",
-        "moving_average_trend",
-        "rsi_momentum",
-        "macd_momentum",
-        "adx_strength",
-        "relative_volume",
-        "vwap_confirmation",
-        "buyer_flow",
-        "breakout_retest",
-        "bb_squeeze",
-        "early_momentum",
-        "volume_acceleration",
-    ],
 
-    "POINTS_PER_COMPONENT": 1,
-    "MAX_SCORE": 15,
-
-    # Balanced score threshold.
-    "MIN_SCORE": 9,
-    "REJECT_MAX_SCORE": 8,
-
-    "STRONG_MIN_SCORE": 9,
-    "EXCELLENT_MIN_SCORE": 12,
-
-    # Compatibility aliases.
-    "STRONG_BUY_MIN_SCORE": 9,
-    "STRONG_BUY_MAX_SCORE": 11,
-
-    "EXCELLENT_BUY_MIN_SCORE": 12,
-    "EXCELLENT_BUY_MAX_SCORE": 15,
-
-    "MISSING_DATA_POLICY": "DO_NOT_AWARD_POINTS",
-
-    "MANDATORY_REJECTION_OVERRIDES_SCORE": True,
-
-    "ALLOWED_SIGNAL_TYPES": [
+    "allowed_classifications": [
         "STRONG BUY",
         "EXCELLENT BUY",
     ],
+
+    "send_watchlist_to_telegram": False,
+
+    "send_wait_to_telegram": False,
+
+    "send_rejected_to_telegram": False,
+
+    "prevent_duplicate_signals": True,
+
+    "duplicate_window_hours": 6,
+
+    "signal_id_required": True,
+
+    "store_formula_version": True,
+
+    "store_layer_scores": True,
+
+    "store_market_regime": True,
+
+    "store_entry_snapshot": True,
+
+    "store_risk_plan": True,
 }
 
 
 # ============================================================
-# 9. SIGNAL TRACKING CONFIGURATION
+# 19. PAPER TRADING
+# ============================================================
+
+PAPER_TRADING_CONFIG = {
+
+    "enabled": True,
+
+    "mode": "SIMULATED",
+
+    "track_scalp_and_swing_separately": True,
+
+    "simulate_entry_fee": True,
+
+    "simulate_exit_fee": True,
+
+    "simulate_spread": True,
+
+    "simulate_slippage": True,
+
+    "simulate_execution_delay": True,
+
+    "use_closed_candle_data": True,
+
+    "entry_hit_is_not_guaranteed_fill": True,
+
+    "record_mfe": True,
+
+    "record_mae": True,
+
+    "record_gross_pnl": True,
+
+    "record_net_pnl": True,
+
+    "record_holding_time": True,
+
+    "record_exit_reason": True,
+
+    "minimum_observation_days": 30,
+
+    "preferred_observation_days": 60,
+}
+
+
+# ============================================================
+# 20. BACKTESTING
+# ============================================================
+
+BACKTEST_CONFIG = {
+
+    "enabled": True,
+
+    "timeframes": [
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "4h",
+    ],
+
+    "initial_capital_usdt": 100.0,
+
+    "use_realistic_fees": True,
+
+    "use_realistic_slippage": True,
+
+    "avoid_lookahead_bias": True,
+
+    "avoid_survivorship_bias": True,
+
+    "same_candle_sl_tp_policy": "CONSERVATIVE_STOP_FIRST",
+
+    "use_intrabar_data_when_available": True,
+
+    "use_walk_forward_validation": True,
+
+    "use_out_of_sample_testing": True,
+
+    "separate_scalp_and_swing_results": True,
+
+    "metrics": [
+        "win_rate",
+        "profit_factor",
+        "expectancy",
+        "maximum_drawdown",
+        "average_risk_reward",
+        "fee_adjusted_return",
+        "maximum_favorable_excursion",
+        "maximum_adverse_excursion",
+        "signal_frequency",
+    ],
+}
+
+
+# ============================================================
+# 21. TRACKING AND HISTORY
 # ============================================================
 
 TRACKING_CONFIG = {
-    "MAX_TRACKING_HOURS": 48,
-    "MAX_TRACK_HOURS": 48,
 
-    "SCALP_ENTRY_VALIDITY_MINUTES": 15,
-    "SWING_ENTRY_VALIDITY_MINUTES": 60,
+    "history_file": "signal_history.json",
 
-    "DUPLICATE_PREVENTION": True,
-    "COOLDOWN_HOURS": 6,
+    "paper_ledger_file": "paper_trading_ledger.json",
 
-    "SIGNAL_EXPIRY": True,
-    "PERFORMANCE_TRACKING": True,
+    "analytics_file": "signal_analytics.json",
 
-    "TRACK_PARTIAL_EXITS": True,
-    "TRACK_REALIZED_PNL": True,
+    "backup_directory": "backups",
 
-    "TRACK_FIELDS": [
-        "SIGNAL_TIMESTAMP",
-        "ENTRY_PRICE",
-        "ACTUAL_ENTRY_STATUS",
-        "STOP_LOSS",
-        "T1",
-        "T2",
-        "T3",
-        "MAX_FAVORABLE_MOVEMENT",
-        "MAX_ADVERSE_MOVEMENT",
-        "TARGET_REACHED",
-        "STOP_LOSS_REACHED",
-        "EXPIRED_STATUS",
-        "FINAL_RESULT",
-        "REALIZED_PNL",
-        "PARTIAL_EXIT_HISTORY",
-    ],
+    "retention_days": 30,
 
-    "EXPIRED_BEFORE_ENTRY_COUNTS_AS_TRADE": False,
+    "maximum_tracking_hours": 48,
+
+    "record_every_signal": True,
+
+    "record_rejected_signals": False,
+
+    "preserve_legacy_history": True,
+
+    "atomic_file_writes": True,
+
+    "backup_before_migration": True,
 }
 
 
 # ============================================================
-# 10. API CONFIGURATION
+# 22. ANALYTICS
 # ============================================================
 
-API_CONFIG = {
-    "BASE_URL": "https://data-api.binance.vision",
+ANALYTICS_CONFIG = {
 
-    "ENDPOINTS": {
-        "EXCHANGE_INFO": "/api/v3/exchangeInfo",
-        "KLINES": "/api/v3/klines",
-        "TICKER_24H": "/api/v3/ticker/24hr",
-        "ORDER_BOOK": "/api/v3/depth",
-    },
+    "enabled": True,
 
-    "DATA_FRESHNESS_SECONDS": {
-        "5m": 600,
-        "15m": 1800,
-        "30m": 3600,
-        "1h": 7200,
-        "4h": 14400,
+    "update_interval_minutes": 5,
 
-        "TICKER_24H": 120,
-        "ORDER_BOOK": 10,
-    },
+    "report_window_hours": 24,
 
-    "REQUIRE_CLOSED_CANDLES": True,
+    "use_snapshot_timestamp": True,
 
-    "MAX_RETRIES": 3,
-    "REQUEST_TIMEOUT_SECONDS": 10,
-    "RETRY_BACKOFF_SECONDS": 1,
+    "timezone": TIMEZONE,
 
-    "USE_PUBLIC_API_ONLY": True,
+    "separate_scalp_swing": True,
 
-    "MISSING_DATA_POLICY": "REJECT_OR_MARK_UNKNOWN",
+    "calculate_net_pnl": True,
+
+    "calculate_win_rate": True,
+
+    "calculate_profit_factor": True,
+
+    "calculate_expectancy": True,
+
+    "calculate_max_drawdown": True,
+
+    "do_not_assume_entry_fill": True,
 }
 
 
 # ============================================================
-# 11. TELEGRAM CONFIGURATION
+# 23. TELEGRAM
 # ============================================================
 
 TELEGRAM_CONFIG = {
-    "BOT_TOKEN_ENV": "TELEGRAM_BOT_TOKEN",
-    "CHAT_ID_ENV": "TELEGRAM_CHAT_ID",
 
-    "REQUIRE_BOTH_CREDENTIALS": True,
+    "enabled": True,
 
-    "TEST_MESSAGE_SEPARATE_FROM_SIGNALS": True,
+    "bot_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
 
-    "MAX_MESSAGE_LENGTH": 4000,
-    "REQUEST_TIMEOUT_SECONDS": 15,
-    "MAX_RETRIES": 2,
+    "chat_id": os.getenv("TELEGRAM_CHAT_ID", ""),
 
-    "REQUIRED_SIGNAL_FIELDS": [
-        "SYMBOL",
-        "SIGNAL_CLASSIFICATION",
-        "STRATEGY",
-        "SCORE",
-        "MARKET_CONDITION",
-        "ENTRY_ZONE",
-        "STOP_LOSS",
-        "T1",
-        "T2",
-        "T3",
-        "RISK_REWARD",
-        "ENTRY_EXPIRY",
-        "TIMESTAMP_UTC",
-        "WARNINGS",
+    "parse_mode": "HTML",
+
+    "disable_notification": False,
+
+    "send_only_approved_signals": True,
+
+    "allowed_classifications": [
+        "STRONG BUY",
+        "EXCELLENT BUY",
     ],
+
+    "include_bengali_explanation": True,
+
+    "include_formula_version": True,
+
+    "include_layer_scores": True,
+
+    "include_btc_regime": True,
+
+    "include_entry": True,
+
+    "include_stop_loss": True,
+
+    "include_targets": True,
+
+    "include_net_profit_estimate": True,
+
+    "include_risk_reward": True,
+
+    "include_position_size": True,
+
+    "include_fees_slippage": True,
+
+    "message_limit": 4000,
+
+    "request_timeout_seconds": 15,
 }
 
 
 # ============================================================
-# 12. GITHUB ACTIONS CONFIGURATION
+# 24. WORKFLOW
 # ============================================================
 
 WORKFLOW_CONFIG = {
-    "RUNTIME": "Python 3.11",
 
-    "SCHEDULE_INTERVAL_MINUTES": 5,
+    "scanner_schedule": "*/5 * * * *",
 
-    "MANUAL_TESTING": True,
+    "analytics_schedule": "*/5 * * * *",
 
-    "RUN_AUTOMATED_TESTS_BEFORE_SIGNALS": True,
+    # 18:05 UTC = 00:05 Bangladesh time.
+    "daily_report_schedule": "5 18 * * *",
 
-    "CREDENTIAL_STORAGE": "GITHUB_SECRETS",
+    "python_version": "3.11",
 
-    "DEFAULT_DRY_RUN": True,
+    "scanner_script": "scanner.py",
 
-    "ALLOW_LIVE_WITHOUT_TESTS": False,
+    "test_script": "test_system.py",
 
-    "USE_CONCURRENCY_CONTROL": True,
+    "analytics_script": "signal_analytics.py",
+
+    "report_script": "signal_24h_report.py",
+
+    "preserve_scanner_schedule": True,
+
+    "non_blocking_analytics": True,
 }
 
 
 # ============================================================
-# 13. CONFIGURATION EXPORTS
+# 25. COMPLETE CONFIGURATION
 # ============================================================
 
-REQUIRED_CONFIG_EXPORTS = [
-    "CONFIG",
-    "TIMEFRAMES",
-    "STRATEGIES",
-    "RISK_CONFIG",
-    "FILTER_CONFIG",
-    "API_CONFIG",
-]
+CONFIG = {
+
+    "system": {
+        "name": SYSTEM_NAME,
+        "code_version": CODE_VERSION,
+        "formula_version": FORMULA_VERSION,
+        "python_min_version": PYTHON_MIN_VERSION,
+        "exchange": EXCHANGE,
+        "market_type": MARKET_TYPE,
+        "quote_asset": QUOTE_ASSET,
+        "timezone": TIMEZONE,
+    },
+
+    "runtime": RUNTIME_CONFIG,
+
+    "timeframes": TIMEFRAME_CONFIG,
+
+    "layer_weights": LAYER_WEIGHTS,
+
+    "total_formula_score": TOTAL_FORMULA_SCORE,
+
+    "classification": CLASSIFICATION_CONFIG,
+
+    "btc_regime": BTC_REGIME_CONFIG,
+
+    "indicators": INDICATOR_CONFIG,
+
+    "market_structure": MARKET_STRUCTURE_CONFIG,
+
+    "liquidity": LIQUIDITY_CONFIG,
+
+    "entry": ENTRY_CONFIG,
+
+    "risk": RISK_CONFIG,
+
+    "execution_cost": EXECUTION_COST_CONFIG,
+
+    "fundamental": FUNDAMENTAL_CONFIG,
+
+    "hard_gates": HARD_GATE_CONFIG,
+
+    "data": DATA_CONFIG,
+
+    "symbols": SYMBOL_CONFIG,
+
+    "signals": SIGNAL_CONFIG,
+
+    "paper_trading": PAPER_TRADING_CONFIG,
+
+    "backtesting": BACKTEST_CONFIG,
+
+    "tracking": TRACKING_CONFIG,
+
+    "analytics": ANALYTICS_CONFIG,
+
+    "telegram": TELEGRAM_CONFIG,
+
+    "workflow": WORKFLOW_CONFIG,
+}
 
 
-def get_config():
-    return {
-        "CONFIG": deepcopy(CONFIG),
-        "TIMEFRAMES": deepcopy(TIMEFRAMES),
-        "STRATEGIES": deepcopy(STRATEGIES),
-        "RISK_CONFIG": deepcopy(RISK_CONFIG),
-        "FILTER_CONFIG": deepcopy(FILTER_CONFIG),
-        "INDICATOR_CONFIG": deepcopy(INDICATOR_CONFIG),
-        "MARKET_CONFIG": deepcopy(MARKET_CONFIG),
-        "SIGNAL_CONFIG": deepcopy(SIGNAL_CONFIG),
-        "TRACKING_CONFIG": deepcopy(TRACKING_CONFIG),
-        "API_CONFIG": deepcopy(API_CONFIG),
-        "TELEGRAM_CONFIG": deepcopy(TELEGRAM_CONFIG),
-        "WORKFLOW_CONFIG": deepcopy(WORKFLOW_CONFIG),
+# ============================================================
+# 26. CONFIGURATION ACCESS
+# ============================================================
+
+def get_config() -> dict[str, Any]:
+    """
+    Return a deep copy of the complete configuration.
+    Prevent accidental modification of global settings.
+    """
+    return copy.deepcopy(CONFIG)
+
+
+def get_layer_weights() -> dict[str, dict[str, int]]:
+    return copy.deepcopy(LAYER_WEIGHTS)
+
+
+def get_strategy_config(strategy: str) -> dict[str, Any]:
+    strategy = strategy.upper()
+
+    if strategy not in TIMEFRAME_CONFIG:
+        raise ValueError(
+            f"Unsupported strategy: {strategy}"
+        )
+
+    if strategy == "BTC":
+        raise ValueError(
+            "BTC is a market-context configuration, not a trade strategy."
+        )
+
+    return copy.deepcopy(TIMEFRAME_CONFIG[strategy])
+
+
+def get_telegram_credentials() -> tuple[str, str]:
+    return (
+        os.getenv("TELEGRAM_BOT_TOKEN", ""),
+        os.getenv("TELEGRAM_CHAT_ID", ""),
+    )
+
+
+def is_dry_run() -> bool:
+    return _env_bool("DRY_RUN", False)
+
+
+def get_capital_usdt() -> float:
+    return _env_float(
+        "SCANNER_CAPITAL_USDT",
+        RUNTIME_CONFIG["capital_usdt"]
+    )
+
+
+# ============================================================
+# 27. CONFIGURATION VALIDATION
+# ============================================================
+
+def validate_config(
+    config: dict[str, Any] | None = None,
+) -> list[str]:
+    """
+    Validate configuration consistency.
+
+    Returns:
+        Empty list: configuration passed validation.
+        Non-empty list: validation errors.
+
+    This function does not claim that market data,
+    exchange connectivity or trading performance is valid.
+    """
+
+    cfg = config if config is not None else CONFIG
+
+    errors: list[str] = []
+
+    weights = cfg.get("layer_weights", {})
+
+    if not weights:
+        errors.append("Layer weights are missing.")
+
+    calculated_total = 0
+
+    for layer_name, layer in weights.items():
+
+        if not isinstance(layer, dict):
+            errors.append(
+                f"Invalid layer configuration: {layer_name}"
+            )
+            continue
+
+        declared_total = layer.get("total")
+
+        component_total = sum(
+            value
+            for key, value in layer.items()
+            if key != "total" and isinstance(value, (int, float))
+        )
+
+        if declared_total != component_total:
+            errors.append(
+                f"{layer_name}: component weights "
+                f"({component_total}) do not equal "
+                f"declared total ({declared_total})."
+            )
+
+        calculated_total += component_total
+
+    expected_total = cfg.get("total_formula_score", 100)
+
+    if calculated_total != expected_total:
+        errors.append(
+            f"Formula weight total is {calculated_total}; "
+            f"expected {expected_total}."
+        )
+
+    if cfg.get("system", {}).get("market_type") != "SPOT":
+        errors.append("Only Binance Spot is supported.")
+
+    if cfg.get("runtime", {}).get("allow_futures") is not False:
+        errors.append("Futures must remain disabled.")
+
+    if cfg.get("runtime", {}).get("allow_margin") is not False:
+        errors.append("Margin must remain disabled.")
+
+    if cfg.get("runtime", {}).get("spot_only") is not True:
+        errors.append("Spot-only mode must be enabled.")
+
+    capital = cfg.get("runtime", {}).get("capital_usdt", 0)
+
+    if not isinstance(capital, (int, float)) or capital <= 0:
+        errors.append("Capital must be greater than zero.")
+
+    risk = cfg.get("risk", {})
+
+    risk_percent = risk.get("risk_percent", 0)
+    max_risk = risk.get("maximum_risk_percent", 0)
+
+    if risk_percent <= 0:
+        errors.append("Risk percentage must be positive.")
+
+    if risk_percent > max_risk:
+        errors.append(
+            "Risk percentage exceeds maximum risk percentage."
+        )
+
+    if max_risk > 1.0:
+        errors.append(
+            "Maximum risk percentage cannot exceed 1% "
+            "under the current system policy."
+        )
+
+    min_rr = risk.get("minimum_net_risk_reward", 0)
+
+    if min_rr < 1.0:
+        errors.append(
+            "Minimum net risk/reward must be at least 1.0."
+        )
+
+    classification = cfg.get("classification", {})
+
+    expected_bands = {
+        "EXCELLENT BUY": (90, 100),
+        "STRONG BUY": (85, 89),
+        "WATCHLIST": (75, 84),
+        "WAIT": (60, 74),
+        "REJECT": (0, 59),
     }
 
+    for name, expected in expected_bands.items():
 
-# ============================================================
-# 14. CONFIGURATION VALIDATION
-# ============================================================
+        item = classification.get(name)
 
-def validate_config():
+        if not item:
+            errors.append(
+                f"Missing classification: {name}"
+            )
+            continue
 
-    # --------------------------------------------------------
-    # Core validation
-    # --------------------------------------------------------
-
-    if CONFIG["MARKET_TYPE"] != "SPOT":
-        raise ValueError(
-            "Only Binance Spot market is allowed."
+        actual = (
+            item.get("minimum_score"),
+            item.get("maximum_score"),
         )
 
-    if CONFIG["SPOT_ONLY"] is not True:
-        raise ValueError(
-            "SPOT_ONLY must be True."
+        if actual != expected:
+            errors.append(
+                f"Incorrect score range for {name}: {actual}"
+            )
+
+    timeframe = cfg.get("timeframes", {})
+
+    for strategy in ("SCALP", "SWING"):
+
+        item = timeframe.get(strategy)
+
+        if not item:
+            errors.append(
+                f"Missing timeframe strategy: {strategy}"
+            )
+            continue
+
+        required = item.get("required_timeframes", [])
+
+        if len(required) != 3:
+            errors.append(
+                f"{strategy} must have three timeframes."
+            )
+
+    telegram_allowed = set(
+        cfg.get("telegram", {}).get(
+            "allowed_classifications", []
         )
-
-    if (
-        CONFIG["QUOTE_ASSET"] != "USDT"
-        or CONFIG["USDT_ONLY"] is not True
-    ):
-        raise ValueError(
-            "Only USDT Spot pairs are allowed."
-        )
-
-    if CONFIG["SCAN_INTERVAL_SECONDS"] != 300:
-        raise ValueError(
-            "Scan interval must be 5 minutes."
-        )
-
-    if CONFIG["MAX_TRADE_DURATION_HOURS"] != 48:
-        raise ValueError(
-            "Maximum trade duration must be 48 hours."
-        )
-
-    if CONFIG["DEFAULT_DRY_RUN"] is not True:
-        raise ValueError(
-            "Default DRY_RUN must remain enabled."
-        )
-
-    capital = CONFIG["SIMULATION_CAPITAL_USDT"]
-
-    if (
-        not isinstance(capital, (int, float))
-        or not math.isfinite(capital)
-        or capital <= 0
-    ):
-        raise ValueError(
-            "Simulation capital must be finite and positive."
-        )
-
-    # --------------------------------------------------------
-    # Timeframe validation
-    # --------------------------------------------------------
-
-    if TIMEFRAMES["SCALP"]["TRIGGER"] != "5m":
-        raise ValueError(
-            "Scalp trigger timeframe must be 5m."
-        )
-
-    if TIMEFRAMES["SCALP"]["CONFIRMATION"] != "15m":
-        raise ValueError(
-            "Scalp confirmation timeframe must be 15m."
-        )
-
-    if TIMEFRAMES["SCALP"]["ADDITIONAL_CONFIRMATION"] != "30m":
-        raise ValueError(
-            "Scalp additional confirmation must be 30m."
-        )
-
-    if TIMEFRAMES["SWING"]["TRIGGER"] != "15m":
-        raise ValueError(
-            "Swing trigger timeframe must be 15m."
-        )
-
-    if TIMEFRAMES["SWING"]["CONFIRMATION"] != "30m":
-        raise ValueError(
-            "Swing confirmation timeframe must be 30m."
-        )
-
-    if TIMEFRAMES["SWING"]["TREND_CONFIRMATION"] != "1h":
-        raise ValueError(
-            "Swing trend confirmation must be 1h."
-        )
-
-    if TIMEFRAMES["REQUIRE_CLOSED_CANDLES"] is not True:
-        raise ValueError(
-            "Closed candles must be required."
-        )
-
-    # --------------------------------------------------------
-    # Strategy validation
-    # --------------------------------------------------------
-
-    required_true_strategy_keys = (
-        "REQUIRE_BREAKOUT_CONFIRMATION",
-        "REQUIRE_BUYER_CONFIRMATION",
-        "REJECT_LATE_ENTRY",
     )
 
-    for key in required_true_strategy_keys:
-        if STRATEGIES[key] is not True:
-            raise ValueError(
-                f"{key} must be True."
-            )
-
-    if STRATEGIES["REQUIRE_RETEST"] not in (True, False):
-        raise ValueError(
-            "REQUIRE_RETEST must be boolean."
+    if telegram_allowed != {
+        "STRONG BUY",
+        "EXCELLENT BUY",
+    }:
+        errors.append(
+            "Telegram must only send STRONG BUY "
+            "and EXCELLENT BUY."
         )
 
-    expected_sequence = [
-        "BREAKOUT",
-        "CANDLE_CLOSE",
-        "BUYER_CONFIRMATION",
-        "ENTRY",
-    ]
-
-    if STRATEGIES["ENTRY_SEQUENCE"] != expected_sequence:
-        raise ValueError(
-            "Entry sequence configuration mismatch."
+    if cfg.get("fundamental", {}).get(
+        "missing_data_blocks_buy"
+    ) is not False:
+        errors.append(
+            "Missing optional fundamental data "
+            "must not block all BUY signals."
         )
 
-    if STRATEGIES["PREFER_RETEST"] is not True:
-        raise ValueError(
-            "Retest preference must remain enabled."
+    if cfg.get("hard_gates", {}).get(
+        "require_closed_candles"
+    ) is not True:
+        errors.append(
+            "Closed-candle validation must be enabled."
         )
 
-    # --------------------------------------------------------
-    # Risk validation
-    # --------------------------------------------------------
-
-    max_risk = RISK_CONFIG["MAX_RISK_PER_TRADE_PERCENT"]
-    min_rr = RISK_CONFIG["MIN_RISK_REWARD_RATIO"]
-
-    if (
-        not isinstance(max_risk, (int, float))
-        or not math.isfinite(max_risk)
-        or not 0 < max_risk <= 1.0
-    ):
-        raise ValueError(
-            "Risk per trade must be above 0 and at most 1%."
+    if cfg.get("paper_trading", {}).get(
+        "entry_hit_is_not_guaranteed_fill"
+    ) is not True:
+        errors.append(
+            "Paper trading must not treat entry hit "
+            "as guaranteed execution."
         )
 
-    if RISK_CONFIG["MAX_RISK_PERCENT"] != max_risk:
-        raise ValueError(
-            "Risk percentage compatibility settings do not match."
+    if cfg.get("tracking", {}).get(
+        "preserve_legacy_history"
+    ) is not True:
+        errors.append(
+            "Legacy signal history preservation must remain enabled."
         )
 
-    if (
-        not isinstance(min_rr, (int, float))
-        or not math.isfinite(min_rr)
-        or min_rr < 1.5
-    ):
+    return errors
+
+
+def validate_config_or_raise() -> bool:
+    """
+    Raise ValueError if any configuration check fails.
+    """
+    errors = validate_config()
+
+    if errors:
         raise ValueError(
-            "Minimum risk/reward must be at least 1:1.5."
-        )
-
-    if RISK_CONFIG["MIN_RISK_REWARD"] != min_rr:
-        raise ValueError(
-            "Risk/reward compatibility settings do not match."
-        )
-
-    for key in (
-        "FEE_RATE",
-        "SLIPPAGE_RATE",
-        "ATR_MULTIPLIER",
-    ):
-        value = RISK_CONFIG[key]
-
-        if (
-            not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            or value < 0
-        ):
-            raise ValueError(
-                f"{key} must be finite and non-negative."
-            )
-
-    if RISK_CONFIG["ATR_MULTIPLIER"] <= 0:
-        raise ValueError(
-            "ATR multiplier must be positive."
-        )
-
-    # --------------------------------------------------------
-    # Filter validation
-    # --------------------------------------------------------
-
-    if FILTER_CONFIG["ALLOWED_QUOTE_ASSET"] != "USDT":
-        raise ValueError(
-            "Only USDT quote assets are allowed."
-        )
-
-    if (
-        FILTER_CONFIG["MIN_24H_QUOTE_VOLUME_USDT"]
-        != FILTER_CONFIG["MIN_QUOTE_VOLUME_USDT"]
-    ):
-        raise ValueError(
-            "Quote volume configuration settings do not match."
-        )
-
-    positive_filter_keys = (
-        "MIN_24H_QUOTE_VOLUME_USDT",
-        "MIN_24H_TRADE_COUNT",
-        "MAX_SPREAD_PERCENT",
-        "MIN_RELATIVE_VOLUME",
-        "PREFERRED_RELATIVE_VOLUME",
-    )
-
-    for key in positive_filter_keys:
-        value = FILTER_CONFIG[key]
-
-        if (
-            not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            or value <= 0
-        ):
-            raise ValueError(
-                f"{key} must be positive and finite."
-            )
-
-    if FILTER_CONFIG["MIN_RELATIVE_VOLUME"] < 0.5:
-        raise ValueError(
-            "Minimum relative volume is too low."
-        )
-
-    if FILTER_CONFIG["PREFERRED_RELATIVE_VOLUME"] < FILTER_CONFIG["MIN_RELATIVE_VOLUME"]:
-        raise ValueError(
-            "Preferred relative volume must be at least minimum relative volume."
-        )
-
-    if FILTER_CONFIG["MAX_SPREAD_PERCENT"] > 1.0:
-        raise ValueError(
-            "Maximum spread limit is too high."
-        )
-
-    # --------------------------------------------------------
-    # Indicator validation
-    # --------------------------------------------------------
-
-    ema = INDICATOR_CONFIG["EMA"]
-    macd = INDICATOR_CONFIG["MACD"]
-
-    if (
-        ema["FAST"] <= 0
-        or ema["SLOW"] <= ema["FAST"]
-    ):
-        raise ValueError(
-            "Invalid EMA periods."
-        )
-
-    if (
-        macd["FAST"] <= 0
-        or macd["SLOW"] <= macd["FAST"]
-    ):
-        raise ValueError(
-            "Invalid MACD periods."
-        )
-
-    if macd["SIGNAL"] <= 0:
-        raise ValueError(
-            "Invalid MACD signal period."
-        )
-
-    if INDICATOR_CONFIG["MIN_REQUIRED_CANDLES"] < 220:
-        raise ValueError(
-            "Minimum candle history must be at least 220."
-        )
-
-    if INDICATOR_CONFIG["RELATIVE_VOLUME"]["BASELINE_CANDLES"] <= 0:
-        raise ValueError(
-            "Relative volume baseline must be positive."
-        )
-
-    # --------------------------------------------------------
-    # Market validation
-    # --------------------------------------------------------
-
-    if MARKET_CONFIG["BTC_SYMBOL"] != "BTCUSDT":
-        raise ValueError(
-            "BTC market symbol must be BTCUSDT."
-        )
-
-    if MARKET_CONFIG["UNKNOWN_DATA_POLICY"] != "CONSERVATIVE":
-        raise ValueError(
-            "Unknown data policy must be conservative."
-        )
-
-    if "HIGH_RISK" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
-        raise ValueError(
-            "HIGH_RISK must reject new signals."
-        )
-
-    if "UNKNOWN" not in MARKET_CONFIG["REJECT_NEW_SIGNALS_ON"]:
-        raise ValueError(
-            "UNKNOWN market must reject new signals."
-        )
-
-    # --------------------------------------------------------
-    # Signal score validation
-    # --------------------------------------------------------
-
-    if (
-        SIGNAL_CONFIG["MAX_SCORE"]
-        != len(SIGNAL_CONFIG["SCORE_COMPONENTS"])
-    ):
-        raise ValueError(
-            "Signal scoring configuration mismatch."
-        )
-
-    min_score = SIGNAL_CONFIG["MIN_SCORE"]
-    reject_score = SIGNAL_CONFIG["REJECT_MAX_SCORE"]
-    max_score = SIGNAL_CONFIG["MAX_SCORE"]
-
-    if not (
-        8 <= min_score <= max_score
-        and 0 <= reject_score < min_score
-    ):
-        raise ValueError(
-            "Invalid signal score boundaries."
-        )
-
-    if SIGNAL_CONFIG["STRONG_MIN_SCORE"] != min_score:
-        raise ValueError(
-            "Strong signal score configuration mismatch."
-        )
-
-    if SIGNAL_CONFIG["EXCELLENT_MIN_SCORE"] <= min_score:
-        raise ValueError(
-            "Excellent score must exceed strong score."
-        )
-
-    if SIGNAL_CONFIG["EXCELLENT_MIN_SCORE"] > max_score:
-        raise ValueError(
-            "Excellent score exceeds maximum score."
-        )
-
-    # --------------------------------------------------------
-    # Telegram validation
-    # --------------------------------------------------------
-
-    if TELEGRAM_CONFIG["MAX_MESSAGE_LENGTH"] <= 0:
-        raise ValueError(
-            "Telegram message length must be positive."
-        )
-
-    if TELEGRAM_CONFIG["REQUEST_TIMEOUT_SECONDS"] <= 0:
-        raise ValueError(
-            "Telegram timeout must be positive."
-        )
-
-    # --------------------------------------------------------
-    # Workflow validation
-    # --------------------------------------------------------
-
-    if WORKFLOW_CONFIG["DEFAULT_DRY_RUN"] is not True:
-        raise ValueError(
-            "Workflow default DRY_RUN must remain enabled."
-        )
-
-    if WORKFLOW_CONFIG["ALLOW_LIVE_WITHOUT_TESTS"] is not False:
-        raise ValueError(
-            "Live mode without tests is not allowed."
+            "Configuration validation failed:\n- "
+            + "\n- ".join(errors)
         )
 
     return True
 
 
 # ============================================================
-# 15. MODULE EXPORTS
+# 28. MODULE SELF-CHECK
 # ============================================================
 
-__all__ = [
-    "CONFIG",
-    "TIMEFRAMES",
-    "STRATEGIES",
-    "RISK_CONFIG",
-    "FILTER_CONFIG",
-    "INDICATOR_CONFIG",
-    "MARKET_CONFIG",
-    "SIGNAL_CONFIG",
-    "TRACKING_CONFIG",
-    "API_CONFIG",
-    "TELEGRAM_CONFIG",
-    "WORKFLOW_CONFIG",
-    "REQUIRED_CONFIG_EXPORTS",
-    "get_config",
-    "validate_config",
-]
+if __name__ == "__main__":
+
+    print("=" * 60)
+    print(SYSTEM_NAME)
+    print(f"Code Version: {CODE_VERSION}")
+    print(f"Formula Version: {FORMULA_VERSION}")
+    print("=" * 60)
+
+    validation_errors = validate_config()
+
+    if validation_errors:
+
+        print("CONFIGURATION: FAIL")
+
+        for error in validation_errors:
+            print(f"- {error}")
+
+        raise SystemExit(1)
+
+    print("CONFIGURATION: PASS")
+    print(f"Formula Score: {TOTAL_FORMULA_SCORE}")
+    print(f"Market: {MARKET_TYPE}")
+    print(f"Quote Asset: {QUOTE_ASSET}")
+    print(f"Capital: {get_capital_usdt():.2f} USDT")
+    print(f"Dry Run: {is_dry_run()}")
+
+    print("=" * 60)

@@ -1,6 +1,6 @@
 {
   "version": "4.0.0",
-  "updated_at": "2026-11-28T12:33:40.318258+00:00",
+  "updated_at": "2026-11-28T13:44:58.393858+00:00",
   "accounting_type": "ESTIMATED_NET_RETURN",
   "round_trip_fee_pct": 0.2,
   "estimated_slippage_pct": 0.1,
@@ -1236,15 +1236,15 @@
       "t1_hit": false,
       "t2_hit": false,
       "t3_hit": false,
-      "stop_loss_hit": false,
+      "stop_loss_hit": true,
       "stop_loss_touched": false,
-      "outcome": "PENDING",
-      "exit_price": null,
+      "outcome": "STOP_LOSS",
+      "exit_price": 0.1449,
       "exit_at": null,
       "gross_return_pct": null,
-      "return_pct": null,
+      "return_pct": -2.620968,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-28T12:32:59.999000+00:00",
+      "last_checked_at": "2026-11-28T13:41:59.999000+00:00",
       "last_closed_candle_at": "2026-11-27T21:02:00+00:00",
       "last_closed_candle_close": 0.1493,
       "data_error": null,
@@ -1254,7 +1254,10 @@
       "mfe_pct": 0.47043,
       "mae_pct": -1.075269,
       "last_candle_close": "2026-11-28T03:40:59.999000+00:00",
-      "candles_checked": 532
+      "candles_checked": 601,
+      "result": "STOP_LOSS",
+      "exit_time": "2026-11-28T13:41:00+00:00",
+      "net_return_pct": -2.920968
     },
     "XRPUSDT_SWING_20261126T035101.586796+0000": {
       "signal_id": "XRPUSDT_SWING_20261126T035101.586796+0000",
@@ -2498,7 +2501,7 @@
       "gross_return_pct": null,
       "return_pct": null,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-28T12:32:59.999000+00:00",
+      "last_checked_at": "2026-11-28T13:43:59.999000+00:00",
       "last_closed_candle_at": "2026-11-27T21:02:00+00:00",
       "last_closed_candle_close": 91.74,
       "data_error": null,
@@ -2508,7 +2511,7 @@
       "mfe_pct": 0.271769,
       "mae_pct": -1.619741,
       "last_candle_close": "2026-11-28T03:40:59.999000+00:00",
-      "candles_checked": 532
+      "candles_checked": 603
     },
     "FETUSDT_SCALP_20261127T191750.908178+0000": {
       "signal_id": "FETUSDT_SCALP_20261127T191750.908178+0000",
@@ -2796,18 +2799,18 @@
   },
   "summary": {
     "total": 78,
-    "pending": 2,
+    "pending": 1,
     "entry_reached": 68,
     "entry_window_expired": 0,
     "invalidated_before_entry": 10,
     "ambiguous": 0,
-    "stop_loss": 57,
+    "stop_loss": 58,
     "t1_hit": 24,
     "t2_hit": 14,
     "t3_hit": 5,
-    "completed": 62,
+    "completed": 63,
     "net_positive": 0,
-    "net_negative": 0,
-    "average_net_return_pct": null
+    "net_negative": 1,
+    "average_net_return_pct": -2.920968
   }
 }

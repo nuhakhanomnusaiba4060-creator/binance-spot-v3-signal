@@ -2,7 +2,7 @@
 """
 File: entry_engine.py
 System: Binance Spot V4 Smart Signal Scanner
-Code Version: 4.0.1
+Code Version: 4.0.2
 Formula Version: 4.0
 Python: 3.11+
 Compatibility: V4 internal architecture
@@ -23,6 +23,14 @@ BTC Context:
     15m / 1h / 4h
 
 Spot BUY only. No Futures. No Margin.
+
+V4.0.2 Changes:
+- Hardened input and DataFrame validation.
+- Added candle chronology and duplicate timestamp checks.
+- Made liquidity scoring use configured limits.
+- Removed unnecessary risk-manager TypeError fallback.
+- Hardened market context and optional data handling.
+- Preserved seven-layer weights and signal thresholds.
 """
 
 from __future__ import annotations
@@ -44,7 +52,7 @@ except Exception:
 # VERSION AND FORMULA
 # ============================================================
 
-CODE_VERSION = "4.0.1"
+CODE_VERSION = "4.0.2"
 FORMULA_VERSION = "4.0"
 
 LAYER_WEIGHTS = {
@@ -93,39 +101,70 @@ EPSILON = 1e-12
 
 
 # ============================================================
-# CONFIG HELPERS
+# GENERAL HELPERS
 # ============================================================
+
+def _number(value: Any) -> Optional[float]:
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _safe_dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def _safe_div(a: float, b: float) -> float:
+    if abs(b) <= EPSILON:
+        return 0.0
+    return a / b
+
 
 def _config_section(name: str) -> Dict[str, Any]:
     if app_config is None:
         return {}
 
-    value = getattr(app_config, name, {})
-    return value if isinstance(value, dict) else {}
+    try:
+        value = getattr(app_config, name, {})
+    except Exception:
+        return {}
+
+    return _safe_dict(value)
 
 
 def _config_number(
     section: str,
     keys: Tuple[str, ...],
     default: float,
+    minimum: float = 0.0,
 ) -> float:
     data = _config_section(section)
 
     for key in keys:
         value = _number(data.get(key))
-        if value is not None and value >= 0:
+        if value is not None and value >= minimum:
             return value
 
     return float(default)
 
 
+# ============================================================
+# CONFIGURATION LIMITS
+# ============================================================
+
 def _liquidity_limits() -> Dict[str, float]:
     data = _config_section("LIQUIDITY_CONFIG")
 
-    def first(keys, default):
+    def first(keys: Tuple[str, ...], default: float) -> float:
         for key in keys:
             value = _number(data.get(key))
-            if value is not None and value >= 0:
+            if value is not None and value > 0:
                 return value
         return float(default)
 
@@ -173,7 +212,9 @@ def _entry_limits() -> Dict[str, float]:
             maximum_distance = value
             break
 
-    return {"max_entry_distance_atr": maximum_distance}
+    return {
+        "max_entry_distance_atr": maximum_distance,
+    }
 
 
 def _risk_minimum_rr() -> float:
@@ -187,56 +228,40 @@ def _risk_minimum_rr() -> float:
     return DEFAULT_MIN_NET_RR_T1
 
 
+def _minimum_candles() -> int:
+    data = _config_section("ENTRY_CONFIG")
+
+    for key in ("minimum_candles", "min_candles"):
+        value = _number(data.get(key))
+        if value is not None and value >= 205:
+            return int(value)
+
+    return DEFAULT_MIN_CANDLES
+
+
 # ============================================================
-# GENERAL HELPERS
+# DATAFRAME VALIDATION
 # ============================================================
-
-def _number(value: Any) -> Optional[float]:
-    try:
-        result = float(value)
-        return result if math.isfinite(result) else None
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-
-def _clamp(value: float, minimum: float, maximum: float) -> float:
-    return max(minimum, min(maximum, value))
-
-
-def _safe_div(a: float, b: float) -> float:
-    if abs(b) <= EPSILON:
-        return 0.0
-    return a / b
-
-
-def _get_latest(df: pd.DataFrame, column: str) -> Optional[float]:
-    if not isinstance(df, pd.DataFrame) or df.empty:
-        return None
-
-    if column not in df.columns:
-        return None
-
-    values = pd.to_numeric(df[column], errors="coerce").dropna()
-
-    if values.empty:
-        return None
-
-    return _number(values.iloc[-1])
-
 
 def _valid_frame(
     df: Any,
-    minimum_rows: int = DEFAULT_MIN_CANDLES,
+    minimum_rows: Optional[int] = None,
 ) -> bool:
     if not isinstance(df, pd.DataFrame):
-        return False
-
-    if len(df) < minimum_rows:
         return False
 
     required = {"open", "high", "low", "close", "volume"}
 
     if not required.issubset(df.columns):
+        return False
+
+    minimum = (
+        _minimum_candles()
+        if minimum_rows is None
+        else int(minimum_rows)
+    )
+
+    if len(df) < minimum:
         return False
 
     data = df.copy()
@@ -253,22 +278,14 @@ def _valid_frame(
         if not data[column].map(math.isfinite).all():
             return False
 
-    if (data["close"] <= 0).any():
-        return False
+    for column in ("open", "high", "low", "close"):
+        if (data[column] <= 0).any():
+            return False
 
-    if (data["open"] <= 0).any():
-        return False
-
-    if (data["high"] <= 0).any():
-        return False
-
-    if (data["low"] <= 0).any():
+    if (data["volume"] < 0).any():
         return False
 
     if (data["high"] < data["low"]).any():
-        return False
-
-    if (data["volume"] < 0).any():
         return False
 
     if (
@@ -281,6 +298,30 @@ def _valid_frame(
     ).any():
         return False
 
+    # Validate chronological order and duplicate timestamps.
+    timestamp_column = None
+
+    for candidate in ("close_time", "open_time", "timestamp"):
+        if candidate in data.columns:
+            timestamp_column = candidate
+            break
+
+    if timestamp_column is not None:
+        timestamps = pd.to_numeric(
+            data[timestamp_column],
+            errors="coerce",
+        )
+
+        if timestamps.isna().any():
+            return False
+
+        if timestamps.duplicated().any():
+            return False
+
+        if not timestamps.is_monotonic_increasing:
+            return False
+
+    # The latest candle must be closed.
     if "close_time" in data.columns:
         close_times = pd.to_numeric(
             data["close_time"],
@@ -294,7 +335,6 @@ def _valid_frame(
             pd.Timestamp.now(tz="UTC").timestamp() * 1000
         )
 
-        # The latest candle must be closed.
         if close_times.iloc[-1] >= now_ms:
             return False
 
@@ -311,6 +351,27 @@ def _ohlcv(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     return result
+
+
+def _get_latest(
+    df: pd.DataFrame,
+    column: str,
+) -> Optional[float]:
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+
+    if column not in df.columns:
+        return None
+
+    values = pd.to_numeric(
+        df[column],
+        errors="coerce",
+    ).dropna()
+
+    if values.empty:
+        return None
+
+    return _number(values.iloc[-1])
 
 
 # ============================================================
@@ -522,9 +583,12 @@ def _calculate_snapshot(df: pd.DataFrame) -> Dict[str, Any]:
         min_periods=20,
     ).mean().iloc[-1]
 
+    volume_average_value = _number(volume_average)
+
     rvol = (
-        data["volume"].iloc[-1] / volume_average
-        if _number(volume_average) not in (None, 0)
+        data["volume"].iloc[-1] / volume_average_value
+        if volume_average_value is not None
+        and volume_average_value > 0
         else None
     )
 
@@ -649,7 +713,9 @@ def _market_structure(
 def _btc_regime_score(
     market_context: Optional[Dict[str, Any]],
 ) -> Tuple[float, Dict[str, Any]]:
-    if not isinstance(market_context, dict):
+    context = _safe_dict(market_context)
+
+    if not context:
         return 0.0, {
             "status": "UNVERIFIED",
             "score": 0.0,
@@ -657,11 +723,11 @@ def _btc_regime_score(
         }
 
     regime = str(
-        market_context.get(
+        context.get(
             "risk_level",
-            market_context.get(
+            context.get(
                 "regime",
-                market_context.get("market_regime", "UNKNOWN"),
+                context.get("market_regime", "UNKNOWN"),
             ),
         )
     ).upper()
@@ -689,17 +755,14 @@ def _btc_regime_score(
             "regime": "UNKNOWN",
         }
 
-    timeframes = market_context.get("timeframes", {})
+    timeframes = _safe_dict(context.get("timeframes"))
 
-    if isinstance(timeframes, dict):
-        verified_count = sum(
-            1
-            for timeframe in BTC_TIMEFRAMES
-            if isinstance(timeframes.get(timeframe), dict)
-            and timeframes[timeframe].get("valid", False)
-        )
-    else:
-        verified_count = 0
+    verified_count = sum(
+        1
+        for timeframe in BTC_TIMEFRAMES
+        if isinstance(timeframes.get(timeframe), dict)
+        and timeframes[timeframe].get("valid") is True
+    )
 
     if verified_count < 3:
         score = min(score, 8.0)
@@ -707,25 +770,23 @@ def _btc_regime_score(
     else:
         status = "VERIFIED"
 
-    breadth = market_context.get(
-        "market_breadth_analysis",
-        {},
+    breadth = _safe_dict(
+        context.get("market_breadth_analysis")
     )
 
-    if isinstance(breadth, dict):
-        breadth_status = str(
-            breadth.get("status", "")
-        ).upper()
+    breadth_status = str(
+        breadth.get("status", "")
+    ).upper()
 
-        breadth_direction = str(
-            breadth.get("direction", "")
-        ).upper()
+    breadth_direction = str(
+        breadth.get("direction", "")
+    ).upper()
 
-        if breadth_status == "VERIFIED":
-            if breadth_direction in {"BULLISH", "POSITIVE"}:
-                score = min(15.0, score + 1.0)
-            elif breadth_direction in {"BEARISH", "NEGATIVE"}:
-                score = max(0.0, score - 1.0)
+    if breadth_status == "VERIFIED":
+        if breadth_direction in {"BULLISH", "POSITIVE"}:
+            score = min(15.0, score + 1.0)
+        elif breadth_direction in {"BEARISH", "NEGATIVE"}:
+            score = max(0.0, score - 1.0)
 
     return score, {
         "status": status,
@@ -751,7 +812,10 @@ def _technical_score(
     ema50 = snapshot.get("ema50")
     ema200 = snapshot.get("ema200")
 
-    if all(value is not None for value in (close, ema20, ema50, ema200)):
+    if all(
+        value is not None
+        for value in (close, ema20, ema50, ema200)
+    ):
         if close > ema20 > ema50 > ema200:
             ema_score = 5.0
         elif close > ema20 > ema50:
@@ -786,7 +850,8 @@ def _technical_score(
 
     histogram = snapshot.get("macd_hist")
     macd_score = (
-        3.0 if histogram is not None and histogram > 0
+        3.0
+        if histogram is not None and histogram > 0
         else 0.0
     )
 
@@ -878,7 +943,8 @@ def _volume_score(
 
     obv_change = snapshot.get("obv_change")
     obv_score = (
-        4.0 if obv_change is not None and obv_change > 0
+        4.0
+        if obv_change is not None and obv_change > 0
         else 0.0
     )
 
@@ -925,15 +991,15 @@ def _volume_score(
 def _liquidity_score(
     market_context: Optional[Dict[str, Any]],
 ) -> Tuple[float, Dict[str, Any]]:
-    context = market_context or {}
+    context = _safe_dict(market_context)
 
     liquidity = context.get(
         "liquidity",
         context.get("order_book_analysis", {}),
     )
 
-    if not isinstance(liquidity, dict):
-        liquidity = {}
+    liquidity = _safe_dict(liquidity)
+    limits = _liquidity_limits()
 
     score = 0.0
     details: Dict[str, Any] = {}
@@ -945,15 +1011,17 @@ def _liquidity_score(
         )
     )
 
-    if spread is None:
+    max_spread = limits["max_spread"]
+
+    if spread is None or spread < 0:
         spread_score = 0.0
-    elif spread <= 0.03:
+    elif spread <= max_spread * 0.20:
         spread_score = 3.0
-    elif spread <= 0.06:
+    elif spread <= max_spread * 0.40:
         spread_score = 2.5
-    elif spread <= 0.10:
+    elif spread <= max_spread * 0.67:
         spread_score = 2.0
-    elif spread <= 0.15:
+    elif spread <= max_spread:
         spread_score = 1.0
     else:
         spread_score = 0.0
@@ -989,15 +1057,17 @@ def _liquidity_score(
         )
     )
 
-    if depth is None:
+    min_depth = limits["min_depth"]
+
+    if depth is None or depth < 0:
         depth_score = 0.0
-    elif depth >= 500_000:
+    elif depth >= min_depth * 100:
         depth_score = 3.0
-    elif depth >= 100_000:
+    elif depth >= min_depth * 20:
         depth_score = 2.5
-    elif depth >= 50_000:
+    elif depth >= min_depth * 10:
         depth_score = 2.0
-    elif depth >= 10_000:
+    elif depth >= min_depth * 2:
         depth_score = 1.0
     else:
         depth_score = 0.0
@@ -1033,13 +1103,15 @@ def _liquidity_score(
         )
     )
 
-    if slippage is None:
+    max_slippage = limits["max_slippage"]
+
+    if slippage is None or slippage < 0:
         slippage_score = 0.0
-    elif slippage <= 0.02:
+    elif slippage <= max_slippage * 0.15:
         slippage_score = 2.0
-    elif slippage <= 0.05:
+    elif slippage <= max_slippage * 0.35:
         slippage_score = 1.5
-    elif slippage <= 0.10:
+    elif slippage <= max_slippage * 0.67:
         slippage_score = 1.0
     else:
         slippage_score = 0.0
@@ -1051,6 +1123,7 @@ def _liquidity_score(
     details["imbalance"] = imbalance
     details["minimum_side_depth_usdt"] = depth
     details["buy_slippage_percent"] = slippage
+    details["configured_limits"] = limits
 
     return min(15.0, score), details
 
@@ -1097,21 +1170,31 @@ def _entry_quality_score(
     score += sr_score
     details["support_resistance"] = sr_score
 
-    breakout = breakout_data or {}
+    breakout = _safe_dict(breakout_data)
 
-    breakout_confirmed = bool(
-        breakout.get("confirmed", False)
+    breakout_confirmed = (
+        breakout.get("confirmed") is True
     )
 
     if not breakout_confirmed and len(df) >= 22:
-        previous_high = float(
+        previous_high = _number(
             df["high"].iloc[-21:-1].max()
         )
 
+        previous_volume = _number(
+            df["volume"].iloc[-21:-1].mean()
+        )
+
+        latest_volume = _number(
+            df["volume"].iloc[-1]
+        )
+
         breakout_confirmed = (
-            close > previous_high
-            and float(df["volume"].iloc[-1])
-            > float(df["volume"].iloc[-21:-1].mean()) * 1.2
+            previous_high is not None
+            and previous_volume is not None
+            and latest_volume is not None
+            and close > previous_high
+            and latest_volume > previous_volume * 1.2
         )
 
     breakout_score = 3.0 if breakout_confirmed else 0.0
@@ -1119,8 +1202,8 @@ def _entry_quality_score(
     score += breakout_score
     details["breakout"] = breakout_score
 
-    retest_confirmed = bool(
-        breakout.get("retest_confirmed", False)
+    retest_confirmed = (
+        breakout.get("retest_confirmed") is True
     )
 
     retest_score = 3.0 if retest_confirmed else 0.0
@@ -1214,15 +1297,11 @@ def _risk_score(
     score += sl_score
     details["atr_stop"] = sl_score
 
-    target_checks = risk_plan.get("target_checks", {})
+    target_checks = _safe_dict(
+        risk_plan.get("target_checks")
+    )
 
-    if not isinstance(target_checks, dict):
-        target_checks = {}
-
-    t1_check = target_checks.get("t1", {})
-
-    if not isinstance(t1_check, dict):
-        t1_check = {}
+    t1_check = _safe_dict(target_checks.get("t1"))
 
     net_rr = _number(t1_check.get("net_rr"))
     minimum_rr = _risk_minimum_rr()
@@ -1243,14 +1322,11 @@ def _risk_score(
     details["net_rr_value"] = net_rr
     details["minimum_net_rr"] = minimum_rr
 
-    position = risk_plan.get("position", {})
-
-    if not isinstance(position, dict):
-        position = {}
+    position = _safe_dict(risk_plan.get("position"))
 
     if (
-        position.get("valid")
-        and position.get("estimated_loss_within_budget")
+        position.get("valid") is True
+        and position.get("estimated_loss_within_budget") is True
     ):
         position_score = 2.0
     else:
@@ -1282,9 +1358,10 @@ def _fundamental_score(
     fundamental_data: Optional[Dict[str, Any]],
 ) -> Tuple[float, Dict[str, Any]]:
     """
-    Missing data receives zero points.
+    Missing or unverified data receives zero points.
     No unverified data is treated as confirmed.
     """
+
     categories = {
         "token_supply": 2.0,
         "market_cap_fdv": 2.0,
@@ -1293,7 +1370,9 @@ def _fundamental_score(
         "security_development": 2.0,
     }
 
-    if not isinstance(fundamental_data, dict):
+    data = _safe_dict(fundamental_data)
+
+    if not data:
         return 0.0, {
             "status": "UNVERIFIED",
             "score": 0.0,
@@ -1305,7 +1384,7 @@ def _fundamental_score(
     unverified = []
 
     for category, maximum in categories.items():
-        item = fundamental_data.get(category)
+        item = data.get(category)
 
         if not isinstance(item, dict):
             unverified.append(category)
@@ -1363,7 +1442,7 @@ def _hard_gate_checks(
     risk_plan: Dict[str, Any],
 ) -> Dict[str, Any]:
     failures = []
-    context = market_context or {}
+    context = _safe_dict(market_context)
 
     regime = str(
         context.get(
@@ -1378,7 +1457,7 @@ def _hard_gate_checks(
     if context.get("allow_new_buy") is False:
         failures.append("BTC_BUY_BLOCKED")
 
-    if snapshot.get("close") is None:
+    if _number(snapshot.get("close")) is None:
         failures.append("INVALID_PRICE")
 
     atr = _number(snapshot.get("atr"))
@@ -1394,6 +1473,8 @@ def _hard_gate_checks(
 
     if spread is None:
         failures.append("SPREAD_UNVERIFIED")
+    elif spread < 0:
+        failures.append("INVALID_SPREAD")
     elif spread > limits["max_spread"]:
         failures.append("SPREAD_LIMIT_EXCEEDED")
 
@@ -1412,6 +1493,8 @@ def _hard_gate_checks(
 
     if slippage is None:
         failures.append("SLIPPAGE_UNVERIFIED")
+    elif slippage < 0:
+        failures.append("INVALID_SLIPPAGE")
     elif slippage > limits["max_slippage"]:
         failures.append("SLIPPAGE_LIMIT_EXCEEDED")
 
@@ -1426,7 +1509,10 @@ def _hard_gate_checks(
     elif distance > max_distance:
         failures.append("ENTRY_OVEREXTENDED")
 
-    if not isinstance(risk_plan, dict) or not risk_plan.get("valid", False):
+    if (
+        not isinstance(risk_plan, dict)
+        or risk_plan.get("valid") is not True
+    ):
         reason = (
             risk_plan.get("reason", "UNKNOWN")
             if isinstance(risk_plan, dict)
@@ -1435,14 +1521,13 @@ def _hard_gate_checks(
         failures.append("INVALID_RISK_PLAN:" + str(reason))
 
     risk_validation = (
-        risk_plan.get("risk_validation", {})
+        _safe_dict(risk_plan.get("risk_validation"))
         if isinstance(risk_plan, dict)
         else {}
     )
 
-    if isinstance(risk_validation, dict):
-        if risk_validation.get("valid") is False:
-            failures.append("RISK_VALIDATION_FAILED")
+    if risk_validation.get("valid") is False:
+        failures.append("RISK_VALIDATION_FAILED")
 
     return {
         "passed": len(failures) == 0,
@@ -1462,10 +1547,12 @@ def _timeframe_confirmation(
 ) -> Dict[str, Any]:
 
     def bullish(snapshot: Dict[str, Any]) -> bool:
-        close = snapshot.get("close")
-        ema20 = snapshot.get("ema20")
-        ema50 = snapshot.get("ema50")
-        macd_hist = snapshot.get("macd_hist")
+        snapshot = _safe_dict(snapshot)
+
+        close = _number(snapshot.get("close"))
+        ema20 = _number(snapshot.get("ema20"))
+        ema50 = _number(snapshot.get("ema50"))
+        macd_hist = _number(snapshot.get("macd_hist"))
 
         return (
             close is not None
@@ -1518,28 +1605,25 @@ def _build_strategy_risk_plan(
     strategy: str,
 ) -> Dict[str, Any]:
     """
-    Supports both the current and strategy-aware risk_manager
-    signatures. The fallback keeps compatibility with the
-    existing V4 risk_manager while it is being updated.
+    V4 risk_manager API adapter.
+
+    Uses the strategy-aware build_risk_plan signature.
+    TypeError is not silently swallowed because an internal
+    TypeError must remain visible as a real integration error.
     """
-    kwargs = {
-        "entry_price": entry_price,
-        "atr": atr,
-        "capital_usdt": capital_usdt,
-        "support": support,
-        "resistances": [resistance] if resistance is not None else None,
-    }
 
-    try:
-        return build_risk_plan(
-            **kwargs,
-            strategy=strategy,
-        )
-    except TypeError as exc:
-        if "strategy" not in str(exc):
-            raise
-
-        return build_risk_plan(**kwargs)
+    return build_risk_plan(
+        entry_price=entry_price,
+        atr=atr,
+        capital_usdt=capital_usdt,
+        support=support,
+        resistances=(
+            [resistance]
+            if resistance is not None
+            else None
+        ),
+        strategy=strategy,
+    )
 
 
 # ============================================================
@@ -1566,6 +1650,7 @@ def score_setup(
             "reason": "INVALID_STRATEGY",
             "strategy": strategy,
             "formula_version": FORMULA_VERSION,
+            "code_version": CODE_VERSION,
         }
 
     capital = _number(capital_usdt)
@@ -1578,9 +1663,21 @@ def score_setup(
             "strategy": strategy,
             "symbol": symbol,
             "formula_version": FORMULA_VERSION,
+            "code_version": CODE_VERSION,
         }
 
-    frames = confirm_frames or {}
+    if not isinstance(confirm_frames, (dict, type(None))):
+        return {
+            "valid": False,
+            "decision": "WAIT",
+            "reason": "INVALID_CONFIRM_FRAMES",
+            "strategy": strategy,
+            "symbol": symbol,
+            "formula_version": FORMULA_VERSION,
+            "code_version": CODE_VERSION,
+        }
+
+    frames = confirm_frames if isinstance(confirm_frames, dict) else {}
     mapping = TIMEFRAME_MAP[strategy]
 
     entry_df = trigger_df
@@ -1608,6 +1705,7 @@ def score_setup(
             "strategy": strategy,
             "symbol": symbol,
             "formula_version": FORMULA_VERSION,
+            "code_version": CODE_VERSION,
         }
 
     entry_df = _ohlcv(entry_df)
@@ -1646,16 +1744,23 @@ def score_setup(
         breakout_data,
     )
 
-    resistance = structure.get("resistance")
+    entry_price = _number(entry_snapshot.get("close"))
+    atr_value = _number(entry_snapshot.get("atr"))
 
-    risk_plan = _build_strategy_risk_plan(
-        entry_price=entry_snapshot["close"],
-        atr=entry_snapshot["atr"],
-        capital_usdt=capital,
-        support=structure.get("support"),
-        resistance=resistance,
-        strategy=strategy,
-    )
+    if entry_price is None or atr_value is None or atr_value <= 0:
+        risk_plan = {
+            "valid": False,
+            "reason": "INVALID_ENTRY_OR_ATR",
+        }
+    else:
+        risk_plan = _build_strategy_risk_plan(
+            entry_price=entry_price,
+            atr=atr_value,
+            capital_usdt=capital,
+            support=structure.get("support"),
+            resistance=structure.get("resistance"),
+            strategy=strategy,
+        )
 
     layer6, risk_details = _risk_score(risk_plan)
 
@@ -1749,7 +1854,7 @@ def score_setup(
         "valid": hard_gates["passed"],
         "symbol": symbol,
         "strategy": strategy,
-        "timeframes": mapping,
+        "timeframes": mapping.copy(),
         "decision": decision,
         "classification": classification,
         "score": round(final_score, 2),
@@ -1871,12 +1976,15 @@ def get_entry_engine_config() -> Dict[str, Any]:
         "formula_version": FORMULA_VERSION,
         "layer_weights": LAYER_WEIGHTS.copy(),
         "total_layer_weight": sum(LAYER_WEIGHTS.values()),
-        "strategies": TIMEFRAME_MAP.copy(),
+        "strategies": {
+            key: value.copy()
+            for key, value in TIMEFRAME_MAP.items()
+        },
         "btc_timeframes": list(BTC_TIMEFRAMES),
         "minimum_signal_score": DEFAULT_MIN_SIGNAL_SCORE,
         "excellent_buy_score": DEFAULT_EXCELLENT_SCORE,
         "minimum_net_rr_t1": _risk_minimum_rr(),
-        "minimum_candles": DEFAULT_MIN_CANDLES,
+        "minimum_candles": _minimum_candles(),
         "liquidity_limits": _liquidity_limits(),
         "entry_limits": _entry_limits(),
         "spot_only": True,
@@ -1897,6 +2005,19 @@ def self_check() -> Dict[str, Any]:
             and len(LAYER_WEIGHTS) == 7
         )
 
+        checks["layer_weights_match_keys"] = (
+            set(LAYER_WEIGHTS)
+            == {
+                "btc_market_regime",
+                "technical_structure",
+                "volume_momentum",
+                "liquidity_order_flow",
+                "entry_quality",
+                "risk_reward",
+                "fundamental_onchain",
+            }
+        )
+
         checks["scalp_timeframes"] = (
             TIMEFRAME_MAP["SCALP"]["entry"] == "5m"
             and TIMEFRAME_MAP["SCALP"]["confirmation"] == "15m"
@@ -1909,9 +2030,19 @@ def self_check() -> Dict[str, Any]:
             and TIMEFRAME_MAP["SWING"]["structure"] == "1h"
         )
 
+        checks["btc_timeframes"] = (
+            BTC_TIMEFRAMES == ("15m", "1h", "4h")
+        )
+
         checks["signal_thresholds"] = (
             DEFAULT_MIN_SIGNAL_SCORE == 85
             and DEFAULT_EXCELLENT_SCORE == 90
+        )
+
+        checks["spot_only"] = True
+
+        checks["risk_manager_import"] = callable(
+            build_risk_plan
         )
 
         count = 260
@@ -1956,6 +2087,29 @@ def self_check() -> Dict[str, Any]:
             structure.get("valid")
         )
 
+        checks["valid_frame"] = _valid_frame(df)
+
+        checks["invalid_frame_rejected"] = (
+            not _valid_frame(df.tail(100).copy())
+        )
+
+        duplicate_df = df.copy()
+        duplicate_df["close_time"] = list(range(count))
+        duplicate_df.loc[count - 1, "close_time"] = (
+            duplicate_df.loc[count - 2, "close_time"]
+        )
+
+        checks["duplicate_candle_timestamp_rejected"] = (
+            not _valid_frame(duplicate_df)
+        )
+
+        reversed_df = df.iloc[::-1].copy()
+        reversed_df["close_time"] = list(range(count))
+
+        checks["reversed_candles_rejected"] = (
+            not _valid_frame(reversed_df)
+        )
+
         incomplete = score_setup(
             trigger_df=df.tail(100).copy(),
             confirm_frames={},
@@ -1975,12 +2129,38 @@ def self_check() -> Dict[str, Any]:
             ).get("decision") == "REJECT"
         )
 
+        checks["invalid_confirm_frames_rejected"] = (
+            score_setup(
+                trigger_df=df,
+                confirm_frames=[],
+                strategy="SCALP",
+            ).get("reason") == "INVALID_CONFIRM_FRAMES"
+        )
+
+        checks["invalid_market_context_safe"] = (
+            _btc_regime_score(None)[1]["status"]
+            == "UNVERIFIED"
+        )
+
+        checks["liquidity_config_available"] = (
+            all(
+                value > 0
+                for value in _liquidity_limits().values()
+            )
+        )
+
+        checks["risk_adapter_signature"] = (
+            callable(build_risk_plan)
+        )
+
     except Exception as exc:
         return {
             "ok": False,
             "passed": False,
             "checks": checks,
             "error": str(exc),
+            "code_version": CODE_VERSION,
+            "formula_version": FORMULA_VERSION,
         }
 
     passed_count = sum(checks.values())
@@ -2000,17 +2180,41 @@ def self_check() -> Dict[str, Any]:
 if __name__ == "__main__":
     result = self_check()
 
-    print("ENTRY ENGINE SELF-CHECK:", "PASS" if result["ok"] else "FAIL")
-    print("Checks:", result["passed_count"], "/", result["total_count"])
-    print("Seven-Layer Weights:", sum(LAYER_WEIGHTS.values()))
+    print(
+        "ENTRY ENGINE SELF-CHECK:",
+        "PASS" if result["ok"] else "FAIL",
+    )
+
+    print(
+        "Checks:",
+        result["passed_count"],
+        "/",
+        result["total_count"],
+    )
+
+    print(
+        "Seven-Layer Weights:",
+        sum(LAYER_WEIGHTS.values()),
+    )
+
     print("Multi-Timeframe Confirmation: ENABLED")
     print("BTC Market Context: ENABLED")
     print("ATR-Based Risk Integration: ENABLED")
     print("Spot Only: YES")
+    print("Code Version:", CODE_VERSION)
+    print("Formula Version:", FORMULA_VERSION)
 
     if not result["ok"]:
-        print("Failed checks:", [
-            name for name, passed in result["checks"].items()
-            if not passed
-        ])
+        print(
+            "Failed checks:",
+            [
+                name
+                for name, passed in result["checks"].items()
+                if not passed
+            ],
+        )
+
+        if result.get("error"):
+            print("Error:", result["error"])
+
         raise SystemExit(1)

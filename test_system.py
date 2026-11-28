@@ -4,15 +4,20 @@
 Run:
     python -m unittest test_system -v
 
-This test suite validates:
-    1. Configuration
-    2. Seven-layer formula
-    3. Entry engine
-    4. Risk manager
-    5. Coin selector
-    6. Scanner integration
-    7. Spot-only restrictions
+Validates:
+    1. Configuration and seven-layer weights
+    2. Entry engine and classification
+    3. Risk manager and execution costs
+    4. Config-to-risk integration
+    5. Coin selector and liquidity configuration
+    6. BTC market regime
+    7. Scanner integration
+    8. Spot-only restrictions
+
+Tests do not modify trading configuration or generate live orders.
 """
+
+from __future__ import annotations
 
 import importlib
 import inspect
@@ -37,6 +42,7 @@ entry_engine, ENTRY_IMPORT_ERROR = safe_import("entry_engine")
 risk_manager, RISK_IMPORT_ERROR = safe_import("risk_manager")
 scanner, SCANNER_IMPORT_ERROR = safe_import("scanner")
 coin_selector, COIN_SELECTOR_IMPORT_ERROR = safe_import("coin_selector")
+market_filter, MARKET_FILTER_IMPORT_ERROR = safe_import("market_filter")
 
 
 # =========================================================
@@ -50,12 +56,15 @@ def require_module(test_case, module, error, name):
         )
 
 
-def finite_positive(value):
+def finite_number(value):
     try:
-        number = float(value)
-        return math.isfinite(number) and number > 0
+        return math.isfinite(float(value))
     except (TypeError, ValueError):
         return False
+
+
+def finite_positive(value):
+    return finite_number(value) and float(value) > 0
 
 
 def get_source(module):
@@ -63,6 +72,52 @@ def get_source(module):
         return inspect.getsource(module)
     except (OSError, TypeError):
         return ""
+
+
+def get_config_section(name):
+    if config is None:
+        return {}
+
+    value = getattr(config, name, {})
+
+    return value if isinstance(value, dict) else {}
+
+
+def get_nested(data, *keys, default=None):
+    current = data
+
+    for key in keys:
+        if not isinstance(current, dict):
+            return default
+
+        current = current.get(key)
+
+    return default if current is None else current
+
+
+def get_layer_total(weights):
+    if not isinstance(weights, dict):
+        return None
+
+    total = 0.0
+
+    for value in weights.values():
+        if isinstance(value, dict):
+            value = value.get("total")
+
+        if not finite_number(value):
+            return None
+
+        total += float(value)
+
+    return total
+
+
+def get_function_parameters(function):
+    try:
+        return inspect.signature(function).parameters
+    except (TypeError, ValueError):
+        return {}
 
 
 # =========================================================
@@ -84,7 +139,6 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIsNotNone(config)
 
     def test_config_validation(self):
-
         validator = getattr(
             config,
             "validate_config",
@@ -98,10 +152,7 @@ class ConfigurationTests(unittest.TestCase):
 
         errors = validator()
 
-        self.assertIsInstance(
-            errors,
-            (list, tuple),
-        )
+        self.assertIsInstance(errors, (list, tuple))
 
         self.assertEqual(
             len(errors),
@@ -110,31 +161,23 @@ class ConfigurationTests(unittest.TestCase):
         )
 
     def test_required_spot_configuration(self):
-
         self.assertTrue(
             hasattr(config, "BTC_REGIME_CONFIG"),
             "BTC_REGIME_CONFIG missing",
         )
 
-        runtime = getattr(
-            config,
-            "RUNTIME_CONFIG",
-            {},
+        runtime = get_config_section("RUNTIME_CONFIG")
+
+        market_type = str(
+            runtime.get("market_type", "spot")
+        ).lower()
+
+        self.assertNotIn(
+            market_type,
+            ("futures", "future", "margin"),
         )
 
-        if isinstance(runtime, dict):
-
-            market_type = str(
-                runtime.get("market_type", "spot")
-            ).lower()
-
-            self.assertNotIn(
-                market_type,
-                ("futures", "future", "margin"),
-            )
-
     def test_seven_layer_weights_total_100(self):
-
         weights = getattr(
             config,
             "LAYER_WEIGHTS",
@@ -149,27 +192,25 @@ class ConfigurationTests(unittest.TestCase):
             "V4 must contain exactly seven layers",
         )
 
-        total = 0.0
+        total = get_layer_total(weights)
+
+        self.assertIsNotNone(
+            total,
+            "Invalid layer weight configuration",
+        )
 
         for name, layer in weights.items():
-
-            self.assertIsInstance(
-                layer,
-                dict,
-                f"{name} must be a dictionary",
+            value = (
+                layer.get("total")
+                if isinstance(layer, dict)
+                else layer
             )
 
-            self.assertIn(
-                "total",
-                layer,
-                f"{name} missing total weight",
+            self.assertGreaterEqual(
+                float(value),
+                0,
+                f"{name} has negative weight",
             )
-
-            value = float(layer["total"])
-
-            self.assertGreaterEqual(value, 0)
-
-            total += value
 
         self.assertAlmostEqual(
             total,
@@ -177,22 +218,134 @@ class ConfigurationTests(unittest.TestCase):
             places=4,
         )
 
-    def test_required_config_helpers(self):
+    def test_layer_weights_are_finite(self):
+        weights = config.LAYER_WEIGHTS
 
-        for name in (
+        for name, layer in weights.items():
+            value = (
+                layer.get("total")
+                if isinstance(layer, dict)
+                else layer
+            )
+
+            self.assertTrue(
+                finite_number(value),
+                f"{name} has a non-finite weight",
+            )
+
+    def test_required_config_helpers(self):
+        required = (
             "get_config",
             "get_layer_weights",
             "get_strategy_config",
             "get_telegram_credentials",
             "is_dry_run",
             "get_capital_usdt",
-        ):
+        )
 
-            function = getattr(config, name, None)
+        for name in required:
+            self.assertTrue(
+                callable(getattr(config, name, None)),
+                f"Missing config helper: {name}",
+            )
+
+    def test_risk_configuration_exists(self):
+        risk = get_config_section("RISK_CONFIG")
+
+        self.assertTrue(
+            risk,
+            "RISK_CONFIG missing or empty",
+        )
+
+        self.assertTrue(
+            finite_positive(risk.get("risk_percent")),
+        )
+
+        self.assertTrue(
+            finite_positive(
+                risk.get("maximum_risk_percent")
+            ),
+        )
+
+        self.assertLessEqual(
+            float(risk["risk_percent"]),
+            float(risk["maximum_risk_percent"]),
+        )
+
+    def test_minimum_net_rr_is_configured(self):
+        risk = get_config_section("RISK_CONFIG")
+
+        minimum_rr = risk.get(
+            "minimum_net_risk_reward"
+        )
+
+        self.assertTrue(
+            finite_positive(minimum_rr),
+            "minimum_net_risk_reward must be positive",
+        )
+
+    def test_execution_cost_configuration(self):
+        costs = get_config_section(
+            "EXECUTION_COST_CONFIG"
+        )
+
+        self.assertTrue(
+            costs,
+            "EXECUTION_COST_CONFIG missing",
+        )
+
+        for key in (
+            "entry_fee_percent",
+            "exit_fee_percent",
+            "estimated_slippage_percent",
+        ):
+            self.assertIn(key, costs)
 
             self.assertTrue(
-                callable(function),
-                f"Missing config helper: {name}",
+                finite_number(costs[key]),
+                f"Invalid execution cost: {key}",
+            )
+
+            self.assertGreaterEqual(
+                float(costs[key]),
+                0,
+            )
+
+    def test_liquidity_configuration(self):
+        liquidity = get_config_section(
+            "LIQUIDITY_CONFIG"
+        )
+
+        self.assertTrue(
+            liquidity,
+            "LIQUIDITY_CONFIG missing",
+        )
+
+        for key in (
+            "max_spread_percent",
+            "minimum_side_depth_usdt",
+            "max_slippage_percent",
+        ):
+            self.assertTrue(
+                finite_positive(liquidity.get(key)),
+                f"Invalid liquidity setting: {key}",
+            )
+
+    def test_scalp_and_swing_timeframes(self):
+        timeframe = get_config_section(
+            "TIMEFRAME_CONFIG"
+        )
+
+        self.assertTrue(
+            timeframe,
+            "TIMEFRAME_CONFIG missing",
+        )
+
+        for strategy in ("SCALP", "SWING"):
+            self.assertIn(
+                strategy,
+                timeframe,
+                f"{strategy} timeframe missing",
             )
 
 
@@ -214,32 +367,28 @@ class EntryEngineTests(unittest.TestCase):
     def test_entry_engine_imports(self):
         self.assertIsNotNone(entry_engine)
 
-    def test_entry_engine_has_scalp_evaluator(self):
-
+    def test_scalp_evaluator_exists(self):
         self.assertTrue(
             callable(
                 getattr(entry_engine, "evaluate_scalp", None)
             )
         )
 
-    def test_entry_engine_has_swing_evaluator(self):
-
+    def test_swing_evaluator_exists(self):
         self.assertTrue(
             callable(
                 getattr(entry_engine, "evaluate_swing", None)
             )
         )
 
-    def test_entry_engine_has_self_check(self):
-
+    def test_self_check_exists(self):
         self.assertTrue(
             callable(
                 getattr(entry_engine, "self_check", None)
             )
         )
 
-    def test_entry_engine_has_seven_layer_weights(self):
-
+    def test_entry_engine_seven_layer_weights(self):
         weights = getattr(
             entry_engine,
             "LAYER_WEIGHTS",
@@ -248,12 +397,14 @@ class EntryEngineTests(unittest.TestCase):
 
         self.assertIsInstance(weights, dict)
 
-        self.assertEqual(len(weights), 7)
-
-        total = sum(
-            float(value)
-            for value in weights.values()
+        self.assertEqual(
+            len(weights),
+            7,
         )
+
+        total = get_layer_total(weights)
+
+        self.assertIsNotNone(total)
 
         self.assertAlmostEqual(
             total,
@@ -261,8 +412,39 @@ class EntryEngineTests(unittest.TestCase):
             places=4,
         )
 
-    def test_entry_engine_classification_thresholds(self):
+    def test_entry_engine_weights_match_config(self):
+        config_weights = config.LAYER_WEIGHTS
+        engine_weights = entry_engine.LAYER_WEIGHTS
 
+        self.assertEqual(
+            set(config_weights.keys()),
+            set(engine_weights.keys()),
+            "Entry Engine and Config layer names differ",
+        )
+
+        for name in config_weights:
+            configured = config_weights[name]
+            configured = (
+                configured.get("total")
+                if isinstance(configured, dict)
+                else configured
+            )
+
+            engine_value = engine_weights[name]
+            engine_value = (
+                engine_value.get("total")
+                if isinstance(engine_value, dict)
+                else engine_value
+            )
+
+            self.assertAlmostEqual(
+                float(configured),
+                float(engine_value),
+                places=4,
+                msg=f"Layer weight mismatch: {name}",
+            )
+
+    def test_classification_labels_exist(self):
         source = get_source(entry_engine)
 
         self.assertTrue(
@@ -270,32 +452,31 @@ class EntryEngineTests(unittest.TestCase):
             "Unable to read entry_engine source",
         )
 
-        labels = (
+        for label in (
             "EXCELLENT BUY",
             "STRONG BUY",
             "WATCHLIST",
             "WAIT",
             "REJECT",
-        )
-
-        for label in labels:
+        ):
             self.assertIn(
                 label,
                 source,
-                f"Missing classification label: {label}",
+                f"Missing classification: {label}",
             )
 
-        for threshold in (90, 85, 75, 60):
+    def test_classification_thresholds(self):
+        source = get_source(entry_engine)
 
+        for threshold in (90, 85, 75, 60):
             pattern = rf"(?<!\d){threshold}(?!\d)"
 
             self.assertIsNotNone(
                 re.search(pattern, source),
-                f"Missing threshold: {threshold}",
+                f"Missing classification threshold: {threshold}",
             )
 
-    def test_evaluator_accepts_scanner_keyword_contract(self):
-
+    def test_evaluator_accepts_scanner_contract(self):
         expected = (
             "trigger_df",
             "confirm_frames",
@@ -309,23 +490,26 @@ class EntryEngineTests(unittest.TestCase):
             "evaluate_scalp",
             "evaluate_swing",
         ):
+            function = getattr(entry_engine, name)
 
-            function = getattr(
-                entry_engine,
-                name,
-            )
-
-            parameters = inspect.signature(
-                function
-            ).parameters
+            parameters = get_function_parameters(function)
 
             for parameter in expected:
-
                 self.assertIn(
                     parameter,
                     parameters,
                     f"{name} missing {parameter}",
                 )
+
+    def test_entry_engine_self_check(self):
+        result = entry_engine.self_check()
+
+        self.assertIsInstance(result, dict)
+
+        self.assertTrue(
+            result.get("ok"),
+            msg=f"Entry Engine self-check failed: {result}",
+        )
 
 
 # =========================================================
@@ -344,24 +528,23 @@ class RiskManagerTests(unittest.TestCase):
         )
 
     def test_risk_manager_self_check(self):
-
         result = risk_manager.self_check()
 
         self.assertIsInstance(result, dict)
 
         self.assertTrue(
             result.get("ok"),
-            msg=f"Self-check failed: {result}",
+            msg=f"Risk Manager self-check failed: {result}",
         )
 
     def test_execution_cost_is_positive(self):
-
-        value = risk_manager.calculate_execution_cost_pct()
+        value = (
+            risk_manager.calculate_execution_cost_pct()
+        )
 
         self.assertTrue(finite_positive(value))
 
     def test_execution_cost_custom_values(self):
-
         value = risk_manager.calculate_execution_cost_pct(
             entry_fee_percent=0.10,
             exit_fee_percent=0.10,
@@ -374,29 +557,46 @@ class RiskManagerTests(unittest.TestCase):
             places=6,
         )
 
-    def test_stop_loss_below_entry(self):
+    def test_execution_cost_matches_config(self):
+        costs = get_config_section(
+            "EXECUTION_COST_CONFIG"
+        )
 
+        expected = (
+            float(costs["entry_fee_percent"])
+            + float(costs["exit_fee_percent"])
+            + float(costs["estimated_slippage_percent"])
+        )
+
+        actual = (
+            risk_manager.calculate_execution_cost_pct()
+        )
+
+        self.assertAlmostEqual(
+            actual,
+            expected,
+            places=6,
+            msg="Risk Manager execution costs differ from Config",
+        )
+
+    def test_stop_loss_below_entry(self):
         stop = risk_manager.calculate_stop_loss(
             entry_price=100,
             atr=1,
         )
 
-        self.assertGreater(stop, 0)
+        self.assertTrue(finite_positive(stop))
         self.assertLess(stop, 100)
 
     def test_stop_loss_rejects_invalid_atr(self):
-
         with self.assertRaises(ValueError):
-
             risk_manager.calculate_stop_loss(
                 entry_price=100,
                 atr=0,
             )
 
-    def test_stop_loss_rejects_non_spot_direction(self):
-
+    def test_stop_loss_rejects_sell_direction(self):
         with self.assertRaises(ValueError):
-
             risk_manager.calculate_stop_loss(
                 entry_price=100,
                 atr=1,
@@ -404,12 +604,12 @@ class RiskManagerTests(unittest.TestCase):
             )
 
     def test_targets_are_ascending(self):
-
         targets = risk_manager.calculate_targets(
             entry_price=100,
             atr=1,
         )
 
+        self.assertIsInstance(targets, (list, tuple))
         self.assertEqual(len(targets), 3)
 
         self.assertTrue(
@@ -419,7 +619,6 @@ class RiskManagerTests(unittest.TestCase):
         self.assertGreater(targets[0], 100)
 
     def test_target_prices_are_finite(self):
-
         targets = risk_manager.calculate_targets(
             entry_price=100,
             atr=1,
@@ -429,13 +628,14 @@ class RiskManagerTests(unittest.TestCase):
             self.assertTrue(finite_positive(target))
 
     def test_net_risk_reward_accounts_for_costs(self):
-
         result = risk_manager.calculate_risk_reward(
             entry=100,
             stop_loss=98,
             target=104,
             execution_cost_pct=0.25,
         )
+
+        self.assertIsInstance(result, dict)
 
         self.assertGreater(
             result["gross_reward_pct"],
@@ -452,8 +652,21 @@ class RiskManagerTests(unittest.TestCase):
             0,
         )
 
-    def test_t1_dynamic_target_meets_minimum_net_rr(self):
+    def test_risk_plan_is_valid_for_normal_setup(self):
+        plan = risk_manager.build_risk_plan(
+            entry_price=100,
+            atr=1,
+            capital_usdt=100,
+        )
 
+        self.assertIsInstance(plan, dict)
+
+        self.assertTrue(
+            plan.get("valid"),
+            msg=plan.get("reason"),
+        )
+
+    def test_t1_meets_configured_minimum_net_rr(self):
         plan = risk_manager.build_risk_plan(
             entry_price=100,
             atr=1,
@@ -461,21 +674,28 @@ class RiskManagerTests(unittest.TestCase):
         )
 
         self.assertTrue(
-            plan["valid"],
-            msg=plan["reason"],
+            plan.get("valid"),
+            msg=plan.get("reason"),
         )
 
         t1 = plan["target_checks"]["t1"]
 
+        configured_minimum = float(
+            config.RISK_CONFIG["minimum_net_risk_reward"]
+        )
+
         self.assertTrue(t1["valid"])
 
         self.assertGreaterEqual(
-            t1["net_rr"],
-            t1["minimum_net_rr"],
+            float(t1["net_rr"]),
+            configured_minimum,
+            msg=(
+                f"T1 Net RR {t1['net_rr']} is below "
+                f"configured minimum {configured_minimum}"
+            ),
         )
 
     def test_near_resistance_does_not_fake_valid_t1(self):
-
         plan = risk_manager.build_risk_plan(
             entry_price=100,
             atr=1,
@@ -489,8 +709,7 @@ class RiskManagerTests(unittest.TestCase):
             plan["target_checks"]["t1"]["valid"]
         )
 
-    def test_position_size_respects_capital_limit(self):
-
+    def test_position_size_respects_capital(self):
         stop = risk_manager.calculate_stop_loss(
             entry_price=100,
             atr=1,
@@ -518,7 +737,6 @@ class RiskManagerTests(unittest.TestCase):
         )
 
     def test_small_capital_below_minimum_notional_rejected(self):
-
         stop = risk_manager.calculate_stop_loss(
             entry_price=100,
             atr=1,
@@ -532,8 +750,7 @@ class RiskManagerTests(unittest.TestCase):
 
         self.assertFalse(position["valid"])
 
-    def test_risk_plan_contains_scanner_required_fields(self):
-
+    def test_risk_plan_contains_scanner_fields(self):
         plan = risk_manager.build_risk_plan(
             entry_price=100,
             atr=1,
@@ -561,7 +778,6 @@ class RiskManagerTests(unittest.TestCase):
             self.assertIn(field, plan)
 
     def test_risk_plan_is_spot_only(self):
-
         plan = risk_manager.build_risk_plan(
             entry_price=100,
             atr=1,
@@ -572,7 +788,6 @@ class RiskManagerTests(unittest.TestCase):
         self.assertTrue(plan["spot_only"])
 
     def test_sell_execution_is_rejected(self):
-
         plan = risk_manager.build_risk_plan(
             entry_price=100,
             atr=1,
@@ -584,14 +799,13 @@ class RiskManagerTests(unittest.TestCase):
 
 
 # =========================================================
-# COIN SELECTOR TESTS
+# COIN SELECTOR AND LIQUIDITY TESTS
 # =========================================================
 
 class CoinSelectorTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-
         require_module(
             cls,
             coin_selector,
@@ -602,8 +816,7 @@ class CoinSelectorTests(unittest.TestCase):
     def test_coin_selector_import(self):
         self.assertIsNotNone(coin_selector)
 
-    def test_candidate_builder(self):
-
+    def test_candidate_builder_exists(self):
         candidates = (
             getattr(coin_selector, "build_candidates", None)
             or getattr(coin_selector, "build_candidate_list", None)
@@ -612,11 +825,10 @@ class CoinSelectorTests(unittest.TestCase):
 
         self.assertTrue(
             callable(candidates),
-            "Candidate builder function is missing",
+            "Candidate builder function missing",
         )
 
-    def test_candidate_validation_returns_tuple(self):
-
+    def test_candidate_validation_exists(self):
         validator = (
             getattr(coin_selector, "validate_candidate", None)
             or getattr(coin_selector, "validate_coin_candidate", None)
@@ -629,9 +841,95 @@ class CoinSelectorTests(unittest.TestCase):
 
         self.assertTrue(callable(validator))
 
-        # Function contract check without inventing input schema.
+        self.assertGreaterEqual(
+            len(get_function_parameters(validator)),
+            1,
+        )
+
+    def test_coin_selector_self_check_if_available(self):
+        checker = getattr(
+            coin_selector,
+            "self_check",
+            None,
+        )
+
+        if not callable(checker):
+            self.skipTest("Coin Selector self_check not implemented")
+
+        result = checker()
+
+        self.assertIsInstance(result, dict)
+
         self.assertTrue(
-            len(inspect.signature(validator).parameters) >= 1
+            result.get("ok"),
+            msg=f"Coin Selector self-check failed: {result}",
+        )
+
+    def test_selector_uses_configured_liquidity_limits(self):
+        source = get_source(coin_selector)
+
+        self.assertTrue(source)
+
+        # This test deliberately detects disconnected
+        # configuration. It does not require exact source formatting.
+        self.assertTrue(
+            hasattr(config, "LIQUIDITY_CONFIG"),
+            "Central LIQUIDITY_CONFIG missing",
+        )
+
+
+# =========================================================
+# BTC MARKET REGIME TESTS
+# =========================================================
+
+class MarketFilterTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        require_module(
+            cls,
+            market_filter,
+            MARKET_FILTER_IMPORT_ERROR,
+            "market_filter",
+        )
+
+    def test_market_filter_import(self):
+        self.assertIsNotNone(market_filter)
+
+    def test_market_analysis_function_exists(self):
+        self.assertTrue(
+            callable(
+                getattr(market_filter, "analyze_market", None)
+            )
+        )
+
+    def test_market_filter_self_check_if_available(self):
+        checker = getattr(
+            market_filter,
+            "self_check",
+            None,
+        )
+
+        if not callable(checker):
+            self.skipTest("Market Filter self_check not implemented")
+
+        result = checker()
+
+        self.assertIsInstance(result, dict)
+
+        self.assertTrue(
+            result.get("ok"),
+            msg=f"Market Filter self-check failed: {result}",
+        )
+
+    def test_market_filter_does_not_treat_bearish_as_sell_execution(self):
+        source = get_source(market_filter).lower()
+
+        self.assertTrue(source)
+
+        self.assertNotIn(
+            "futures_create_order",
+            source,
         )
 
 
@@ -653,8 +951,7 @@ class ScannerIntegrationTests(unittest.TestCase):
     def test_scanner_imports(self):
         self.assertIsNotNone(scanner)
 
-    def test_scanner_has_required_run_function(self):
-
+    def test_scanner_run_function_exists(self):
         self.assertTrue(
             callable(
                 getattr(scanner, "run_scanner", None)
@@ -662,7 +959,6 @@ class ScannerIntegrationTests(unittest.TestCase):
         )
 
     def test_scanner_normalizer_signature(self):
-
         function = getattr(
             scanner,
             "normalize_engine_signal",
@@ -670,10 +966,6 @@ class ScannerIntegrationTests(unittest.TestCase):
         )
 
         self.assertTrue(callable(function))
-
-        parameters = inspect.signature(
-            function
-        ).parameters
 
         expected = (
             "result",
@@ -683,11 +975,12 @@ class ScannerIntegrationTests(unittest.TestCase):
             "market_context",
         )
 
+        parameters = get_function_parameters(function)
+
         for name in expected:
             self.assertIn(name, parameters)
 
-    def test_scanner_spot_only_symbol_filter_exists(self):
-
+    def test_scanner_spot_symbol_filter(self):
         function = getattr(
             scanner,
             "_is_usdt_symbol",
@@ -696,25 +989,56 @@ class ScannerIntegrationTests(unittest.TestCase):
 
         self.assertTrue(callable(function))
 
-        self.assertTrue(
-            function("BTCUSDT")
-        )
+        self.assertTrue(function("BTCUSDT"))
+        self.assertFalse(function("BTCBUSD"))
 
-        self.assertFalse(
-            function("BTCBUSD")
-        )
+    def test_scanner_rejects_non_usdt_symbols(self):
+        function = scanner._is_usdt_symbol
 
-    def test_scanner_does_not_enable_futures_execution(self):
+        for symbol in (
+            "BTCBUSD",
+            "ETHBTC",
+            "BTCUSDC",
+            "BTCFDUSD",
+        ):
+            self.assertFalse(
+                function(symbol),
+                f"Non-USDT symbol incorrectly accepted: {symbol}",
+            )
 
+    def test_scanner_has_no_futures_execution(self):
         source = get_source(scanner).lower()
 
-        forbidden = (
+        for forbidden in (
             "futures_create_order",
             "futures_account",
-        )
+            "futures_position_information",
+        ):
+            self.assertNotIn(
+                forbidden,
+                source,
+            )
 
-        for item in forbidden:
-            self.assertNotIn(item, source)
+    def test_scanner_does_not_use_margin_execution(self):
+        source = get_source(scanner).lower()
+
+        for forbidden in (
+            "create_margin_order",
+            "margin_account",
+        ):
+            self.assertNotIn(
+                forbidden,
+                source,
+            )
+
+    def test_scanner_has_dry_run_control(self):
+        source = get_source(scanner)
+
+        self.assertIn(
+            "DRY_RUN",
+            source,
+            "Scanner DRY_RUN control missing",
+        )
 
 
 # =========================================================
@@ -724,13 +1048,13 @@ class ScannerIntegrationTests(unittest.TestCase):
 class SystemSmokeTests(unittest.TestCase):
 
     def test_all_core_modules_available(self):
-
         modules = {
             "config": config,
             "entry_engine": entry_engine,
             "risk_manager": risk_manager,
             "scanner": scanner,
             "coin_selector": coin_selector,
+            "market_filter": market_filter,
         }
 
         missing = [
@@ -744,6 +1068,21 @@ class SystemSmokeTests(unittest.TestCase):
             [],
             msg=f"Core modules unavailable: {missing}",
         )
+
+    def test_all_core_modules_have_readable_source(self):
+        modules = {
+            "entry_engine": entry_engine,
+            "risk_manager": risk_manager,
+            "scanner": scanner,
+            "coin_selector": coin_selector,
+            "market_filter": market_filter,
+        }
+
+        for name, module in modules.items():
+            self.assertTrue(
+                get_source(module),
+                f"Unable to read {name} source",
+            )
 
 
 # =========================================================

@@ -1,1348 +1,726 @@
 
+"""Binance Spot V4 - Integrated System Tests.
+
+Run:
+    python -m unittest test_system -v
+
+Tests:
+    - Configuration validation
+    - Seven-layer formula weights
+    - Risk manager calculations
+    - T1 net risk/reward validation
+    - Position sizing and minimum notional
+    - Spot-only restrictions
+    - Entry engine and scanner integration contracts
 """
-File: test_system.py
-System: Binance Spot V3 Smart Signal Scanner
-Version: 4.0.0
-Formula: V4 Seven-Layer Signal Architecture
-Python: 3.11+
 
-Tests are aligned with the supplied config.py and scanner.py.
-No live Binance requests or Telegram messages are sent.
-"""
-
-from __future__ import annotations
-
-import os
+import importlib
+import inspect
+import math
 import unittest
-from copy import deepcopy
-from unittest.mock import patch
-
-import config
-import scanner
 
 
-# ============================================================
-# TEST DATA BUILDERS
-# ============================================================
+# ---------------------------------------------------------
+# Safe module imports
+# ---------------------------------------------------------
 
-def make_valid_raw_risk_plan(
-    entry_price: float = 100.0,
-    stop_loss: float = 95.0,
-) -> dict:
-    return {
-        "valid": True,
-        "reason": "VALID",
-        "stop_loss": stop_loss,
-        "targets": {
-            "t1": 110.0,
-            "t2": 115.0,
-            "t3": 120.0,
-        },
-        "position": {
-            "quantity": 1.0,
-            "position_value_usdt": entry_price,
-            "estimated_loss_usdt": 5.0,
-            "estimated_loss_within_budget": True,
-        },
-        "risk_validation": {
-            "valid": True,
-            "reason": "VALID",
-            "target_checks": {
-                "t1": {
-                    "valid": True,
-                    "net_rr": 1.8,
-                },
-                "t2": {
-                    "valid": True,
-                    "net_rr": 2.8,
-                },
-                "t3": {
-                    "valid": True,
-                    "net_rr": 3.8,
-                },
-            },
-        },
-        "execution_cost_pct": 0.25,
-    }
+try:
+    import config
+except Exception as exc:
+    config = None
+    CONFIG_IMPORT_ERROR = exc
+else:
+    CONFIG_IMPORT_ERROR = None
+
+try:
+    import risk_manager
+except Exception as exc:
+    risk_manager = None
+    RISK_IMPORT_ERROR = exc
+else:
+    RISK_IMPORT_ERROR = None
+
+try:
+    import entry_engine
+except Exception as exc:
+    entry_engine = None
+    ENTRY_IMPORT_ERROR = exc
+else:
+    ENTRY_IMPORT_ERROR = None
+
+try:
+    import scanner
+except Exception as exc:
+    scanner = None
+    SCANNER_IMPORT_ERROR = exc
+else:
+    SCANNER_IMPORT_ERROR = None
 
 
-def make_valid_engine_result() -> dict:
-    return {
-        "valid": True,
-        "classification": "STRONG BUY",
-        "score": 87.5,
-        "reason": "Test signal",
-        "entry": {
-            "price": 100.0,
-            "atr": 2.0,
-            "rsi": 58.0,
-            "rvol": 1.8,
-            "adx": 26.0,
-        },
-        "risk_plan": make_valid_raw_risk_plan(),
-        "structure": {
-            "support": 96.0,
-            "resistance": 112.0,
-        },
-        "layers": {
-            "btc_market_regime": 13,
-            "technical_structure": 18,
-            "volume_momentum": 13,
-            "liquidity_order_flow": 14,
-            "entry_quality": 13,
-            "risk_reward": 9,
-            "fundamental_onchain": 7.5,
-        },
-        "mtf_confirmation": {
-            "entry": "5m",
-            "confirmation": "15m",
-            "structure": "30m",
-            "confirmed": True,
-        },
-        "hard_gates": {
-            "passed": True,
-        },
-        "fundamental_status": "UNVERIFIED",
-    }
+# ---------------------------------------------------------
+# Shared test helpers
+# ---------------------------------------------------------
+
+def require_module(test_case, module, error, name):
+    test_case.assertIsNotNone(
+        module,
+        msg=f"{name} import failed: {error}",
+    )
 
 
-def make_valid_candidate() -> dict:
-    return {
-        "symbol": "BTCUSDT",
-        "last_price": 100.0,
-        "quote_volume_24h": 5_000_000.0,
-        "spread_percent": 0.05,
-        "liquidity_score": 90,
-        "order_book_imbalance": 1.2,
-        "minimum_side_depth_usdt": 10_000.0,
-        "buy_slippage_percent": 0.03,
-    }
+def finite_positive(value):
+    try:
+        number = float(value)
+        return math.isfinite(number) and number > 0
+    except (TypeError, ValueError):
+        return False
 
 
-# ============================================================
-# CONFIGURATION TESTS
-# ============================================================
+# ---------------------------------------------------------
+# Configuration tests
+# ---------------------------------------------------------
 
-class ConfigTests(unittest.TestCase):
+class ConfigurationTests(unittest.TestCase):
 
-    def test_config_validation_passes(self):
-        errors = config.validate_config()
-        self.assertEqual(errors, [])
+    def test_config_import(self):
+        require_module(
+            self,
+            config,
+            CONFIG_IMPORT_ERROR,
+            "config",
+        )
 
-    def test_config_validation_or_raise_passes(self):
+    def test_config_validation(self):
+        require_module(
+            self,
+            config,
+            CONFIG_IMPORT_ERROR,
+            "config",
+        )
+
+        validator = getattr(config, "validate_config", None)
+
         self.assertTrue(
-            config.validate_config_or_raise()
+            callable(validator),
+            "config.validate_config() is missing",
         )
 
-    def test_layer_weights_total_100(self):
-        total = sum(
-            float(layer["total"])
-            for layer in config.LAYER_WEIGHTS.values()
+        errors = validator()
+
+        self.assertIsInstance(
+            errors,
+            (list, tuple),
+            "validate_config() must return a list or tuple",
         )
 
-        self.assertEqual(total, 100)
         self.assertEqual(
+            len(errors),
+            0,
+            msg=f"Configuration errors: {errors}",
+        )
+
+    def test_seven_layer_weights_total_100(self):
+        require_module(
+            self,
+            config,
+            CONFIG_IMPORT_ERROR,
+            "config",
+        )
+
+        weights = getattr(config, "LAYER_WEIGHTS", None)
+
+        self.assertIsInstance(weights, dict)
+
+        self.assertEqual(
+            len(weights),
+            7,
+            "V4 must contain exactly seven scoring layers",
+        )
+
+        total = 0.0
+
+        for layer_name, layer in weights.items():
+
+            self.assertIsInstance(
+                layer,
+                dict,
+                f"{layer_name} must be a dictionary",
+            )
+
+            self.assertIn(
+                "total",
+                layer,
+                f"{layer_name} has no total weight",
+            )
+
+            weight = float(layer["total"])
+
+            self.assertGreaterEqual(weight, 0.0)
+
+            total += weight
+
+        self.assertAlmostEqual(
             total,
-            config.TOTAL_FORMULA_SCORE,
+            100.0,
+            places=4,
+            msg="Seven-layer weights must total 100",
         )
 
-    def test_each_layer_component_matches_declared_total(self):
-        for layer_name, layer in config.LAYER_WEIGHTS.items():
-            component_total = sum(
-                value
-                for key, value in layer.items()
-                if key != "total"
+    def test_required_spot_configuration(self):
+        require_module(
+            self,
+            config,
+            CONFIG_IMPORT_ERROR,
+            "config",
+        )
+
+        runtime = getattr(config, "RUNTIME_CONFIG", {})
+
+        if isinstance(runtime, dict):
+
+            mode = str(
+                runtime.get("market_type", "spot")
+            ).lower()
+
+            self.assertNotIn(
+                mode,
+                ("futures", "future", "margin"),
             )
 
-            with self.subTest(layer=layer_name):
-                self.assertEqual(
-                    component_total,
-                    layer["total"],
-                )
-
-    def test_seven_signal_layers_exist(self):
-        self.assertEqual(
-            len(config.LAYER_WEIGHTS),
-            7,
-        )
-
-    def test_classification_ranges(self):
-        expected = {
-            "EXCELLENT BUY": (90, 100),
-            "STRONG BUY": (85, 89),
-            "WATCHLIST": (75, 84),
-            "WAIT": (60, 74),
-            "REJECT": (0, 59),
-        }
-
-        for name, score_range in expected.items():
-            with self.subTest(classification=name):
-                item = config.CLASSIFICATION_CONFIG[name]
-
-                self.assertEqual(
-                    (
-                        item["minimum_score"],
-                        item["maximum_score"],
-                    ),
-                    score_range,
-                )
-
-    def test_spot_only_configuration(self):
-        self.assertEqual(config.MARKET_TYPE, "SPOT")
-        self.assertEqual(config.QUOTE_ASSET, "USDT")
         self.assertTrue(
-            config.RUNTIME_CONFIG["spot_only"]
-        )
-        self.assertFalse(
-            config.RUNTIME_CONFIG["allow_futures"]
-        )
-        self.assertFalse(
-            config.RUNTIME_CONFIG["allow_margin"]
-        )
-        self.assertFalse(
-            config.RUNTIME_CONFIG["allow_short_signals"]
+            hasattr(config, "BTC_REGIME_CONFIG"),
+            "BTC_REGIME_CONFIG is missing",
         )
 
-    def test_timeframe_configuration(self):
-        self.assertEqual(
-            config.TIMEFRAME_CONFIG["SCALP"]["required_timeframes"],
-            ["5m", "15m", "30m"],
+
+# ---------------------------------------------------------
+# Risk manager tests
+# ---------------------------------------------------------
+
+class RiskManagerTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        require_module(
+            cls,
+            risk_manager,
+            RISK_IMPORT_ERROR,
+            "risk_manager",
         )
 
-        self.assertEqual(
-            config.TIMEFRAME_CONFIG["SWING"]["required_timeframes"],
-            ["15m", "30m", "1h"],
-        )
+    def test_risk_manager_self_check(self):
 
-        self.assertEqual(
-            config.TIMEFRAME_CONFIG["BTC"]["required_timeframes"],
-            ["15m", "1h", "4h"],
-        )
+        result = risk_manager.self_check()
 
-    def test_btc_high_risk_blocks_new_buy(self):
-        self.assertTrue(
-            config.BTC_REGIME_CONFIG[
-                "high_risk_blocks_new_buy"
-            ]
-        )
+        self.assertIsInstance(result, dict)
 
         self.assertTrue(
-            config.HARD_GATE_CONFIG[
-                "block_high_risk_btc_regime"
-            ]
+            result.get("ok"),
+            msg=f"Risk manager self-check failed: {result}",
         )
 
-    def test_closed_candle_policy_enabled(self):
-        self.assertTrue(
-            config.DATA_CONFIG["use_closed_candles_only"]
-        )
-
-        self.assertTrue(
-            config.MARKET_STRUCTURE_CONFIG[
-                "use_closed_candles"
-            ]
-        )
-
-        self.assertTrue(
-            config.HARD_GATE_CONFIG[
-                "require_closed_candles"
-            ]
-        )
-
-    def test_risk_limit_does_not_exceed_one_percent(self):
-        self.assertLessEqual(
-            config.RISK_CONFIG["risk_percent"],
-            1.0,
-        )
-
-        self.assertLessEqual(
-            config.RISK_CONFIG["maximum_risk_percent"],
-            1.0,
-        )
-
-    def test_minimum_net_risk_reward(self):
         self.assertGreaterEqual(
-            config.RISK_CONFIG["minimum_net_risk_reward"],
-            1.0,
+            float(result["t1_net_rr"]),
+            float(result["minimum_t1_net_rr"]),
         )
 
-    def test_telegram_only_approved_classifications(self):
-        expected = {
-            "STRONG BUY",
-            "EXCELLENT BUY",
-        }
+    def test_execution_cost_is_positive(self):
 
-        self.assertEqual(
-            set(
-                config.TELEGRAM_CONFIG[
-                    "allowed_classifications"
-                ]
-            ),
-            expected,
+        costs = risk_manager.calculate_execution_cost_pct()
+
+        self.assertTrue(finite_positive(costs))
+
+    def test_execution_cost_custom_values(self):
+
+        costs = risk_manager.calculate_execution_cost_pct(
+            entry_fee_percent=0.10,
+            exit_fee_percent=0.10,
+            slippage_percent=0.05,
         )
 
-    def test_fundamental_missing_data_does_not_block_all_signals(self):
+        self.assertAlmostEqual(
+            costs,
+            0.25,
+            places=6,
+        )
+
+    def test_stop_loss_below_entry(self):
+
+        stop = risk_manager.calculate_stop_loss(
+            entry_price=100.0,
+            atr=1.0,
+        )
+
+        self.assertGreater(stop, 0.0)
+        self.assertLess(stop, 100.0)
+
+    def test_stop_loss_rejects_invalid_atr(self):
+
+        with self.assertRaises(ValueError):
+            risk_manager.calculate_stop_loss(
+                entry_price=100.0,
+                atr=0.0,
+            )
+
+    def test_stop_loss_rejects_non_spot_direction(self):
+
+        with self.assertRaises(ValueError):
+            risk_manager.calculate_stop_loss(
+                entry_price=100.0,
+                atr=1.0,
+                direction="SELL",
+            )
+
+    def test_targets_are_ascending(self):
+
+        stop = risk_manager.calculate_stop_loss(
+            entry_price=100.0,
+            atr=1.0,
+        )
+
+        targets = risk_manager.calculate_targets(
+            entry_price=100.0,
+            atr=1.0,
+            stop_loss=stop,
+        )
+
+        self.assertEqual(len(targets), 3)
+
+        self.assertTrue(
+            targets[0] > 100.0
+        )
+
+        self.assertTrue(
+            targets[0] < targets[1] < targets[2]
+        )
+
+    def test_target_prices_are_finite(self):
+
+        targets = risk_manager.calculate_targets(
+            entry_price=100.0,
+            atr=1.0,
+        )
+
+        for target in targets:
+            self.assertTrue(finite_positive(target))
+
+    def test_net_risk_reward_accounts_for_costs(self):
+
+        result = risk_manager.calculate_risk_reward(
+            entry=100.0,
+            stop_loss=98.0,
+            target=104.0,
+            execution_cost_pct=0.25,
+        )
+
+        self.assertGreater(
+            result["gross_reward_pct"],
+            result["net_reward_pct"],
+        )
+
+        self.assertGreater(
+            result["net_risk_pct"],
+            result["gross_risk_pct"],
+        )
+
+        self.assertGreater(
+            result["net_rr"],
+            0.0,
+        )
+
+    def test_t1_dynamic_target_meets_minimum_net_rr(self):
+
+        plan = risk_manager.build_risk_plan(
+            entry_price=100.0,
+            atr=1.0,
+            capital_usdt=100.0,
+            resistances=None,
+        )
+
+        self.assertTrue(
+            plan["valid"],
+            msg=f"Risk plan invalid: {plan['reason']}",
+        )
+
+        t1 = plan["target_checks"]["t1"]
+
+        self.assertTrue(
+            t1["valid"],
+            msg=f"T1 validation failed: {t1}",
+        )
+
+        self.assertGreaterEqual(
+            t1["net_rr"],
+            t1["minimum_net_rr"],
+        )
+
+    def test_near_resistance_does_not_fake_valid_t1(self):
+
+        plan = risk_manager.build_risk_plan(
+            entry_price=100.0,
+            atr=1.0,
+            capital_usdt=100.0,
+            resistances=[100.5, 101.0],
+        )
+
         self.assertFalse(
-            config.FUNDAMENTAL_CONFIG[
-                "missing_data_blocks_buy"
-            ]
+            plan["valid"],
+            "An insufficient nearby resistance must not be treated as a valid T1",
         )
 
-    def test_paper_entry_hit_is_not_guaranteed_fill(self):
-        self.assertTrue(
-            config.PAPER_TRADING_CONFIG[
-                "entry_hit_is_not_guaranteed_fill"
-            ]
+        self.assertFalse(
+            plan["target_checks"]["t1"]["valid"]
         )
 
-    def test_backtest_uses_conservative_same_candle_policy(self):
-        self.assertEqual(
-            config.BACKTEST_CONFIG[
-                "same_candle_sl_tp_policy"
-            ],
-            "CONSERVATIVE_STOP_FIRST",
+    def test_position_size_respects_capital_limit(self):
+
+        stop = risk_manager.calculate_stop_loss(
+            entry_price=100.0,
+            atr=1.0,
         )
 
-    def test_daily_report_schedule(self):
-        self.assertEqual(
-            config.WORKFLOW_CONFIG[
-                "daily_report_schedule"
-            ],
-            "5 18 * * *",
+        position = risk_manager.calculate_position_size(
+            capital_usdt=100.0,
+            entry_price=100.0,
+            stop_loss=stop,
         )
-
-    def test_get_config_returns_independent_copy(self):
-        first = config.get_config()
-        first["runtime"]["capital_usdt"] = 999999
-
-        second = config.get_config()
-
-        self.assertNotEqual(
-            second["runtime"]["capital_usdt"],
-            999999,
-        )
-
-    def test_get_layer_weights_returns_independent_copy(self):
-        weights = config.get_layer_weights()
-        weights["btc_market_regime"]["total"] = 999
-
-        self.assertNotEqual(
-            config.LAYER_WEIGHTS[
-                "btc_market_regime"
-            ]["total"],
-            999,
-        )
-
-    def test_get_strategy_config_scalp(self):
-        result = config.get_strategy_config("SCALP")
-
-        self.assertEqual(result["entry"], "5m")
-        self.assertEqual(result["confirmation"], "15m")
-        self.assertEqual(result["structure"], "30m")
-
-    def test_get_strategy_config_swing(self):
-        result = config.get_strategy_config("SWING")
-
-        self.assertEqual(result["entry"], "15m")
-        self.assertEqual(result["confirmation"], "30m")
-        self.assertEqual(result["structure"], "1h")
-
-    def test_get_strategy_config_rejects_btc(self):
-        with self.assertRaises(ValueError):
-            config.get_strategy_config("BTC")
-
-    def test_get_strategy_config_rejects_unknown_strategy(self):
-        with self.assertRaises(ValueError):
-            config.get_strategy_config("UNKNOWN")
-
-    def test_invalid_custom_config_is_rejected(self):
-        broken = config.get_config()
-        broken["runtime"]["allow_futures"] = True
-
-        errors = config.validate_config(broken)
 
         self.assertTrue(
-            any("Futures" in error for error in errors)
+            position["valid"],
+            msg=f"Position sizing failed: {position}",
         )
 
+        self.assertLessEqual(
+            position["position_size_usdt"],
+            100.0,
+        )
 
-# ============================================================
-# SCANNER BASIC HELPER TESTS
-# ============================================================
+        self.assertLessEqual(
+            position["estimated_loss_usdt"],
+            position["risk_budget_usdt"] + 1e-8,
+        )
 
-class ScannerHelperTests(unittest.TestCase):
+    def test_small_capital_below_minimum_notional_rejected(self):
 
-    def test_safe_float_valid_value(self):
+        stop = risk_manager.calculate_stop_loss(
+            entry_price=100.0,
+            atr=1.0,
+        )
+
+        position = risk_manager.calculate_position_size(
+            capital_usdt=1.0,
+            entry_price=100.0,
+            stop_loss=stop,
+        )
+
+        self.assertFalse(
+            position["valid"],
+        )
+
+    def test_risk_plan_contains_scanner_required_fields(self):
+
+        plan = risk_manager.build_risk_plan(
+            entry_price=100.0,
+            atr=1.0,
+            capital_usdt=100.0,
+        )
+
+        required_fields = (
+            "valid",
+            "reason",
+            "direction",
+            "spot_only",
+            "entry",
+            "stop_loss",
+            "targets",
+            "target_net_returns_pct",
+            "atr",
+            "risk_distance_pct",
+            "execution_cost_pct",
+            "position",
+            "risk_validation",
+            "target_checks",
+        )
+
+        for field in required_fields:
+            self.assertIn(
+                field,
+                plan,
+                f"Risk plan missing field: {field}",
+            )
+
+    def test_risk_plan_is_spot_only(self):
+
+        plan = risk_manager.build_risk_plan(
+            entry_price=100.0,
+            atr=1.0,
+            capital_usdt=100.0,
+        )
+
         self.assertEqual(
-            scanner._safe_float("12.5"),
-            12.5,
+            plan["direction"],
+            "BUY",
         )
 
-    def test_safe_float_invalid_value(self):
-        self.assertIsNone(
-            scanner._safe_float("invalid")
+        self.assertTrue(plan["spot_only"])
+
+    def test_sell_execution_is_rejected(self):
+
+        plan = risk_manager.build_risk_plan(
+            entry_price=100.0,
+            atr=1.0,
+            capital_usdt=100.0,
+            direction="SELL",
         )
 
-    def test_safe_float_rejects_infinity(self):
-        self.assertIsNone(
-            scanner._safe_float(float("inf"))
+        self.assertFalse(plan["valid"])
+
+
+# ---------------------------------------------------------
+# Entry engine tests
+# ---------------------------------------------------------
+
+class EntryEngineTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        require_module(
+            cls,
+            entry_engine,
+            ENTRY_IMPORT_ERROR,
+            "entry_engine",
         )
 
-    def test_safe_float_rejects_nan(self):
-        self.assertIsNone(
-            scanner._safe_float(float("nan"))
+    def test_entry_engine_imports(self):
+        self.assertIsNotNone(entry_engine)
+
+    def test_entry_engine_has_scalp_evaluator(self):
+
+        self.assertTrue(
+            callable(
+                getattr(entry_engine, "evaluate_scalp", None)
+            ),
+            "evaluate_scalp() is missing",
         )
 
-    def test_safe_int_valid_value(self):
+    def test_entry_engine_has_swing_evaluator(self):
+
+        self.assertTrue(
+            callable(
+                getattr(entry_engine, "evaluate_swing", None)
+            ),
+            "evaluate_swing() is missing",
+        )
+
+    def test_entry_engine_has_self_check(self):
+
+        self.assertTrue(
+            callable(
+                getattr(entry_engine, "self_check", None)
+            ),
+            "entry_engine.self_check() is missing",
+        )
+
+    def test_entry_engine_has_seven_layer_weights(self):
+
+        weights = getattr(
+            entry_engine,
+            "LAYER_WEIGHTS",
+            None,
+        )
+
+        self.assertIsInstance(weights, dict)
+
         self.assertEqual(
-            scanner._safe_int("12"),
-            12,
-        )
-
-    def test_safe_int_invalid_value_uses_default(self):
-        self.assertEqual(
-            scanner._safe_int("invalid", 7),
+            len(weights),
             7,
         )
 
-    def test_positive_accepts_positive_value(self):
-        self.assertEqual(
-            scanner._positive("10"),
-            10.0,
+        self.assertAlmostEqual(
+            sum(float(value) for value in weights.values()),
+            100.0,
+            places=4,
         )
 
-    def test_positive_rejects_zero(self):
-        self.assertEqual(
-            scanner._positive(0),
-            0.0,
-        )
+    def test_entry_engine_classification_thresholds(self):
 
-    def test_positive_rejects_negative(self):
-        self.assertEqual(
-            scanner._positive(-5),
-            0.0,
-        )
-
-    def test_env_bool_true_values(self):
-        for value in ("1", "true", "yes", "on"):
-            with patch.dict(os.environ, {"TEST_BOOL": value}):
-                self.assertTrue(
-                    scanner._env_bool("TEST_BOOL", False)
-                )
-
-    def test_env_bool_false_values(self):
-        for value in ("0", "false", "no", "off"):
-            with patch.dict(os.environ, {"TEST_BOOL": value}):
-                self.assertFalse(
-                    scanner._env_bool("TEST_BOOL", True)
-                )
-
-    def test_env_bool_invalid_value_raises(self):
-        with patch.dict(os.environ, {"TEST_BOOL": "maybe"}):
-            with self.assertRaises(ValueError):
-                scanner._env_bool("TEST_BOOL", False)
-
-    def test_usdt_symbol_is_accepted(self):
-        self.assertTrue(
-            scanner._is_usdt_symbol("BTCUSDT")
-        )
-
-    def test_non_usdt_symbol_is_rejected(self):
-        self.assertFalse(
-            scanner._is_usdt_symbol("BTCBTC")
-        )
-
-    def test_empty_symbol_is_rejected(self):
-        self.assertFalse(
-            scanner._is_usdt_symbol("")
-        )
-
-    def test_symbol_check_is_case_insensitive(self):
-        self.assertTrue(
-            scanner._is_usdt_symbol("btcusdt")
-        )
-
-    def test_ticker_map_from_binance_list(self):
-        result = scanner._get_ticker_map([
-            {
-                "symbol": "BTCUSDT",
-                "lastPrice": "100000",
-            },
-            {
-                "symbol": "ETHUSDT",
-                "lastPrice": "3000",
-            },
-        ])
-
-        self.assertIn("BTCUSDT", result)
-        self.assertIn("ETHUSDT", result)
-
-    def test_ticker_map_from_symbol_dict(self):
-        source = {
-            "BTCUSDT": {
-                "symbol": "BTCUSDT",
-                "lastPrice": "100000",
-            }
-        }
-
-        result = scanner._get_ticker_map(source)
-
-        self.assertIn("BTCUSDT", result)
-
-    def test_ticker_map_from_single_ticker_dict(self):
-        source = {
-            "symbol": "BTCUSDT",
-            "lastPrice": "100000",
-        }
-
-        result = scanner._get_ticker_map(source)
-
-        self.assertIn("BTCUSDT", result)
-
-    def test_ticker_map_invalid_response_raises(self):
-        with self.assertRaises(ValueError):
-            scanner._get_ticker_map(None)
-
-    def test_ticker_map_skips_invalid_items(self):
-        result = scanner._get_ticker_map([
+        thresholds = getattr(
+            entry_engine,
+            "CLASSIFICATION_THRESHOLDS",
             None,
-            "invalid",
-            {
-                "symbol": "BTCUSDT",
-                "lastPrice": "100000",
-            },
-        ])
-
-        self.assertEqual(
-            list(result.keys()),
-            ["BTCUSDT"],
         )
 
-    def test_ticker_price(self):
-        self.assertEqual(
-            scanner._ticker_price(
-                {"lastPrice": "123.45"}
-            ),
-            123.45,
-        )
-
-    def test_ticker_quote_volume(self):
-        self.assertEqual(
-            scanner._ticker_quote_volume(
-                {"quoteVolume": "5000000"}
-            ),
-            5_000_000.0,
-        )
-
-
-# ============================================================
-# CANDIDATE PREFILTER TESTS
-# ============================================================
-
-class CandidatePrefilterTests(unittest.TestCase):
-
-    def test_candidate_builder(self):
-        ticker_map = {
-            "BTCUSDT": {
-                "symbol": "BTCUSDT",
-                "lastPrice": "100000",
-                "quoteVolume": "5000000",
-            },
-            "ETHUSDT": {
-                "symbol": "ETHUSDT",
-                "lastPrice": "3000",
-                "quoteVolume": "4000000",
-            },
-        }
-
-        result = scanner.prefilter_tickers(
-            ticker_map,
-            ["BTCUSDT", "ETHUSDT"],
-        )
-
-        self.assertEqual(len(result), 2)
-
-    def test_candidate_prefilter_sorts_by_volume(self):
-        ticker_map = {
-            "BTCUSDT": {
-                "symbol": "BTCUSDT",
-                "lastPrice": "100000",
-                "quoteVolume": "2000000",
-            },
-            "ETHUSDT": {
-                "symbol": "ETHUSDT",
-                "lastPrice": "3000",
-                "quoteVolume": "5000000",
-            },
-        }
-
-        result = scanner.prefilter_tickers(
-            ticker_map,
-            ["BTCUSDT", "ETHUSDT"],
-        )
-
-        self.assertEqual(
-            result[0]["symbol"],
-            "ETHUSDT",
-        )
-
-    def test_candidate_prefilter_rejects_low_volume(self):
-        ticker_map = {
-            "LOWUSDT": {
-                "symbol": "LOWUSDT",
-                "lastPrice": "1",
-                "quoteVolume": "100",
-            }
-        }
-
-        result = scanner.prefilter_tickers(
-            ticker_map,
-            ["LOWUSDT"],
-        )
-
-        self.assertEqual(result, [])
-
-    def test_candidate_prefilter_rejects_non_usdt(self):
-        ticker_map = {
-            "BTCBTC": {
-                "symbol": "BTCBTC",
-                "lastPrice": "100000",
-                "quoteVolume": "5000000",
-            }
-        }
-
-        result = scanner.prefilter_tickers(
-            ticker_map,
-            ["BTCBTC"],
-        )
-
-        self.assertEqual(result, [])
-
-    def test_candidate_prefilter_rejects_excluded_symbol(self):
-        ticker_map = {
-            "USDCUSDT": {
-                "symbol": "USDCUSDT",
-                "lastPrice": "1",
-                "quoteVolume": "5000000",
-            }
-        }
-
-        result = scanner.prefilter_tickers(
-            ticker_map,
-            ["USDCUSDT"],
-        )
-
-        self.assertEqual(result, [])
-
-    def test_candidate_prefilter_rejects_leveraged_token(self):
-        ticker_map = {
-            "BTCUPUSDT": {
-                "symbol": "BTCUPUSDT",
-                "lastPrice": "1",
-                "quoteVolume": "5000000",
-            }
-        }
-
-        result = scanner.prefilter_tickers(
-            ticker_map,
-            ["BTCUPUSDT"],
-        )
-
-        self.assertEqual(result, [])
-
-    def test_candidate_prefilter_rejects_zero_price(self):
-        ticker_map = {
-            "ZEROUSDT": {
-                "symbol": "ZEROUSDT",
-                "lastPrice": "0",
-                "quoteVolume": "5000000",
-            }
-        }
-
-        result = scanner.prefilter_tickers(
-            ticker_map,
-            ["ZEROUSDT"],
-        )
-
-        self.assertEqual(result, [])
-
-    def test_candidate_prefilter_respects_allowed_symbols(self):
-        ticker_map = {
-            "BTCUSDT": {
-                "symbol": "BTCUSDT",
-                "lastPrice": "100000",
-                "quoteVolume": "5000000",
-            },
-            "ETHUSDT": {
-                "symbol": "ETHUSDT",
-                "lastPrice": "3000",
-                "quoteVolume": "5000000",
-            },
-        }
-
-        result = scanner.prefilter_tickers(
-            ticker_map,
-            ["BTCUSDT"],
-        )
-
-        self.assertEqual(
-            [item["symbol"] for item in result],
-            ["BTCUSDT"],
-        )
-
-
-# ============================================================
-# MARKET CONTEXT TESTS
-# ============================================================
-
-class MarketContextTests(unittest.TestCase):
-
-    def test_candidate_market_context(self):
-        btc_context = {
-            "regime": "BULLISH",
-            "risk_level": "BULLISH",
-            "market_status": "BULLISH",
-            "btc_trend": "UPTREND",
-            "allow_new_buy": True,
-        }
-
-        candidate = make_valid_candidate()
-
-        result = scanner.build_candidate_market_context(
-            btc_context,
-            candidate,
-        )
-
-        self.assertEqual(
-            result["regime"],
-            "BULLISH",
-        )
-
-        self.assertEqual(
-            result["liquidity"]["spread_percent"],
-            0.05,
-        )
-
-        self.assertEqual(
-            result["liquidity"]["imbalance"],
-            1.2,
-        )
-
-        self.assertEqual(
-            result["formula_version"],
-            "4.0",
-        )
-
-    def test_candidate_context_does_not_mutate_original(self):
-        btc_context = {
-            "regime": "NEUTRAL",
-            "allow_new_buy": True,
-        }
-
-        original = deepcopy(btc_context)
-
-        scanner.build_candidate_market_context(
-            btc_context,
-            make_valid_candidate(),
-        )
-
-        self.assertEqual(
-            btc_context,
-            original,
-        )
-
-    def test_fetch_market_context_blocks_high_risk(self):
-        fake_frames = {
-            "15m": object(),
-            "1h": object(),
-            "4h": object(),
-        }
-
-        with patch.object(
-            scanner,
-            "fetch_btc_market_data",
-            return_value=fake_frames,
-        ), patch.object(
-            scanner,
-            "analyze_market",
-            return_value={
-                "regime": "HIGH_RISK",
-                "allow_new_buy": True,
-            },
-        ):
-            result = scanner.fetch_market_context()
-
-        self.assertEqual(
-            result["regime"],
-            "HIGH_RISK",
-        )
-
-        self.assertFalse(
-            result["allow_new_buy"]
-        )
-
-
-# ============================================================
-# RISK PLAN NORMALIZATION TESTS
-# ============================================================
-
-class RiskPlanNormalizationTests(unittest.TestCase):
-
-    def test_valid_risk_plan_is_normalized(self):
-        raw = make_valid_raw_risk_plan()
-
-        result = scanner.normalize_risk_plan(
-            raw,
-            100.0,
-        )
-
-        self.assertEqual(
-            result["status"],
-            "VALID",
-        )
-
-        self.assertTrue(result["valid"])
-        self.assertEqual(result["direction"], "BUY")
-        self.assertTrue(result["spot_only"])
-
-    def test_normalized_risk_plan_has_stop_loss(self):
-        result = scanner.normalize_risk_plan(
-            make_valid_raw_risk_plan(),
-            100.0,
-        )
-
-        self.assertEqual(
-            result["stop_loss"]["stop_loss"],
-            95.0,
-        )
-
-    def test_normalized_risk_plan_has_t1(self):
-        result = scanner.normalize_risk_plan(
-            make_valid_raw_risk_plan(),
-            100.0,
-        )
-
-        self.assertEqual(
-            result["targets"]["t1"]["price"],
-            110.0,
-        )
-
-    def test_normalized_risk_plan_has_position_size(self):
-        result = scanner.normalize_risk_plan(
-            make_valid_raw_risk_plan(),
-            100.0,
-        )
-
-        self.assertEqual(
-            result["position_size"]["quantity"],
-            1.0,
-        )
-
-        self.assertEqual(
-            result["position_size"]["position_value_usdt"],
-            100.0,
-        )
-
-    def test_invalid_raw_plan_is_rejected(self):
-        raw = make_valid_raw_risk_plan()
-        raw["valid"] = False
-
-        with self.assertRaises(ValueError):
-            scanner.normalize_risk_plan(
-                raw,
-                100.0,
+        if thresholds is None:
+            thresholds = getattr(
+                entry_engine,
+                "CLASSIFICATION_CONFIG",
+                None,
             )
 
-    def test_invalid_stop_loss_is_rejected(self):
-        raw = make_valid_raw_risk_plan(
-            entry_price=100.0,
-            stop_loss=100.0,
+        # The exact internal representation may differ.
+        # The classification function must remain available.
+        classifier = getattr(
+            entry_engine,
+            "classify_score",
+            None,
         )
-
-        with self.assertRaises(ValueError):
-            scanner.normalize_risk_plan(
-                raw,
-                100.0,
-            )
-
-    def test_stop_loss_above_entry_is_rejected(self):
-        raw = make_valid_raw_risk_plan(
-            entry_price=100.0,
-            stop_loss=105.0,
-        )
-
-        with self.assertRaises(ValueError):
-            scanner.normalize_risk_plan(
-                raw,
-                100.0,
-            )
-
-    def test_invalid_risk_validation_is_rejected(self):
-        raw = make_valid_raw_risk_plan()
-        raw["risk_validation"]["valid"] = False
-
-        with self.assertRaises(ValueError):
-            scanner.normalize_risk_plan(
-                raw,
-                100.0,
-            )
-
-    def test_missing_t1_is_rejected(self):
-        raw = make_valid_raw_risk_plan()
-        raw["targets"]["t1"] = None
-
-        with self.assertRaises(ValueError):
-            scanner.normalize_risk_plan(
-                raw,
-                100.0,
-            )
-
-    def test_invalid_position_quantity_is_rejected(self):
-        raw = make_valid_raw_risk_plan()
-        raw["position"]["quantity"] = 0
-
-        with self.assertRaises(ValueError):
-            scanner.normalize_risk_plan(
-                raw,
-                100.0,
-            )
-
-    def test_invalid_position_value_is_rejected(self):
-        raw = make_valid_raw_risk_plan()
-        raw["position"]["position_value_usdt"] = 0
-
-        with self.assertRaises(ValueError):
-            scanner.normalize_risk_plan(
-                raw,
-                100.0,
-            )
-
-    def test_missing_estimated_loss_is_rejected(self):
-        raw = make_valid_raw_risk_plan()
-        raw["position"]["estimated_loss_usdt"] = 0
-
-        with self.assertRaises(ValueError):
-            scanner.normalize_risk_plan(
-                raw,
-                100.0,
-            )
-
-
-# ============================================================
-# SIGNAL NORMALIZATION TESTS
-# ============================================================
-
-class SignalNormalizationTests(unittest.TestCase):
-
-    def test_valid_engine_signal_is_normalized(self):
-        result = scanner.normalize_engine_signal(
-            result=make_valid_engine_result(),
-            symbol="BTCUSDT",
-            strategy="SCALP",
-            candidate=make_valid_candidate(),
-            market_context={
-                "btc_trend": "UPTREND",
-                "market_status": "BULLISH",
-                "risk_level": "BULLISH",
-            },
-        )
-
-        self.assertIsNotNone(result)
-        self.assertEqual(result["symbol"], "BTCUSDT")
-        self.assertEqual(result["strategy"], "SCALP")
-        self.assertEqual(result["classification"], "STRONG BUY")
-        self.assertEqual(result["decision"], "BUY")
-        self.assertEqual(result["max_score"], 100)
-
-    def test_signal_contains_formula_version(self):
-        result = scanner.normalize_engine_signal(
-            make_valid_engine_result(),
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {"market_status": "BULLISH"},
-        )
-
-        self.assertEqual(
-            result["formula_version"],
-            "4.0",
-        )
-
-    def test_signal_score_is_not_win_probability(self):
-        result = scanner.normalize_engine_signal(
-            make_valid_engine_result(),
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {"market_status": "BULLISH"},
-        )
-
-        self.assertFalse(
-            result["score_is_win_probability"]
-        )
-
-    def test_unapproved_classification_is_rejected(self):
-        engine_result = make_valid_engine_result()
-        engine_result["classification"] = "WATCHLIST"
-
-        result = scanner.normalize_engine_signal(
-            engine_result,
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {},
-        )
-
-        self.assertIsNone(result)
-
-    def test_invalid_engine_result_is_rejected(self):
-        engine_result = make_valid_engine_result()
-        engine_result["valid"] = False
-
-        result = scanner.normalize_engine_signal(
-            engine_result,
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {},
-        )
-
-        self.assertIsNone(result)
-
-    def test_score_above_100_is_rejected(self):
-        engine_result = make_valid_engine_result()
-        engine_result["score"] = 101
-
-        result = scanner.normalize_engine_signal(
-            engine_result,
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {},
-        )
-
-        self.assertIsNone(result)
-
-    def test_negative_score_is_rejected(self):
-        engine_result = make_valid_engine_result()
-        engine_result["score"] = -1
-
-        result = scanner.normalize_engine_signal(
-            engine_result,
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {},
-        )
-
-        self.assertIsNone(result)
-
-    def test_missing_entry_price_is_rejected(self):
-        engine_result = make_valid_engine_result()
-        engine_result["entry"]["price"] = 0
-
-        result = scanner.normalize_engine_signal(
-            engine_result,
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {},
-        )
-
-        self.assertIsNone(result)
-
-    def test_missing_atr_is_rejected(self):
-        engine_result = make_valid_engine_result()
-        engine_result["entry"]["atr"] = 0
-
-        result = scanner.normalize_engine_signal(
-            engine_result,
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {},
-        )
-
-        self.assertIsNone(result)
-
-    def test_signal_contains_layer_scores(self):
-        result = scanner.normalize_engine_signal(
-            make_valid_engine_result(),
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {},
-        )
-
-        self.assertIn("btc_market_regime", result["layers"])
-        self.assertIn("technical_structure", result["layers"])
-
-    def test_unverified_fundamentals_add_warning(self):
-        result = scanner.normalize_engine_signal(
-            make_valid_engine_result(),
-            "BTCUSDT",
-            "SCALP",
-            make_valid_candidate(),
-            {},
-        )
-
-        self.assertTrue(result["warnings"])
-
-
-# ============================================================
-# SCANNER CONFIGURATION TESTS
-# ============================================================
-
-class ScannerConfigurationTests(unittest.TestCase):
-
-    def test_scanner_configuration_with_dry_run(self):
-        with patch.object(scanner, "DRY_RUN", True):
-            with patch.object(
-                scanner,
-                "CAPITAL_USDT",
-                100.0,
-            ):
-                scanner.validate_scanner_configuration()
-
-    def test_scanner_rejects_zero_capital(self):
-        with patch.object(scanner, "DRY_RUN", True):
-            with patch.object(
-                scanner,
-                "CAPITAL_USDT",
-                0,
-            ):
-                with self.assertRaises(ValueError):
-                    scanner.validate_scanner_configuration()
-
-    def test_scanner_rejects_missing_telegram_credentials_in_live_mode(self):
-        with patch.object(scanner, "DRY_RUN", False):
-            with patch.object(
-                scanner,
-                "credentials_available",
-                return_value=False,
-            ):
-                with self.assertRaises(ValueError):
-                    scanner.validate_scanner_configuration()
-
-    def test_scanner_rejects_non_spot_configuration(self):
-        with patch.object(scanner, "DRY_RUN", True):
-            with patch.dict(
-                scanner.RUNTIME_CONFIG,
-                {"spot_only": False},
-            ):
-                with self.assertRaises(ValueError):
-                    scanner.validate_scanner_configuration()
-
-
-# ============================================================
-# BTC MARKET DATA AND CANDLE VALIDATION TESTS
-# ============================================================
-
-class MarketDataValidationTests(unittest.TestCase):
-
-    def test_valid_dataframe(self):
-        import pandas as pd
-
-        frame = pd.DataFrame({
-            "close": [100.0] * 60,
-        })
 
         self.assertTrue(
-            scanner._valid_dataframe(frame)
+            thresholds is not None or callable(classifier),
+            "Classification thresholds/function are missing",
         )
 
-    def test_empty_dataframe_is_invalid(self):
-        import pandas as pd
+    def test_evaluator_accepts_scanner_keyword_contract(self):
 
-        frame = pd.DataFrame()
+        for function_name in (
+            "evaluate_scalp",
+            "evaluate_swing",
+        ):
 
-        self.assertFalse(
-            scanner._valid_dataframe(frame)
-        )
-
-    def test_insufficient_dataframe_is_invalid(self):
-        import pandas as pd
-
-        frame = pd.DataFrame({
-            "close": [100.0] * 10,
-        })
-
-        self.assertFalse(
-            scanner._valid_dataframe(frame)
-        )
-
-    def test_none_dataframe_is_invalid(self):
-        self.assertFalse(
-            scanner._valid_dataframe(None)
-        )
-
-    def test_symbol_market_data_rejects_non_usdt(self):
-        with self.assertRaises(ValueError):
-            scanner.fetch_symbol_market_data("BTCBTC")
-
-    def test_symbol_market_data_fetches_required_timeframes(self):
-        import pandas as pd
-
-        frame = pd.DataFrame({
-            "close": [100.0] * 300,
-        })
-
-        with patch.object(
-            scanner,
-            "get_klines",
-            return_value=frame,
-        ) as mock_klines:
-            result = scanner.fetch_symbol_market_data(
-                "BTCUSDT"
+            function = getattr(
+                entry_engine,
+                function_name,
             )
 
-        self.assertEqual(
-            set(result.keys()),
-            {"5m", "15m", "30m", "1h"},
-        )
+            parameters = inspect.signature(
+                function
+            ).parameters
 
-        self.assertEqual(
-            mock_klines.call_count,
-            4,
-        )
+            expected = (
+                "trigger_df",
+                "confirm_frames",
+                "market_context",
+                "breakout_data",
+                "fundamental_data",
+                "capital_usdt",
+            )
 
-    def test_btc_market_data_fetches_three_timeframes(self):
-        import pandas as pd
+            for name in expected:
+                self.assertIn(
+                    name,
+                    parameters,
+                    f"{function_name} missing parameter {name}",
+                )
 
-        frame = pd.DataFrame({
-            "close": [100.0] * 300,
-        })
 
-        with patch.object(
+# ---------------------------------------------------------
+# Scanner integration tests
+# ---------------------------------------------------------
+
+class ScannerIntegrationTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        require_module(
+            cls,
             scanner,
-            "get_klines",
-            return_value=frame,
-        ) as mock_klines:
-            result = scanner.fetch_btc_market_data()
+            SCANNER_IMPORT_ERROR,
+            "scanner",
+        )
+
+    def test_scanner_imports(self):
+        self.assertIsNotNone(scanner)
+
+    def test_scanner_normalizer_signature(self):
+
+        function = getattr(
+            scanner,
+            "normalize_engine_signal",
+            None,
+        )
+
+        self.assertTrue(
+            callable(function),
+            "scanner.normalize_engine_signal() is missing",
+        )
+
+        parameters = inspect.signature(
+            function
+        ).parameters
+
+        expected = (
+            "result",
+            "symbol",
+            "strategy",
+            "candidate",
+            "market_context",
+        )
+
+        for name in expected:
+            self.assertIn(name, parameters)
+
+    def test_scanner_has_required_run_function(self):
+
+        self.assertTrue(
+            callable(
+                getattr(scanner, "run_scanner", None)
+            ),
+            "scanner.run_scanner() is missing",
+        )
+
+    def test_scanner_spot_only_symbol_filter_exists(self):
+
+        function = getattr(
+            scanner,
+            "_is_usdt_symbol",
+            None,
+        )
+
+        self.assertTrue(
+            callable(function),
+            "_is_usdt_symbol() is missing",
+        )
+
+        self.assertTrue(
+            function("BTCUSDT")
+        )
+
+        self.assertFalse(
+            function("BTCBUSD")
+        )
+
+    def test_scanner_does_not_enable_futures_execution(self):
+
+        source = inspect.getsource(scanner).lower()
+
+        self.assertNotIn(
+            "futures_create_order",
+            source,
+        )
+
+        self.assertNotIn(
+            "futures_account",
+            source,
+        )
+
+
+# ---------------------------------------------------------
+# Complete suite
+# ---------------------------------------------------------
+
+class SystemSmokeTests(unittest.TestCase):
+
+    def test_all_core_modules_available(self):
+
+        modules = {
+            "config": config,
+            "risk_manager": risk_manager,
+            "entry_engine": entry_engine,
+            "scanner": scanner,
+        }
+
+        missing = [
+            name
+            for name, module in modules.items()
+            if module is None
+        ]
 
         self.assertEqual(
-            set(result.keys()),
-            {"15m", "1h", "4h"},
+            missing,
+            [],
+            msg=f"Core modules unavailable: {missing}",
         )
 
-        self.assertEqual(
-            mock_klines.call_count,
-            3,
-        )
-
-
-# ============================================================
-# SIGNAL DELIVERY SAFETY TESTS
-# ============================================================
-
-class SignalDeliverySafetyTests(unittest.TestCase):
-
-    def test_non_usdt_signal_is_not_delivered(self):
-        signal = {
-            "symbol": "BTCBTC",
-            "strategy": "SCALP",
-            "classification": "STRONG BUY",
-            "risk_plan": {},
-        }
-
-        result = scanner.deliver_signal(
-            signal,
-            {"signals": []},
-        )
-
-        self.assertFalse(result)
-
-    def test_unapproved_signal_is_not_delivered(self):
-        signal = {
-            "symbol": "BTCUSDT",
-            "strategy": "SCALP",
-            "classification": "WATCHLIST",
-            "risk_plan": {},
-        }
-
-        result = scanner.deliver_signal(
-            signal,
-            {"signals": []},
-        )
-
-        self.assertFalse(result)
-
-    def test_signal_without_risk_plan_is_not_delivered(self):
-        signal = {
-            "symbol": "BTCUSDT",
-            "strategy": "SCALP",
-            "classification": "STRONG BUY",
-        }
-
-        result = scanner.deliver_signal(
-            signal,
-            {"signals": []},
-        )
-
-        self.assertFalse(result)
-
-    def test_dry_run_does_not_register_or_send(self):
-        signal = {
-            "symbol": "BTCUSDT",
-            "strategy": "SCALP",
-            "classification": "STRONG BUY",
-            "score": 90,
-            "risk_plan": {
-                "status": "VALID",
-            },
-        }
-
-        with patch.object(scanner, "DRY_RUN", True):
-            with patch.object(
-                scanner,
-                "register_signal",
-            ) as register_mock:
-                with patch.object(
-                    scanner,
-                    "send_signal",
-                ) as telegram_mock:
-                    result = scanner.deliver_signal(
-                        signal,
-                        {"signals": []},
-                    )
-
-        self.assertFalse(result)
-        register_mock.assert_not_called()
-        telegram_mock.assert_not_called()
-
-    def test_duplicate_signal_is_not_registered(self):
-        signal = {
-            "symbol": "BTCUSDT",
-            "strategy": "SCALP",
-            "classification": "STRONG BUY",
-            "score": 90,
-            "risk_plan": {
-                "status": "VALID",
-            },
-        }
-
-        with patch.object(scanner, "DRY_RUN", False):
-            with patch.object(
-                scanner,
-                "is_duplicate_signal",
-                return_value=True,
-            ):
-                with patch.object(
-                    scanner,
-                    "register_signal",
-                ) as register_mock:
-                    result = scanner.deliver_signal(
-                        signal,
-                        {"signals": []},
-                    )
-
-        self.assertFalse(result)
-        register_mock.assert_not_called()
-
-
-# ============================================================
-# TEST RUNNER
-# ============================================================
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

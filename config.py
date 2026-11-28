@@ -2,7 +2,7 @@
 """
 File: config.py
 System: Binance Spot V4 Smart Signal Scanner
-Version: 4.0.0
+Version: 4.0.1
 Formula Version: 4.0
 Python: 3.11+
 
@@ -18,6 +18,8 @@ Central configuration:
 Change Log:
 - Preserved the original V4 formula and all seven layer weights.
 - Added backward-compatible liquidity configuration aliases.
+- Added minimum_side_depth_usdt compatibility alias.
+- Validated all liquidity aliases against canonical values.
 - Hardened environment variable parsing.
 - Hardened configuration validation against malformed input.
 - Added a consistent self_check() return contract.
@@ -37,7 +39,7 @@ from typing import Any
 # ============================================================
 
 SYSTEM_NAME = "Binance Spot V4 Smart Signal Scanner"
-CODE_VERSION = "4.0.0"
+CODE_VERSION = "4.0.1"
 FORMULA_VERSION = "4.0"
 
 PYTHON_MIN_VERSION = (3, 11)
@@ -397,9 +399,10 @@ LIQUIDITY_CONFIG = {
     "maximum_estimated_slippage_percent": 0.15,
 
     # Backward-compatible aliases.
-    # Keep values synchronized with canonical keys.
+    # All aliases must match their canonical values.
     "max_spread_percent": 0.15,
     "min_top_depth_usdt": 5000.0,
+    "minimum_side_depth_usdt": 5000.0,
     "max_slippage_percent": 0.15,
 
     "maximum_imbalance_ratio": 5.0,
@@ -1200,15 +1203,21 @@ def validate_config(
     if not _is_positive_number(slippage):
         errors.append("Maximum slippage must be positive.")
 
-    if (
-        liquidity.get("max_spread_percent") != spread
-        or liquidity.get("min_top_depth_usdt") != depth
-        or liquidity.get("max_slippage_percent") != slippage
-    ):
-        errors.append(
-            "Liquidity compatibility aliases must match "
-            "their canonical configuration values."
-        )
+    liquidity_aliases = {
+        "max_spread_percent": spread,
+        "min_top_depth_usdt": depth,
+        "minimum_side_depth_usdt": depth,
+        "max_slippage_percent": slippage,
+    }
+
+    for alias, canonical_value in liquidity_aliases.items():
+        if (
+            alias not in liquidity
+            or liquidity.get(alias) != canonical_value
+        ):
+            errors.append(
+                f"Invalid liquidity setting: {alias}"
+            )
 
     # --------------------------------------------------------
     # Telegram checks

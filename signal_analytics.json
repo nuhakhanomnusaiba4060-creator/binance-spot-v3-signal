@@ -1,6 +1,6 @@
 {
   "version": "4.0.0",
-  "updated_at": "2026-11-28T08:01:57.367732+00:00",
+  "updated_at": "2026-11-28T08:55:58.795619+00:00",
   "accounting_type": "ESTIMATED_NET_RETURN",
   "round_trip_fee_pct": 0.2,
   "estimated_slippage_pct": 0.1,
@@ -1244,7 +1244,7 @@
       "gross_return_pct": null,
       "return_pct": null,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-28T08:00:59.999000+00:00",
+      "last_checked_at": "2026-11-28T08:54:59.999000+00:00",
       "last_closed_candle_at": "2026-11-27T21:02:00+00:00",
       "last_closed_candle_close": 0.1493,
       "data_error": null,
@@ -1254,7 +1254,7 @@
       "mfe_pct": 0.47043,
       "mae_pct": -1.075269,
       "last_candle_close": "2026-11-28T03:40:59.999000+00:00",
-      "candles_checked": 260
+      "candles_checked": 314
     },
     "XRPUSDT_SWING_20261126T035101.586796+0000": {
       "signal_id": "XRPUSDT_SWING_20261126T035101.586796+0000",
@@ -2498,7 +2498,7 @@
       "gross_return_pct": null,
       "return_pct": null,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-28T08:00:59.999000+00:00",
+      "last_checked_at": "2026-11-28T08:54:59.999000+00:00",
       "last_closed_candle_at": "2026-11-27T21:02:00+00:00",
       "last_closed_candle_close": 91.74,
       "data_error": null,
@@ -2508,7 +2508,7 @@
       "mfe_pct": 0.271769,
       "mae_pct": -1.619741,
       "last_candle_close": "2026-11-28T03:40:59.999000+00:00",
-      "candles_checked": 260
+      "candles_checked": 314
     },
     "FETUSDT_SCALP_20261127T191750.908178+0000": {
       "signal_id": "FETUSDT_SCALP_20261127T191750.908178+0000",

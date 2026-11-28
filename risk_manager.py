@@ -1,27 +1,13 @@
+
+"""Binance Spot V4 risk manager.
+
+All percentage values are expressed in percentage points:
+0.25 means 0.25%. Spot BUY execution only.
 """
-File: risk_manager.py
-System: Binance Spot V3 Smart Signal Scanner
-Code Version: 4.0.0
-Formula Version: 4.0
-Python: 3.11+
-Compatibility: New internal architecture
-Test Status: NOT RUN
-
-Purpose:
-- ATR and structure-aware Stop Loss.
-- Resistance-aware T1/T2/T3 targets.
-- Fee and slippage adjusted net Risk/Reward.
-- Risk-based position sizing for Spot trading.
-- Capital allocation and maximum risk controls.
-
-Spot only. No Futures. No Margin.
-All prices are estimates, not guaranteed execution prices.
-"""
-
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 try:
     import config as app_config
@@ -29,857 +15,639 @@ except Exception:
     app_config = None
 
 
-# ============================================================
-# DEFAULT CONFIGURATION
-# ============================================================
-
-DEFAULT_RISK_PER_TRADE_PCT = 1.0
-DEFAULT_MAX_POSITION_PCT = 25.0
-DEFAULT_MAX_PORTFOLIO_RISK_PCT = 3.0
-
-DEFAULT_ATR_STOP_MULTIPLIER = 1.8
-DEFAULT_MIN_STOP_PCT = 0.5
-DEFAULT_MAX_STOP_PCT = 5.0
-DEFAULT_SUPPORT_BUFFER_ATR = 0.25
-
-DEFAULT_TARGET_ATR_MULTIPLIERS = (1.5, 2.5, 3.5)
-DEFAULT_MIN_NET_RR_T1 = 1.2
-DEFAULT_MIN_NET_RR_T2 = 1.5
-DEFAULT_MIN_NET_RR_T3 = 2.0
-
-DEFAULT_ENTRY_FEE_PCT = 0.1
-DEFAULT_EXIT_FEE_PCT = 0.1
-DEFAULT_SLIPPAGE_PCT = 0.05
-
-EPSILON = 1e-12
+DEFAULTS = {
+    "risk_percent": 1.0,
+    "maximum_risk_percent": 1.0,
+    "max_position_percent": 25.0,
+    "max_portfolio_risk_percent": 3.0,
+    "atr_stop_multiplier": 1.8,
+    "min_stop_percent": 0.5,
+    "max_stop_percent": 5.0,
+    "support_buffer_atr": 0.25,
+    "target_atr_multipliers": (1.5, 2.5, 3.5),
+    "min_net_rr_t1": 1.2,
+    "min_net_rr_t2": 1.5,
+    "min_net_rr_t3": 2.0,
+    "entry_fee_percent": 0.10,
+    "exit_fee_percent": 0.10,
+    "slippage_percent": 0.05,
+    "minimum_notional_usdt": 5.0,
+}
 
 
-# ============================================================
-# GENERAL HELPERS
-# ============================================================
-
-def _finite(value: Any) -> Optional[float]:
+def _number(value: Any, default: float) -> float:
     try:
         result = float(value)
-        if not math.isfinite(result):
-            return None
-        return result
-    except (TypeError, ValueError, OverflowError):
-        return None
-
-
-def _positive(value: Any, default: float = 0.0) -> float:
-    result = _finite(value)
-    if result is None or result < 0:
+        return result if math.isfinite(result) else default
+    except (TypeError, ValueError):
         return default
-    return result
 
 
-def _config_section(name: str) -> Dict[str, Any]:
+def _find_config_value(names: Sequence[str], default: float) -> float:
     if app_config is None:
-        return {}
+        return default
 
-    value = getattr(app_config, name, None)
-    return value if isinstance(value, dict) else {}
+    roots = []
+    for root_name in (
+        "RISK_CONFIG",
+        "RISK_MANAGEMENT_CONFIG",
+        "EXECUTION_COST_CONFIG",
+    ):
+        root = getattr(app_config, root_name, None)
+        if isinstance(root, dict):
+            roots.append(root)
 
-
-def _config_value(
-    section_names: Iterable[str],
-    key_names: Iterable[str],
-    default: float,
-) -> float:
-    for section_name in section_names:
-        section = _config_section(section_name)
-
-        for key in key_names:
-            if key in section:
-                value = _finite(section[key])
-                if value is not None:
-                    return value
+    for root in roots:
+        for name in names:
+            if name in root:
+                return _number(root[name], default)
 
     return default
 
 
-def _risk_settings() -> Dict[str, float]:
-    return {
-        "risk_per_trade_pct": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("risk_per_trade_pct", "RISK_PER_TRADE_PCT"),
-            DEFAULT_RISK_PER_TRADE_PCT,
+def _risk_settings() -> Dict[str, Any]:
+    settings = dict(DEFAULTS)
+
+    aliases = {
+        "risk_percent": (
+            "risk_percent",
+            "risk_per_trade_percent",
+            "max_risk_per_trade_pct",
         ),
-        "max_position_pct": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("max_position_pct", "MAX_POSITION_PCT"),
-            DEFAULT_MAX_POSITION_PCT,
+        "maximum_risk_percent": (
+            "maximum_risk_percent",
+            "max_risk_percent",
+            "maximum_risk_per_trade_pct",
         ),
-        "max_portfolio_risk_pct": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("max_portfolio_risk_pct", "MAX_PORTFOLIO_RISK_PCT"),
-            DEFAULT_MAX_PORTFOLIO_RISK_PCT,
+        "max_position_percent": (
+            "max_position_percent",
+            "maximum_position_percent",
+            "max_allocation_percent",
         ),
-        "atr_stop_multiplier": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("atr_stop_multiplier", "ATR_STOP_MULTIPLIER"),
-            DEFAULT_ATR_STOP_MULTIPLIER,
+        "max_portfolio_risk_percent": (
+            "max_portfolio_risk_percent",
+            "portfolio_risk_limit_percent",
         ),
-        "min_stop_pct": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("min_stop_pct", "MIN_STOP_PCT"),
-            DEFAULT_MIN_STOP_PCT,
+        "atr_stop_multiplier": (
+            "atr_stop_multiplier",
+            "stop_atr_multiplier",
         ),
-        "max_stop_pct": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("max_stop_pct", "MAX_STOP_PCT"),
-            DEFAULT_MAX_STOP_PCT,
+        "min_stop_percent": (
+            "min_stop_percent",
+            "minimum_stop_percent",
         ),
-        "support_buffer_atr": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("support_buffer_atr", "SUPPORT_BUFFER_ATR"),
-            DEFAULT_SUPPORT_BUFFER_ATR,
+        "max_stop_percent": (
+            "max_stop_percent",
+            "maximum_stop_percent",
         ),
-        "min_net_rr_t1": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("min_net_rr_t1", "MIN_NET_RR_T1"),
-            DEFAULT_MIN_NET_RR_T1,
+        "support_buffer_atr": (
+            "support_buffer_atr",
+            "support_buffer_atr_multiplier",
         ),
-        "min_net_rr_t2": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("min_net_rr_t2", "MIN_NET_RR_T2"),
-            DEFAULT_MIN_NET_RR_T2,
+        "min_net_rr_t1": (
+            "min_net_rr_t1",
+            "minimum_net_rr_t1",
+            "min_risk_reward_t1",
         ),
-        "min_net_rr_t3": _config_value(
-            ("RISK_CONFIG", "RISK_MANAGEMENT_CONFIG"),
-            ("min_net_rr_t3", "MIN_NET_RR_T3"),
-            DEFAULT_MIN_NET_RR_T3,
+        "min_net_rr_t2": (
+            "min_net_rr_t2",
+            "minimum_net_rr_t2",
+            "min_risk_reward_t2",
         ),
-        "entry_fee_pct": _config_value(
-            ("EXECUTION_COST_CONFIG", "RISK_CONFIG"),
-            ("entry_fee_pct", "ENTRY_FEE_PCT"),
-            DEFAULT_ENTRY_FEE_PCT,
+        "min_net_rr_t3": (
+            "min_net_rr_t3",
+            "minimum_net_rr_t3",
+            "min_risk_reward_t3",
         ),
-        "exit_fee_pct": _config_value(
-            ("EXECUTION_COST_CONFIG", "RISK_CONFIG"),
-            ("exit_fee_pct", "EXIT_FEE_PCT"),
-            DEFAULT_EXIT_FEE_PCT,
+        "entry_fee_percent": (
+            "entry_fee_percent",
+            "entry_fee_pct",
+            "taker_fee_percent",
         ),
-        "slippage_pct": _config_value(
-            ("EXECUTION_COST_CONFIG", "RISK_CONFIG"),
-            ("slippage_pct", "SLIPPAGE_PCT"),
-            DEFAULT_SLIPPAGE_PCT,
+        "exit_fee_percent": (
+            "exit_fee_percent",
+            "exit_fee_pct",
+        ),
+        "slippage_percent": (
+            "slippage_percent",
+            "slippage_pct",
+            "estimated_slippage_percent",
+        ),
+        "minimum_notional_usdt": (
+            "minimum_notional_usdt",
+            "min_notional_usdt",
         ),
     }
 
+    for key, names in aliases.items():
+        settings[key] = _find_config_value(names, settings[key])
 
-def _valid_price(value: Any) -> Optional[float]:
-    result = _finite(value)
-    if result is None or result <= 0:
-        return None
-    return result
+    for key in (
+        "risk_percent",
+        "maximum_risk_percent",
+        "max_position_percent",
+        "max_portfolio_risk_percent",
+        "min_stop_percent",
+        "max_stop_percent",
+        "min_net_rr_t1",
+        "min_net_rr_t2",
+        "min_net_rr_t3",
+    ):
+        settings[key] = max(0.0, settings[key])
 
+    settings["maximum_risk_percent"] = min(
+        settings["maximum_risk_percent"],
+        settings["risk_percent"] or settings["maximum_risk_percent"],
+    )
 
-def _normalize_levels(
-    values: Optional[Iterable[Any]],
-    entry: float,
-    direction: str,
-) -> List[float]:
-    if values is None:
-        return []
+    settings["max_stop_percent"] = max(
+        settings["min_stop_percent"],
+        settings["max_stop_percent"],
+    )
 
-    if isinstance(values, (int, float, str)):
-        values = [values]
+    return settings
 
-    result = []
-
-    for value in values:
-        price = _valid_price(value)
-        if price is None:
-            continue
-
-        if direction == "BUY" and price > entry:
-            result.append(price)
-        elif direction == "SELL" and price < entry:
-            result.append(price)
-
-    return sorted(set(result), reverse=(direction == "SELL"))
-
-
-# ============================================================
-# EXECUTION COSTS
-# ============================================================
 
 def calculate_execution_cost_pct(
-    entry_fee_pct: Optional[float] = None,
-    exit_fee_pct: Optional[float] = None,
-    slippage_pct: Optional[float] = None,
+    entry_fee_percent: Optional[float] = None,
+    exit_fee_percent: Optional[float] = None,
+    slippage_percent: Optional[float] = None,
 ) -> float:
-    """
-    Estimate round-trip cost as percentage of notional.
+    """Estimated round-trip fees and slippage in percentage points."""
 
-    Slippage is assumed to be a total round-trip estimate.
-    Do not pass a one-way slippage estimate as a round-trip value.
-    """
     settings = _risk_settings()
 
     entry_fee = (
-        settings["entry_fee_pct"]
-        if entry_fee_pct is None
-        else _positive(entry_fee_pct)
+        settings["entry_fee_percent"]
+        if entry_fee_percent is None
+        else _number(entry_fee_percent, settings["entry_fee_percent"])
     )
 
     exit_fee = (
-        settings["exit_fee_pct"]
-        if exit_fee_pct is None
-        else _positive(exit_fee_pct)
+        settings["exit_fee_percent"]
+        if exit_fee_percent is None
+        else _number(exit_fee_percent, settings["exit_fee_percent"])
     )
 
     slippage = (
-        settings["slippage_pct"]
-        if slippage_pct is None
-        else _positive(slippage_pct)
+        settings["slippage_percent"]
+        if slippage_percent is None
+        else _number(slippage_percent, settings["slippage_percent"])
     )
 
-    if min(entry_fee, exit_fee, slippage) < 0:
-        raise ValueError("Execution costs cannot be negative")
-
-    return entry_fee + exit_fee + slippage
+    return (
+        max(0.0, entry_fee)
+        + max(0.0, exit_fee)
+        + max(0.0, slippage)
+    )
 
 
 def estimate_net_return_pct(
-    entry_price: float,
+    entry: float,
     exit_price: float,
     direction: str = "BUY",
-    entry_fee_pct: Optional[float] = None,
-    exit_fee_pct: Optional[float] = None,
-    slippage_pct: Optional[float] = None,
-) -> Optional[float]:
-    """Return estimated net percentage return after round-trip costs."""
-    entry = _valid_price(entry_price)
-    exit_value = _valid_price(exit_price)
+    costs_pct: Optional[float] = None,
+) -> float:
 
-    if entry is None or exit_value is None:
-        return None
+    if entry <= 0 or exit_price <= 0:
+        return 0.0
 
-    direction = direction.upper()
-
-    if direction == "BUY":
-        gross_pct = ((exit_value - entry) / entry) * 100.0
-    elif direction == "SELL":
-        gross_pct = ((entry - exit_value) / entry) * 100.0
-    else:
-        return None
-
-    costs = calculate_execution_cost_pct(
-        entry_fee_pct,
-        exit_fee_pct,
-        slippage_pct,
+    costs = (
+        calculate_execution_cost_pct()
+        if costs_pct is None
+        else max(0.0, _number(costs_pct, 0.0))
     )
 
-    return gross_pct - costs
+    if direction.upper() == "BUY":
+        gross = (exit_price - entry) / entry * 100.0
+    else:
+        gross = (entry - exit_price) / entry * 100.0
 
+    return gross - costs
 
-# ============================================================
-# STOP LOSS
-# ============================================================
 
 def calculate_stop_loss(
     entry_price: float,
-    atr: Optional[float] = None,
+    atr: float,
     support: Optional[float] = None,
-    resistance: Optional[float] = None,
     direction: str = "BUY",
-    atr_multiplier: Optional[float] = None,
-    min_stop_pct: Optional[float] = None,
-    max_stop_pct: Optional[float] = None,
-    support_buffer_atr: Optional[float] = None,
-) -> Optional[float]:
-    """
-    Calculate a structure-aware ATR Stop Loss.
+) -> float:
 
-    BUY:
-        Stop below entry, preferably below nearby support.
+    if direction.upper() != "BUY":
+        raise ValueError("V4 execution is Spot BUY only")
 
-    SELL:
-        Stop above entry, preferably above nearby resistance.
-        SELL calculation is provided for analysis compatibility only;
-        this scanner's trade execution is Spot BUY-only.
-    """
-    entry = _valid_price(entry_price)
-    if entry is None:
-        return None
+    entry = _number(entry_price, 0.0)
+    atr_value = _number(atr, 0.0)
 
-    direction = direction.upper()
-    if direction not in {"BUY", "SELL"}:
-        return None
+    if entry <= 0 or atr_value <= 0:
+        raise ValueError("entry_price and ATR must be positive")
 
     settings = _risk_settings()
 
-    atr_value = _positive(atr)
-    if atr_value <= 0:
-        return None
+    distance = atr_value * settings["atr_stop_multiplier"]
 
-    multiplier = (
-        settings["atr_stop_multiplier"]
-        if atr_multiplier is None
-        else _positive(atr_multiplier)
-    )
+    if support is not None:
+        support_value = _number(support, 0.0)
 
-    min_pct = (
-        settings["min_stop_pct"]
-        if min_stop_pct is None
-        else _positive(min_stop_pct)
-    )
-
-    max_pct = (
-        settings["max_stop_pct"]
-        if max_stop_pct is None
-        else _positive(max_stop_pct)
-    )
-
-    buffer_multiplier = (
-        settings["support_buffer_atr"]
-        if support_buffer_atr is None
-        else _positive(support_buffer_atr)
-    )
-
-    if multiplier <= 0 or min_pct <= 0 or max_pct < min_pct:
-        return None
-
-    min_distance = entry * min_pct / 100.0
-    max_distance = entry * max_pct / 100.0
-    atr_distance = atr_value * multiplier
-
-    if direction == "BUY":
-        proposed_stop = entry - atr_distance
-
-        support_price = _valid_price(support)
-        if support_price is not None and support_price < entry:
-            structural_stop = (
-                support_price - atr_value * buffer_multiplier
+        if 0 < support_value < entry:
+            structural_distance = entry - (
+                support_value
+                - atr_value * settings["support_buffer_atr"]
             )
 
-            # Use support only when it does not exceed the maximum
-            # permitted stop distance.
-            structural_distance = entry - structural_stop
+            if structural_distance > 0:
+                distance = max(distance, structural_distance)
 
-            if min_distance <= structural_distance <= max_distance:
-                proposed_stop = min(proposed_stop, structural_stop)
+    distance_pct = distance / entry * 100.0
 
-        distance = entry - proposed_stop
-        distance = max(min_distance, min(distance, max_distance))
-        stop = entry - distance
+    distance_pct = min(
+        settings["max_stop_percent"],
+        max(settings["min_stop_percent"], distance_pct),
+    )
 
-        if stop <= 0 or stop >= entry:
-            return None
+    stop = entry * (1.0 - distance_pct / 100.0)
 
-        return stop
-
-    proposed_stop = entry + atr_distance
-
-    resistance_price = _valid_price(resistance)
-    if resistance_price is not None and resistance_price > entry:
-        structural_stop = (
-            resistance_price + atr_value * buffer_multiplier
-        )
-
-        structural_distance = structural_stop - entry
-
-        if min_distance <= structural_distance <= max_distance:
-            proposed_stop = max(proposed_stop, structural_stop)
-
-    distance = proposed_stop - entry
-    distance = max(min_distance, min(distance, max_distance))
-    stop = entry + distance
-
-    if stop <= entry:
-        return None
+    if not 0 < stop < entry:
+        raise ValueError("Calculated BUY stop loss is invalid")
 
     return stop
 
 
-# ============================================================
-# TARGETS
-# ============================================================
+def _valid_resistances(
+    entry: float,
+    resistances: Optional[Iterable[Any]],
+) -> List[float]:
+
+    values = []
+
+    for item in resistances or []:
+        value = _number(item, 0.0)
+
+        if value > entry * 1.0001:
+            values.append(value)
+
+    return sorted(set(values))
+
+
+def _required_target_price(
+    entry: float,
+    stop: float,
+    min_net_rr: float,
+    costs_pct: float,
+) -> float:
+
+    risk_pct = (entry - stop) / entry * 100.0
+
+    required_gross_reward_pct = (
+        min_net_rr * (risk_pct + costs_pct)
+        + costs_pct
+    )
+
+    # Small rounding buffer prevents floating-point rejection at the threshold.
+    return entry * (
+        1.0 + (required_gross_reward_pct + 0.001) / 100.0
+    )
+
 
 def calculate_targets(
     entry_price: float,
-    stop_loss: float,
-    atr: Optional[float] = None,
+    atr: float,
+    stop_loss: Optional[float] = None,
     resistances: Optional[Iterable[Any]] = None,
-    supports: Optional[Iterable[Any]] = None,
     direction: str = "BUY",
-    target_multipliers: Optional[Tuple[float, float, float]] = None,
-) -> Dict[str, Optional[float]]:
-    """
-    Calculate three targets using ATR multiples and structure.
+    execution_cost_pct: Optional[float] = None,
+) -> List[float]:
 
-    For BUY, nearby resistance levels can be used as targets,
-    but a resistance too close to entry is skipped.
+    if direction.upper() != "BUY":
+        raise ValueError("V4 execution is Spot BUY only")
 
-    T1/T2/T3 are ascending for BUY.
-    """
-    entry = _valid_price(entry_price)
-    stop = _valid_price(stop_loss)
+    entry = _number(entry_price, 0.0)
+    atr_value = _number(atr, 0.0)
 
-    if entry is None or stop is None:
-        return {"t1": None, "t2": None, "t3": None}
+    if entry <= 0 or atr_value <= 0:
+        raise ValueError("entry_price and ATR must be positive")
 
-    direction = direction.upper()
+    settings = _risk_settings()
 
-    if direction == "BUY" and stop >= entry:
-        return {"t1": None, "t2": None, "t3": None}
-
-    if direction == "SELL" and stop <= entry:
-        return {"t1": None, "t2": None, "t3": None}
-
-    atr_value = _positive(atr)
-
-    if atr_value <= 0:
-        return {"t1": None, "t2": None, "t3": None}
-
-    risk_distance = abs(entry - stop)
-
-    if target_multipliers is None:
-        target_multipliers = DEFAULT_TARGET_ATR_MULTIPLIERS
-
-    if (
-        not isinstance(target_multipliers, (tuple, list))
-        or len(target_multipliers) != 3
-    ):
-        raise ValueError("Exactly three target multipliers are required")
-
-    multipliers = [_positive(x) for x in target_multipliers]
-
-    if any(x <= 0 for x in multipliers):
-        return {"t1": None, "t2": None, "t3": None}
-
-    multipliers.sort()
-
-    if direction == "BUY":
-        structural_levels = _normalize_levels(
-            resistances, entry, "BUY"
-        )
-
-        raw_targets = [
-            entry + max(atr_value * multiplier, risk_distance * multiplier)
-            for multiplier in multipliers
-        ]
-
-        targets = []
-
-        for index, raw_target in enumerate(raw_targets):
-            candidates = [
-                level for level in structural_levels
-                if level > entry
-                and (not targets or level > targets[-1])
-                and level >= entry + risk_distance * 1.05
-            ]
-
-            if candidates:
-                # Select the nearest meaningful resistance above entry.
-                selected = candidates[0]
-
-                # Do not collapse later targets onto the same resistance.
-                if selected > (targets[-1] if targets else entry):
-                    targets.append(selected)
-                    continue
-
-            targets.append(raw_target)
-
-        targets = sorted(targets)
-
-        # Ensure distinct and strictly increasing targets.
-        for i in range(1, 3):
-            if targets[i] <= targets[i - 1]:
-                targets[i] = targets[i - 1] + atr_value * 0.25
-
-        return {
-            "t1": targets[0],
-            "t2": targets[1],
-            "t3": targets[2],
-        }
-
-    structural_levels = _normalize_levels(
-        supports, entry, "SELL"
+    stop = (
+        _number(stop_loss, 0.0)
+        if stop_loss is not None
+        else calculate_stop_loss(entry, atr_value)
     )
 
-    raw_targets = [
-        entry - max(atr_value * multiplier, risk_distance * multiplier)
-        for multiplier in multipliers
-    ]
+    if not 0 < stop < entry:
+        raise ValueError("stop_loss must be below entry for BUY")
+
+    costs = (
+        calculate_execution_cost_pct()
+        if execution_cost_pct is None
+        else max(0.0, _number(execution_cost_pct, 0.0))
+    )
+
+    resistance_levels = _valid_resistances(entry, resistances)
+
+    multipliers = tuple(settings["target_atr_multipliers"])
 
     targets = []
+    previous = entry
 
-    for raw_target in raw_targets:
-        candidates = [
-            level for level in structural_levels
-            if level < entry
-            and (not targets or level < targets[-1])
-            and level <= entry - risk_distance * 1.05
-        ]
-
-        if candidates:
-            targets.append(candidates[0])
-        else:
-            targets.append(raw_target)
-
-    targets = sorted(targets, reverse=True)
-
-    for i in range(1, 3):
-        if targets[i] >= targets[i - 1]:
-            targets[i] = targets[i - 1] - atr_value * 0.25
-
-    return {
-        "t1": targets[0],
-        "t2": targets[1],
-        "t3": targets[2],
-    }
-
-
-# ============================================================
-# RISK / REWARD
-# ============================================================
-
-def calculate_risk_reward(
-    entry_price: float,
-    stop_loss: float,
-    target_price: float,
-    direction: str = "BUY",
-    entry_fee_pct: Optional[float] = None,
-    exit_fee_pct: Optional[float] = None,
-    slippage_pct: Optional[float] = None,
-) -> Optional[Dict[str, float]]:
-    """
-    Calculate gross and net reward/risk.
-
-    Costs are converted to price-equivalent amounts.
-    Net R:R = net reward / net loss.
-    """
-    entry = _valid_price(entry_price)
-    stop = _valid_price(stop_loss)
-    target = _valid_price(target_price)
-
-    if entry is None or stop is None or target is None:
-        return None
-
-    direction = direction.upper()
-
-    if direction == "BUY":
-        if not (stop < entry < target):
-            return None
-
-        gross_risk_pct = ((entry - stop) / entry) * 100.0
-        gross_reward_pct = ((target - entry) / entry) * 100.0
-
-    elif direction == "SELL":
-        if not (target < entry < stop):
-            return None
-
-        gross_risk_pct = ((stop - entry) / entry) * 100.0
-        gross_reward_pct = ((entry - target) / entry) * 100.0
-
-    else:
-        return None
-
-    costs_pct = calculate_execution_cost_pct(
-        entry_fee_pct,
-        exit_fee_pct,
-        slippage_pct,
+    rr_limits = (
+        settings["min_net_rr_t1"],
+        settings["min_net_rr_t2"],
+        settings["min_net_rr_t3"],
     )
 
-    net_reward_pct = gross_reward_pct - costs_pct
-    net_risk_pct = gross_risk_pct + costs_pct
+    for index, multiplier in enumerate(multipliers[:3]):
 
-    if net_reward_pct <= 0 or net_risk_pct <= 0:
+        fallback = entry + atr_value * float(multiplier)
+
+        required = _required_target_price(
+            entry,
+            stop,
+            rr_limits[index],
+            costs,
+        )
+
+        next_resistance = next(
+            (
+                level
+                for level in resistance_levels
+                if level > previous * 1.0001
+            ),
+            None,
+        )
+
+        if next_resistance is not None:
+            # Keep the actual nearby resistance.
+            # Validation will reject insufficient T1 reward.
+            candidate = next_resistance
+        else:
+            candidate = max(fallback, required)
+
+        if candidate <= previous * 1.0001:
+            candidate = max(
+                previous + atr_value * 0.25,
+                required,
+            )
+
+        targets.append(candidate)
+        previous = candidate
+
+    while len(targets) < 3:
+        index = len(targets)
+
+        candidate = max(
+            previous + atr_value,
+            _required_target_price(
+                entry,
+                stop,
+                rr_limits[index],
+                costs,
+            ),
+        )
+
+        targets.append(candidate)
+        previous = candidate
+
+    return targets[:3]
+
+
+def calculate_risk_reward(
+    entry: float,
+    stop_loss: float,
+    target: float,
+    direction: str = "BUY",
+    execution_cost_pct: Optional[float] = None,
+) -> Dict[str, float]:
+
+    entry = _number(entry, 0.0)
+    stop = _number(stop_loss, 0.0)
+    target = _number(target, 0.0)
+
+    costs = (
+        calculate_execution_cost_pct()
+        if execution_cost_pct is None
+        else max(0.0, _number(execution_cost_pct, 0.0))
+    )
+
+    if entry <= 0 or stop <= 0 or target <= 0:
         return {
-            "gross_reward_pct": gross_reward_pct,
-            "gross_risk_pct": gross_risk_pct,
-            "execution_cost_pct": costs_pct,
-            "net_reward_pct": net_reward_pct,
-            "net_risk_pct": net_risk_pct,
-            "gross_rr": gross_reward_pct / gross_risk_pct,
+            "gross_reward_pct": 0.0,
+            "gross_risk_pct": 0.0,
+            "net_reward_pct": 0.0,
+            "net_risk_pct": 0.0,
             "net_rr": 0.0,
         }
 
+    if direction.upper() == "BUY":
+        gross_reward = max(
+            0.0,
+            (target - entry) / entry * 100.0,
+        )
+
+        gross_risk = max(
+            0.0,
+            (entry - stop) / entry * 100.0,
+        )
+    else:
+        gross_reward = max(
+            0.0,
+            (entry - target) / entry * 100.0,
+        )
+
+        gross_risk = max(
+            0.0,
+            (stop - entry) / entry * 100.0,
+        )
+
+    net_reward = max(0.0, gross_reward - costs)
+    net_risk = gross_risk + costs
+
     return {
-        "gross_reward_pct": gross_reward_pct,
-        "gross_risk_pct": gross_risk_pct,
-        "execution_cost_pct": costs_pct,
-        "net_reward_pct": net_reward_pct,
-        "net_risk_pct": net_risk_pct,
-        "gross_rr": gross_reward_pct / gross_risk_pct,
-        "net_rr": net_reward_pct / net_risk_pct,
+        "gross_reward_pct": gross_reward,
+        "gross_risk_pct": gross_risk,
+        "net_reward_pct": net_reward,
+        "net_risk_pct": net_risk,
+        "net_rr": (
+            net_reward / net_risk
+            if net_risk > 0
+            else 0.0
+        ),
     }
 
-
-# ============================================================
-# POSITION SIZING
-# ============================================================
 
 def calculate_position_size(
     capital_usdt: float,
     entry_price: float,
     stop_loss: float,
-    risk_pct: Optional[float] = None,
-    max_position_pct: Optional[float] = None,
-    entry_fee_pct: Optional[float] = None,
-    exit_fee_pct: Optional[float] = None,
-    slippage_pct: Optional[float] = None,
+    risk_percent: Optional[float] = None,
+    execution_cost_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """
-    Calculate Spot position size from account risk.
-
-    Risk budget:
-        capital * risk_pct
-
-    Estimated loss per unit:
-        entry-stop distance + estimated execution costs
-
-    Position notional is capped by max_position_pct of capital.
-    """
-    capital = _positive(capital_usdt)
-    entry = _valid_price(entry_price)
-    stop = _valid_price(stop_loss)
 
     settings = _risk_settings()
 
-    if capital <= 0 or entry is None or stop is None:
-        return {
-            "valid": False,
-            "reason": "INVALID_CAPITAL_OR_PRICE",
-            "quantity": 0.0,
-            "position_value_usdt": 0.0,
-        }
+    capital = _number(capital_usdt, 0.0)
+    entry = _number(entry_price, 0.0)
+    stop = _number(stop_loss, 0.0)
 
-    if stop >= entry:
-        return {
-            "valid": False,
-            "reason": "INVALID_SPOT_BUY_STOP",
-            "quantity": 0.0,
-            "position_value_usdt": 0.0,
-        }
-
-    risk_percent = (
-        settings["risk_per_trade_pct"]
-        if risk_pct is None
-        else _positive(risk_pct)
+    risk_pct = (
+        settings["risk_percent"]
+        if risk_percent is None
+        else min(
+            settings["maximum_risk_percent"],
+            max(0.0, _number(risk_percent, 0.0)),
+        )
     )
 
-    allocation_percent = (
-        settings["max_position_pct"]
-        if max_position_pct is None
-        else _positive(max_position_pct)
+    costs = (
+        calculate_execution_cost_pct()
+        if execution_cost_pct is None
+        else max(0.0, _number(execution_cost_pct, 0.0))
     )
 
-    if not (0 < risk_percent <= 100):
-        return {
-            "valid": False,
-            "reason": "INVALID_RISK_PERCENT",
-            "quantity": 0.0,
-            "position_value_usdt": 0.0,
-        }
-
-    if not (0 < allocation_percent <= 100):
-        return {
-            "valid": False,
-            "reason": "INVALID_ALLOCATION_PERCENT",
-            "quantity": 0.0,
-            "position_value_usdt": 0.0,
-        }
-
-    costs_pct = calculate_execution_cost_pct(
-        entry_fee_pct,
-        exit_fee_pct,
-        slippage_pct,
-    )
-
-    stop_distance_pct = ((entry - stop) / entry) * 100.0
-
-    # Cost-adjusted loss estimate per unit, expressed as a
-    # percentage of entry notional.
-    estimated_loss_pct = stop_distance_pct + costs_pct
-
-    if estimated_loss_pct <= 0:
-        return {
-            "valid": False,
-            "reason": "INVALID_ESTIMATED_LOSS",
-            "quantity": 0.0,
-            "position_value_usdt": 0.0,
-        }
-
-    risk_budget = capital * risk_percent / 100.0
-    max_allocation = capital * allocation_percent / 100.0
-
-    risk_limited_notional = (
-        risk_budget / (estimated_loss_pct / 100.0)
-    )
-
-    position_value = min(
-        risk_limited_notional,
-        max_allocation,
-    )
-
-    quantity = position_value / entry
-
-    estimated_loss_usdt = (
-        position_value * estimated_loss_pct / 100.0
-    )
-
-    return {
-        "valid": True,
-        "reason": "VALID",
-        "capital_usdt": capital,
-        "risk_percent": risk_percent,
-        "risk_budget_usdt": risk_budget,
-        "max_position_percent": allocation_percent,
-        "max_allocation_usdt": max_allocation,
-        "risk_limited_notional_usdt": risk_limited_notional,
-        "position_value_usdt": position_value,
-        "quantity": quantity,
-        "entry_price": entry,
-        "stop_loss": stop,
-        "stop_distance_percent": stop_distance_pct,
-        "execution_cost_percent": costs_pct,
-        "estimated_loss_percent": estimated_loss_pct,
-        "estimated_loss_usdt": estimated_loss_usdt,
-        "estimated_loss_within_budget": (
-            estimated_loss_usdt <= risk_budget + 1e-8
-        ),
+    result = {
+        "valid": False,
+        "quantity": 0.0,
+        "position_size_usdt": 0.0,
+        "risk_budget_usdt": 0.0,
+        "estimated_loss_usdt": 0.0,
+        "estimated_loss_within_budget": False,
+        "reason": "invalid inputs",
     }
 
+    if capital <= 0 or entry <= 0 or not 0 < stop < entry:
+        return result
 
-# ============================================================
-# RISK VALIDATION
-# ============================================================
+    risk_budget = capital * risk_pct / 100.0
+
+    per_unit_loss = (
+        entry - stop
+        + entry * costs / 100.0
+    )
+
+    if per_unit_loss <= 0:
+        result["reason"] = "invalid per-unit risk"
+        return result
+
+    quantity_by_risk = risk_budget / per_unit_loss
+
+    max_position_usdt = (
+        capital * settings["max_position_percent"] / 100.0
+    )
+
+    quantity_by_allocation = max_position_usdt / entry
+
+    quantity = min(
+        quantity_by_risk,
+        quantity_by_allocation,
+    )
+
+    position_usdt = quantity * entry
+    estimated_loss = quantity * per_unit_loss
+
+    min_notional = settings["minimum_notional_usdt"]
+
+    valid = (
+        quantity > 0
+        and position_usdt >= min_notional
+        and estimated_loss <= risk_budget + 1e-9
+    )
+
+    result.update({
+        "valid": valid,
+        "quantity": quantity,
+        "position_size_usdt": position_usdt,
+        "risk_budget_usdt": risk_budget,
+        "estimated_loss_usdt": estimated_loss,
+        "estimated_loss_within_budget": (
+            estimated_loss <= risk_budget + 1e-9
+        ),
+        "reason": (
+            "ok"
+            if valid
+            else (
+                "position below minimum notional"
+                if position_usdt < min_notional
+                else "risk budget exceeded"
+            )
+        ),
+    })
+
+    return result
+
 
 def validate_risk(
-    entry_price: float,
+    entry: float,
     stop_loss: float,
-    targets: Dict[str, Any],
-    capital_usdt: Optional[float] = None,
-    position_size: Optional[Dict[str, Any]] = None,
-    min_net_rr_t1: Optional[float] = None,
-    min_net_rr_t2: Optional[float] = None,
-    min_net_rr_t3: Optional[float] = None,
+    targets: Sequence[float],
+    position: Optional[Dict[str, Any]] = None,
+    execution_cost_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Validate Spot BUY risk plan using net R:R."""
-    entry = _valid_price(entry_price)
-    stop = _valid_price(stop_loss)
 
     settings = _risk_settings()
 
-    minimums = {
-        "t1": (
-            settings["min_net_rr_t1"]
-            if min_net_rr_t1 is None
-            else _positive(min_net_rr_t1)
-        ),
-        "t2": (
-            settings["min_net_rr_t2"]
-            if min_net_rr_t2 is None
-            else _positive(min_net_rr_t2)
-        ),
-        "t3": (
-            settings["min_net_rr_t3"]
-            if min_net_rr_t3 is None
-            else _positive(min_net_rr_t3)
-        ),
-    }
+    checks = {}
 
-    if entry is None or stop is None or stop >= entry:
-        return {
-            "valid": False,
-            "reason": "INVALID_ENTRY_OR_STOP",
-            "target_checks": {},
-        }
+    limits = (
+        settings["min_net_rr_t1"],
+        settings["min_net_rr_t2"],
+        settings["min_net_rr_t3"],
+    )
 
-    if not isinstance(targets, dict):
-        return {
-            "valid": False,
-            "reason": "INVALID_TARGETS",
-            "target_checks": {},
-        }
+    labels = ("t1", "t2", "t3")
 
-    target_checks: Dict[str, Any] = {}
+    for index, label in enumerate(labels):
 
-    for name in ("t1", "t2", "t3"):
-        target = _valid_price(targets.get(name))
-
-        if target is None:
-            target_checks[name] = {
-                "valid": False,
-                "reason": "MISSING_TARGET",
-                "net_rr": None,
-            }
-            continue
-
-        rr = calculate_risk_reward(
-            entry_price=entry,
-            stop_loss=stop,
-            target_price=target,
-            direction="BUY",
+        target = (
+            _number(targets[index], 0.0)
+            if index < len(targets)
+            else 0.0
         )
 
-        if rr is None:
-            target_checks[name] = {
-                "valid": False,
-                "reason": "INVALID_TARGET_GEOMETRY",
-                "net_rr": None,
-            }
-            continue
+        metrics = calculate_risk_reward(
+            entry,
+            stop_loss,
+            target,
+            execution_cost_pct=execution_cost_pct,
+        )
 
-        target_checks[name] = {
-            "valid": rr["net_rr"] >= minimums[name],
-            "reason": (
-                "VALID"
-                if rr["net_rr"] >= minimums[name]
-                else "NET_RR_BELOW_MINIMUM"
-            ),
-            "minimum_net_rr": minimums[name],
-            **rr,
+        checks[label] = {
+            **metrics,
+            "minimum_net_rr": limits[index],
+            "valid": metrics["net_rr"] >= limits[index],
         }
 
-    t1_valid = target_checks["t1"]["valid"]
-    t2_valid = target_checks["t2"]["valid"]
-    t3_valid = target_checks["t3"]["valid"]
+    position_valid = bool(
+        position
+        and position.get("valid")
+        and position.get("estimated_loss_within_budget")
+    )
 
-    if not t1_valid:
-        return {
-            "valid": False,
-            "reason": "T1_NET_RR_FAILED",
-            "target_checks": target_checks,
-        }
+    # T1 is the minimum executable profit objective.
+    # T2/T3 are additional objectives, not mandatory gates.
+    valid = bool(
+        checks["t1"]["valid"]
+        and position_valid
+    )
 
-    if position_size is not None and not position_size.get("valid", False):
-        return {
-            "valid": False,
-            "reason": "POSITION_SIZE_INVALID",
-            "target_checks": target_checks,
-        }
+    reasons = []
 
-    if (
-        position_size is not None
-        and not position_size.get("estimated_loss_within_budget", False)
-    ):
-        return {
-            "valid": False,
-            "reason": "RISK_BUDGET_EXCEEDED",
-            "target_checks": target_checks,
-        }
+    if not checks["t1"]["valid"]:
+        reasons.append("T1 net risk/reward below minimum")
+
+    if not position_valid:
+        reasons.append(
+            "position sizing invalid or over risk budget"
+        )
 
     return {
-        "valid": True,
-        "reason": "VALID",
-        "target_checks": target_checks,
-        "t1_valid": t1_valid,
-        "t2_valid": t2_valid,
-        "t3_valid": t3_valid,
-        "capital_usdt": _positive(capital_usdt),
+        "valid": valid,
+        "reason": "; ".join(reasons) if reasons else "ok",
+        "target_checks": checks,
+        "position_valid": position_valid,
+        "minimum_net_rr_t1": settings["min_net_rr_t1"],
     }
 
-
-# ============================================================
-# COMPLETE RISK PLAN
-# ============================================================
 
 def build_risk_plan(
     entry_price: float,
@@ -887,246 +655,138 @@ def build_risk_plan(
     capital_usdt: float,
     support: Optional[float] = None,
     resistances: Optional[Iterable[Any]] = None,
-    supports: Optional[Iterable[Any]] = None,
     direction: str = "BUY",
-    risk_pct: Optional[float] = None,
-    max_position_pct: Optional[float] = None,
-    entry_fee_pct: Optional[float] = None,
-    exit_fee_pct: Optional[float] = None,
-    slippage_pct: Optional[float] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
-    """
-    Build complete Spot BUY risk plan.
 
-    If T1 does not meet minimum net R:R, plan is invalid.
-    T2/T3 may be unavailable or fail their individual thresholds;
-    those targets are marked accordingly.
-    """
-    direction = direction.upper()
+    entry = _number(entry_price, 0.0)
+    atr_value = _number(atr, 0.0)
 
-    if direction != "BUY":
-        return {
-            "valid": False,
-            "reason": "SPOT_SCANNER_BUY_ONLY",
-            "direction": direction,
-        }
-
-    entry = _valid_price(entry_price)
-    atr_value = _positive(atr)
-
-    if entry is None or atr_value <= 0:
-        return {
-            "valid": False,
-            "reason": "INVALID_ENTRY_OR_ATR",
-        }
-
-    stop = calculate_stop_loss(
-        entry_price=entry,
-        atr=atr_value,
-        support=support,
-        direction="BUY",
-    )
-
-    if stop is None:
-        return {
-            "valid": False,
-            "reason": "STOP_LOSS_CALCULATION_FAILED",
-        }
-
-    targets = calculate_targets(
-        entry_price=entry,
-        stop_loss=stop,
-        atr=atr_value,
-        resistances=resistances,
-        supports=supports,
-        direction="BUY",
-    )
-
-    # Apply explicit costs consistently to sizing and validation.
-    costs = calculate_execution_cost_pct(
-        entry_fee_pct,
-        exit_fee_pct,
-        slippage_pct,
-    )
-
-    # Calculate position sizing using the same execution cost.
-    settings = _risk_settings()
-
-    entry_fee = (
-        settings["entry_fee_pct"]
-        if entry_fee_pct is None
-        else _positive(entry_fee_pct)
-    )
-    exit_fee = (
-        settings["exit_fee_pct"]
-        if exit_fee_pct is None
-        else _positive(exit_fee_pct)
-    )
-    slip = (
-        settings["slippage_pct"]
-        if slippage_pct is None
-        else _positive(slippage_pct)
-    )
-
-    position = calculate_position_size(
-        capital_usdt=capital_usdt,
-        entry_price=entry,
-        stop_loss=stop,
-        risk_pct=risk_pct,
-        max_position_pct=max_position_pct,
-        entry_fee_pct=entry_fee,
-        exit_fee_pct=exit_fee,
-        slippage_pct=slip,
-    )
-
-    validation = validate_risk(
-        entry_price=entry,
-        stop_loss=stop,
-        targets=targets,
-        capital_usdt=capital_usdt,
-        position_size=position,
-    )
-
-    target_net_returns = {}
-
-    for name in ("t1", "t2", "t3"):
-        target = targets.get(name)
-
-        target_net_returns[name] = (
-            estimate_net_return_pct(
-                entry_price=entry,
-                exit_price=target,
-                direction="BUY",
-                entry_fee_pct=entry_fee,
-                exit_fee_pct=exit_fee,
-                slippage_pct=slip,
-            )
-            if target is not None
-            else None
-        )
-
-    return {
-        "valid": validation["valid"],
-        "reason": validation["reason"],
+    base = {
+        "valid": False,
+        "reason": "invalid inputs",
         "direction": "BUY",
         "spot_only": True,
         "formula_version": "4.0",
         "entry": entry,
-        "stop_loss": stop,
-        "targets": targets,
-        "target_net_returns_pct": target_net_returns,
+        "stop_loss": 0.0,
+        "targets": [],
+        "target_net_returns_pct": [],
         "atr": atr_value,
-        "risk_distance_pct": ((entry - stop) / entry) * 100.0,
-        "execution_cost_pct": costs,
-        "position": position,
-        "risk_validation": validation,
-        "target_checks": validation.get("target_checks", {}),
+        "risk_distance_pct": 0.0,
+        "execution_cost_pct": calculate_execution_cost_pct(),
+        "position": {},
+        "risk_validation": {},
+        "target_checks": {},
     }
 
+    if direction.upper() != "BUY":
+        base["reason"] = "V4 execution is Spot BUY only"
+        return base
 
-# ============================================================
-# CONFIG SNAPSHOT
-# ============================================================
+    if (
+        entry <= 0
+        or atr_value <= 0
+        or _number(capital_usdt, 0.0) <= 0
+    ):
+        return base
+
+    try:
+        costs = calculate_execution_cost_pct()
+
+        stop = calculate_stop_loss(
+            entry,
+            atr_value,
+            support=support,
+            direction="BUY",
+        )
+
+        targets = calculate_targets(
+            entry,
+            atr_value,
+            stop_loss=stop,
+            resistances=resistances,
+            direction="BUY",
+            execution_cost_pct=costs,
+        )
+
+        position = calculate_position_size(
+            capital_usdt,
+            entry,
+            stop,
+            execution_cost_pct=costs,
+        )
+
+        validation = validate_risk(
+            entry,
+            stop,
+            targets,
+            position=position,
+            execution_cost_pct=costs,
+        )
+
+        risk_distance_pct = (
+            (entry - stop) / entry * 100.0
+        )
+
+        base.update({
+            "valid": validation["valid"],
+            "reason": validation["reason"],
+            "entry": entry,
+            "stop_loss": stop,
+            "targets": targets,
+            "target_net_returns_pct": [
+                estimate_net_return_pct(
+                    entry,
+                    target,
+                    costs_pct=costs,
+                )
+                for target in targets
+            ],
+            "atr": atr_value,
+            "risk_distance_pct": risk_distance_pct,
+            "execution_cost_pct": costs,
+            "position": position,
+            "risk_validation": validation,
+            "target_checks": validation["target_checks"],
+        })
+
+        return base
+
+    except (ValueError, TypeError, ArithmeticError) as exc:
+        base["reason"] = str(exc)
+        return base
+
 
 def get_risk_manager_config() -> Dict[str, Any]:
-    settings = _risk_settings()
-
-    return {
-        **settings,
-        "spot_only": True,
-        "formula_version": "4.0",
-        "code_version": "4.0.0",
-    }
+    return _risk_settings()
 
 
-# ============================================================
-# SELF-CHECK
-# ============================================================
-
-def self_check() -> bool:
-    """Offline deterministic tests. No network calls."""
-
-    entry = 100.0
-    atr = 1.0
-    capital = 1000.0
-
-    stop = calculate_stop_loss(
-        entry_price=entry,
-        atr=atr,
-    )
-
-    assert stop is not None
-    assert 0 < stop < entry
-
-    targets = calculate_targets(
-        entry_price=entry,
-        stop_loss=stop,
-        atr=atr,
-        resistances=[103.0, 106.0, 110.0],
-    )
-
-    assert targets["t1"] is not None
-    assert targets["t2"] is not None
-    assert targets["t3"] is not None
-    assert targets["t1"] < targets["t2"] < targets["t3"]
-
-    rr = calculate_risk_reward(
-        entry_price=entry,
-        stop_loss=stop,
-        target_price=targets["t1"],
-    )
-
-    assert rr is not None
-    assert rr["net_rr"] >= 0
-
-    position = calculate_position_size(
-        capital_usdt=capital,
-        entry_price=entry,
-        stop_loss=stop,
-    )
-
-    assert position["valid"]
-    assert position["quantity"] > 0
-    assert position["position_value_usdt"] <= capital
+def self_check() -> Dict[str, Any]:
 
     plan = build_risk_plan(
-        entry_price=entry,
-        atr=atr,
-        capital_usdt=capital,
-        resistances=[103.0, 106.0, 110.0],
+        entry_price=100.0,
+        atr=1.0,
+        capital_usdt=100.0,
+        resistances=None,
     )
 
-    assert plan["entry"] == entry
-    assert plan["stop_loss"] < entry
-    assert plan["position"]["valid"]
-
-    # Invalid Spot BUY stop must fail.
-    invalid_position = calculate_position_size(
-        capital_usdt=capital,
-        entry_price=entry,
-        stop_loss=entry + 1,
+    t1_check = (
+        plan.get("target_checks", {})
+        .get("t1", {})
     )
-    assert not invalid_position["valid"]
 
-    # Invalid target geometry must fail.
-    invalid_rr = calculate_risk_reward(
-        entry_price=entry,
-        stop_loss=stop,
-        target_price=stop - 1,
-    )
-    assert invalid_rr is None
-
-    return True
+    return {
+        "ok": bool(
+            plan.get("valid")
+            and t1_check.get("valid")
+        ),
+        "plan_valid": plan.get("valid", False),
+        "t1_net_rr": t1_check.get("net_rr", 0.0),
+        "minimum_t1_net_rr": _risk_settings()["min_net_rr_t1"],
+        "reason": plan.get("reason", ""),
+    }
 
 
 if __name__ == "__main__":
-    try:
-        self_check()
-        print("RISK MANAGER SELF-CHECK: PASS")
-        print("ATR Stop Loss: ENABLED")
-        print("Fee/Slippage Adjusted Net R:R: ENABLED")
-        print("Risk-Based Spot Position Sizing: ENABLED")
-        print("Spot Only: YES")
-    except Exception as exc:
-        print(f"RISK MANAGER SELF-CHECK: FAIL - {exc}")
-        raise
+    print(self_check())

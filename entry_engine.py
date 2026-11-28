@@ -1,11 +1,11 @@
+
 """
 File: entry_engine.py
-System: Binance Spot V3 Smart Signal Scanner
-Code Version: 4.0.0
+System: Binance Spot V4 Smart Signal Scanner
+Code Version: 4.0.1
 Formula Version: 4.0
 Python: 3.11+
-Compatibility: New internal architecture
-Test Status: NOT RUN
+Compatibility: V4 internal architecture
 
 Seven-Layer Multi-Timeframe Spot Signal Engine.
 
@@ -22,27 +22,29 @@ SWING:
 BTC Context:
     15m / 1h / 4h
 
-Spot only. No Futures. No Margin.
+Spot BUY only. No Futures. No Margin.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
-from risk_manager import (
-    build_risk_plan,
-    calculate_execution_cost_pct,
-)
+from risk_manager import build_risk_plan
+
+try:
+    import config as app_config
+except Exception:
+    app_config = None
 
 
 # ============================================================
-# VERSION AND FORMULA CONFIGURATION
+# VERSION AND FORMULA
 # ============================================================
 
-CODE_VERSION = "4.0.0"
+CODE_VERSION = "4.0.1"
 FORMULA_VERSION = "4.0"
 
 LAYER_WEIGHTS = {
@@ -79,15 +81,110 @@ BTC_TIMEFRAMES = ("15m", "1h", "4h")
 
 DEFAULT_MIN_CANDLES = 205
 DEFAULT_MAX_ENTRY_DISTANCE_ATR = 1.5
-DEFAULT_MAX_SPREAD_PERCENT = 0.25
-DEFAULT_MIN_DEPTH_USDT = 10_000.0
-DEFAULT_MAX_SLIPPAGE_PERCENT = 0.20
+DEFAULT_MAX_SPREAD_PERCENT = 0.15
+DEFAULT_MIN_DEPTH_USDT = 5000.0
+DEFAULT_MAX_SLIPPAGE_PERCENT = 0.15
 
-DEFAULT_MIN_NET_RR_T1 = 1.2
+DEFAULT_MIN_NET_RR_T1 = 1.5
 DEFAULT_MIN_SIGNAL_SCORE = 85
 DEFAULT_EXCELLENT_SCORE = 90
 
 EPSILON = 1e-12
+
+
+# ============================================================
+# CONFIG HELPERS
+# ============================================================
+
+def _config_section(name: str) -> Dict[str, Any]:
+    if app_config is None:
+        return {}
+
+    value = getattr(app_config, name, {})
+    return value if isinstance(value, dict) else {}
+
+
+def _config_number(
+    section: str,
+    keys: Tuple[str, ...],
+    default: float,
+) -> float:
+    data = _config_section(section)
+
+    for key in keys:
+        value = _number(data.get(key))
+        if value is not None and value >= 0:
+            return value
+
+    return float(default)
+
+
+def _liquidity_limits() -> Dict[str, float]:
+    data = _config_section("LIQUIDITY_CONFIG")
+
+    def first(keys, default):
+        for key in keys:
+            value = _number(data.get(key))
+            if value is not None and value >= 0:
+                return value
+        return float(default)
+
+    return {
+        "max_spread": first(
+            (
+                "max_spread_percent",
+                "maximum_spread_percent",
+                "max_spread_pct",
+            ),
+            DEFAULT_MAX_SPREAD_PERCENT,
+        ),
+        "min_depth": first(
+            (
+                "min_top_depth_usdt",
+                "minimum_top_depth_usdt",
+                "min_depth_usdt",
+                "minimum_depth_usdt",
+            ),
+            DEFAULT_MIN_DEPTH_USDT,
+        ),
+        "max_slippage": first(
+            (
+                "max_slippage_percent",
+                "maximum_slippage_percent",
+                "max_slippage_pct",
+            ),
+            DEFAULT_MAX_SLIPPAGE_PERCENT,
+        ),
+    }
+
+
+def _entry_limits() -> Dict[str, float]:
+    data = _config_section("ENTRY_CONFIG")
+
+    maximum_distance = DEFAULT_MAX_ENTRY_DISTANCE_ATR
+
+    for key in (
+        "max_entry_distance_atr",
+        "maximum_entry_distance_atr",
+        "max_distance_from_ema_atr",
+    ):
+        value = _number(data.get(key))
+        if value is not None and value > 0:
+            maximum_distance = value
+            break
+
+    return {"max_entry_distance_atr": maximum_distance}
+
+
+def _risk_minimum_rr() -> float:
+    risk = _config_section("RISK_CONFIG")
+
+    value = _number(risk.get("minimum_net_risk_reward"))
+
+    if value is not None and value > 0:
+        return value
+
+    return DEFAULT_MIN_NET_RR_T1
 
 
 # ============================================================
@@ -97,9 +194,7 @@ EPSILON = 1e-12
 def _number(value: Any) -> Optional[float]:
     try:
         result = float(value)
-        if not math.isfinite(result):
-            return None
-        return result
+        return result if math.isfinite(result) else None
     except (TypeError, ValueError, OverflowError):
         return None
 
@@ -144,38 +239,63 @@ def _valid_frame(
     if not required.issubset(df.columns):
         return False
 
+    data = df.copy()
+
     for column in required:
-        values = pd.to_numeric(df[column], errors="coerce")
+        data[column] = pd.to_numeric(
+            data[column],
+            errors="coerce",
+        )
 
-        if values.isna().any():
+        if data[column].isna().any():
             return False
 
-        if not values.map(math.isfinite).all():
+        if not data[column].map(math.isfinite).all():
             return False
 
-    if (df["close"] <= 0).any():
+    if (data["close"] <= 0).any():
         return False
 
-    if (df["high"] < df["low"]).any():
+    if (data["open"] <= 0).any():
         return False
 
-    if (df["volume"] < 0).any():
+    if (data["high"] <= 0).any():
+        return False
+
+    if (data["low"] <= 0).any():
+        return False
+
+    if (data["high"] < data["low"]).any():
+        return False
+
+    if (data["volume"] < 0).any():
         return False
 
     if (
-        df["high"] < df[["open", "close"]].max(axis=1)
+        data["high"] < data[["open", "close"]].max(axis=1)
     ).any():
         return False
 
     if (
-        df["low"] > df[["open", "close"]].min(axis=1)
+        data["low"] > data[["open", "close"]].min(axis=1)
     ).any():
         return False
 
-    if "close_time" in df.columns:
-        now_ms = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
+    if "close_time" in data.columns:
+        close_times = pd.to_numeric(
+            data["close_time"],
+            errors="coerce",
+        )
 
-        if (pd.to_numeric(df["close_time"], errors="coerce") >= now_ms).any():
+        if close_times.isna().any():
+            return False
+
+        now_ms = int(
+            pd.Timestamp.now(tz="UTC").timestamp() * 1000
+        )
+
+        # The latest candle must be closed.
+        if close_times.iloc[-1] >= now_ms:
             return False
 
     return True
@@ -245,7 +365,9 @@ def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
     return result
 
 
-def _macd(series: pd.Series) -> Tuple[pd.Series, pd.Series, pd.Series]:
+def _macd(
+    series: pd.Series,
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
     fast = _ema(series, 12)
     slow = _ema(series, 26)
 
@@ -259,7 +381,7 @@ def _macd(series: pd.Series) -> Tuple[pd.Series, pd.Series, pd.Series]:
 def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     previous_close = df["close"].shift(1)
 
-    tr = pd.concat(
+    true_range = pd.concat(
         [
             df["high"] - df["low"],
             (df["high"] - previous_close).abs(),
@@ -268,7 +390,7 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
         axis=1,
     ).max(axis=1)
 
-    return tr.ewm(
+    return true_range.ewm(
         alpha=1 / period,
         adjust=False,
         min_periods=period,
@@ -292,19 +414,23 @@ def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     atr = _atr(df, period).replace(0, float("nan"))
 
     plus_di = (
-        100 * plus_dm.ewm(
+        100
+        * plus_dm.ewm(
             alpha=1 / period,
             adjust=False,
             min_periods=period,
-        ).mean() / atr
+        ).mean()
+        / atr
     )
 
     minus_di = (
-        100 * minus_dm.ewm(
+        100
+        * minus_dm.ewm(
             alpha=1 / period,
             adjust=False,
             min_periods=period,
-        ).mean() / atr
+        ).mean()
+        / atr
     )
 
     denominator = (plus_di + minus_di).replace(
@@ -325,7 +451,11 @@ def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
 def _obv(df: pd.DataFrame) -> pd.Series:
     direction = df["close"].diff().apply(
-        lambda x: 1 if x > 0 else (-1 if x < 0 else 0)
+        lambda value: (
+            1 if value > 0
+            else -1 if value < 0
+            else 0
+        )
     )
 
     return (direction * df["volume"]).cumsum()
@@ -346,7 +476,10 @@ def _vwap(df: pd.DataFrame, period: int = 20) -> pd.Series:
         min_periods=period,
     ).sum()
 
-    return numerator / denominator.replace(0, float("nan"))
+    return numerator / denominator.replace(
+        0,
+        float("nan"),
+    )
 
 
 def _bollinger(
@@ -372,7 +505,6 @@ def _bollinger(
 
 def _calculate_snapshot(df: pd.DataFrame) -> Dict[str, Any]:
     data = _ohlcv(df)
-
     close = data["close"]
 
     ema20 = _ema(close, 20)
@@ -385,15 +517,19 @@ def _calculate_snapshot(df: pd.DataFrame) -> Dict[str, Any]:
     atr = _atr(data)
     adx = _adx(data)
 
+    volume_average = data["volume"].rolling(
+        20,
+        min_periods=20,
+    ).mean().iloc[-1]
+
     rvol = (
-        data["volume"].iloc[-1]
-        / data["volume"].rolling(20).mean().iloc[-1]
-        if _number(data["volume"].rolling(20).mean().iloc[-1])
-        not in (None, 0)
+        data["volume"].iloc[-1] / volume_average
+        if _number(volume_average) not in (None, 0)
         else None
     )
 
     obv = _obv(data)
+
     obv_change = (
         obv.iloc[-1] - obv.iloc[-6]
         if len(obv) >= 6
@@ -410,9 +546,10 @@ def _calculate_snapshot(df: pd.DataFrame) -> Dict[str, Any]:
     )
 
     atr_value = _number(atr.iloc[-1])
+    close_value = _number(close.iloc[-1])
 
     return {
-        "close": _number(close.iloc[-1]),
+        "close": close_value,
         "previous_close": _number(close.iloc[-2]),
         "ema20": _number(ema20.iloc[-1]),
         "ema50": _number(ema50.iloc[-1]),
@@ -423,8 +560,10 @@ def _calculate_snapshot(df: pd.DataFrame) -> Dict[str, Any]:
         "macd_hist": _number(macd_hist.iloc[-1]),
         "atr": atr_value,
         "atr_percent": (
-            atr_value / close.iloc[-1] * 100
-            if atr_value and close.iloc[-1] > 0
+            atr_value / close_value * 100
+            if atr_value is not None
+            and close_value is not None
+            and close_value > 0
             else None
         ),
         "adx": _number(adx.iloc[-1]),
@@ -554,9 +693,10 @@ def _btc_regime_score(
 
     if isinstance(timeframes, dict):
         verified_count = sum(
-            1 for tf in BTC_TIMEFRAMES
-            if isinstance(timeframes.get(tf), dict)
-            and timeframes[tf].get("valid", False)
+            1
+            for timeframe in BTC_TIMEFRAMES
+            if isinstance(timeframes.get(timeframe), dict)
+            and timeframes[timeframe].get("valid", False)
         )
     else:
         verified_count = 0
@@ -606,16 +746,15 @@ def _technical_score(
     score = 0.0
     details: Dict[str, Any] = {}
 
-    close = snapshot["close"]
-    ema20 = snapshot["ema20"]
-    ema50 = snapshot["ema50"]
-    ema200 = snapshot["ema200"]
+    close = snapshot.get("close")
+    ema20 = snapshot.get("ema20")
+    ema50 = snapshot.get("ema50")
+    ema200 = snapshot.get("ema200")
 
-    # EMA alignment: 5 points.
-    if all(x is not None for x in (close, ema20, ema50, ema200)):
+    if all(value is not None for value in (close, ema20, ema50, ema200)):
         if close > ema20 > ema50 > ema200:
             ema_score = 5.0
-        elif close > ema20 and ema20 > ema50:
+        elif close > ema20 > ema50:
             ema_score = 3.5
         elif close > ema50:
             ema_score = 2.5
@@ -629,8 +768,7 @@ def _technical_score(
     score += ema_score
     details["ema_alignment"] = ema_score
 
-    # RSI: 3 points.
-    rsi = snapshot["rsi"]
+    rsi = snapshot.get("rsi")
 
     if rsi is None:
         rsi_score = 0.0
@@ -646,9 +784,7 @@ def _technical_score(
     score += rsi_score
     details["rsi"] = rsi_score
 
-    # MACD histogram: 3 points.
-    histogram = snapshot["macd_hist"]
-
+    histogram = snapshot.get("macd_hist")
     macd_score = (
         3.0 if histogram is not None and histogram > 0
         else 0.0
@@ -657,8 +793,7 @@ def _technical_score(
     score += macd_score
     details["macd"] = macd_score
 
-    # ADX: 3 points.
-    adx = snapshot["adx"]
+    adx = snapshot.get("adx")
 
     if adx is None:
         adx_score = 0.0
@@ -674,7 +809,6 @@ def _technical_score(
     score += adx_score
     details["adx"] = adx_score
 
-    # Market structure: 4 points.
     structure_score = 0.0
 
     if structure.get("higher_high"):
@@ -694,10 +828,9 @@ def _technical_score(
     score += structure_score
     details["market_structure"] = structure_score
 
-    # Bollinger: 2 points.
-    upper = snapshot["bb_upper"]
-    middle = snapshot["bb_middle"]
-    lower = snapshot["bb_lower"]
+    upper = snapshot.get("bb_upper")
+    middle = snapshot.get("bb_middle")
+    lower = snapshot.get("bb_lower")
 
     if close is not None and upper is not None and middle is not None:
         if middle <= close < upper:
@@ -723,10 +856,9 @@ def _volume_score(
     snapshot: Dict[str, Any],
 ) -> Tuple[float, Dict[str, Any]]:
     score = 0.0
-    details = {}
+    details: Dict[str, Any] = {}
 
-    # Relative volume: 5 points.
-    rvol = snapshot["rvol"]
+    rvol = snapshot.get("rvol")
 
     if rvol is None:
         rvol_score = 0.0
@@ -744,9 +876,7 @@ def _volume_score(
     score += rvol_score
     details["rvol"] = rvol_score
 
-    # OBV direction: 4 points.
-    obv_change = snapshot["obv_change"]
-
+    obv_change = snapshot.get("obv_change")
     obv_score = (
         4.0 if obv_change is not None and obv_change > 0
         else 0.0
@@ -755,28 +885,27 @@ def _volume_score(
     score += obv_score
     details["obv"] = obv_score
 
-    # Volume expansion: 3 points.
-    volume_score = 0.0
+    if rvol is None:
+        expansion_score = 0.0
+    elif rvol >= 1.5:
+        expansion_score = 3.0
+    elif rvol >= 1.2:
+        expansion_score = 2.0
+    elif rvol >= 1.0:
+        expansion_score = 1.0
+    else:
+        expansion_score = 0.0
 
-    if rvol is not None:
-        if rvol >= 1.5:
-            volume_score = 3.0
-        elif rvol >= 1.2:
-            volume_score = 2.0
-        elif rvol >= 1.0:
-            volume_score = 1.0
+    score += expansion_score
+    details["volume_expansion"] = expansion_score
 
-    score += volume_score
-    details["volume_expansion"] = volume_score
-
-    # Rate of change: 3 points.
-    roc = snapshot["roc"]
+    roc = snapshot.get("roc")
 
     if roc is None:
         roc_score = 0.0
-    elif roc > 0 and roc <= 5:
+    elif 0 < roc <= 5:
         roc_score = 3.0
-    elif roc > 5 and roc <= 8:
+    elif 5 < roc <= 8:
         roc_score = 2.0
     elif roc > 8:
         roc_score = 1.0
@@ -939,8 +1068,8 @@ def _entry_quality_score(
     score = 0.0
     details: Dict[str, Any] = {}
 
-    close = snapshot["close"]
-    atr = snapshot["atr"]
+    close = snapshot.get("close")
+    atr = snapshot.get("atr")
 
     support = structure.get("support")
     resistance = structure.get("resistance")
@@ -951,7 +1080,6 @@ def _entry_quality_score(
             "score": 0.0,
         }
 
-    # Support / resistance context: 4 points.
     sr_score = 0.0
 
     if support is not None and support < close:
@@ -969,7 +1097,6 @@ def _entry_quality_score(
     score += sr_score
     details["support_resistance"] = sr_score
 
-    # Breakout confirmation: 3 points.
     breakout = breakout_data or {}
 
     breakout_confirmed = bool(
@@ -992,7 +1119,6 @@ def _entry_quality_score(
     score += breakout_score
     details["breakout"] = breakout_score
 
-    # Retest: 3 points.
     retest_confirmed = bool(
         breakout.get("retest_confirmed", False)
     )
@@ -1002,21 +1128,18 @@ def _entry_quality_score(
     score += retest_score
     details["retest"] = retest_score
 
-    # VWAP: 2 points.
-    vwap = snapshot["vwap"]
+    vwap = snapshot.get("vwap")
 
-    if vwap is None:
-        vwap_score = 0.0
-    elif close > vwap:
-        vwap_score = 2.0
-    else:
-        vwap_score = 0.0
+    vwap_score = (
+        2.0
+        if vwap is not None and close > vwap
+        else 0.0
+    )
 
     score += vwap_score
     details["vwap"] = vwap_score
 
-    # ATR entry distance: 3 points.
-    ema20 = snapshot["ema20"]
+    ema20 = snapshot.get("ema20")
 
     if ema20 is None:
         entry_distance_score = 0.0
@@ -1064,18 +1187,20 @@ def _risk_score(
         }
 
     score = 0.0
-    details = {}
+    details: Dict[str, Any] = {}
 
-    # ATR Stop Loss: 3 points.
     stop = _number(risk_plan.get("stop_loss"))
     entry = _number(risk_plan.get("entry"))
-    risk_distance = _number(risk_plan.get("risk_distance_pct"))
+    risk_distance = _number(
+        risk_plan.get("risk_distance_pct")
+    )
 
     if (
         stop is not None
         and entry is not None
         and stop < entry
         and risk_distance is not None
+        and risk_distance > 0
     ):
         if 0.5 <= risk_distance <= 3.0:
             sl_score = 3.0
@@ -1089,19 +1214,24 @@ def _risk_score(
     score += sl_score
     details["atr_stop"] = sl_score
 
-    # Net R:R: 4 points.
-    t1_check = risk_plan.get(
-        "target_checks",
-        {},
-    ).get("t1", {})
+    target_checks = risk_plan.get("target_checks", {})
+
+    if not isinstance(target_checks, dict):
+        target_checks = {}
+
+    t1_check = target_checks.get("t1", {})
+
+    if not isinstance(t1_check, dict):
+        t1_check = {}
 
     net_rr = _number(t1_check.get("net_rr"))
+    minimum_rr = _risk_minimum_rr()
 
     if net_rr is None:
         rr_score = 0.0
     elif net_rr >= 2.0:
         rr_score = 4.0
-    elif net_rr >= 1.5:
+    elif net_rr >= minimum_rr:
         rr_score = 3.0
     elif net_rr >= 1.2:
         rr_score = 2.0
@@ -1110,13 +1240,16 @@ def _risk_score(
 
     score += rr_score
     details["net_rr"] = rr_score
+    details["net_rr_value"] = net_rr
+    details["minimum_net_rr"] = minimum_rr
 
-    # Position sizing: 2 points.
     position = risk_plan.get("position", {})
 
+    if not isinstance(position, dict):
+        position = {}
+
     if (
-        isinstance(position, dict)
-        and position.get("valid")
+        position.get("valid")
         and position.get("estimated_loss_within_budget")
     ):
         position_score = 2.0
@@ -1126,20 +1259,16 @@ def _risk_score(
     score += position_score
     details["position_sizing"] = position_score
 
-    # Fee and slippage: 1 point.
     cost = _number(risk_plan.get("execution_cost_pct"))
 
-    if cost is None:
-        cost_score = 0.0
-    elif cost <= 0.15:
-        cost_score = 1.0
-    else:
-        cost_score = 0.0
+    cost_score = (
+        1.0
+        if cost is not None and cost <= 0.15
+        else 0.0
+    )
 
     score += cost_score
     details["execution_cost"] = cost_score
-
-    details["net_rr_value"] = net_rr
     details["risk_distance_pct"] = risk_distance
 
     return min(10.0, score), details
@@ -1153,26 +1282,9 @@ def _fundamental_score(
     fundamental_data: Optional[Dict[str, Any]],
 ) -> Tuple[float, Dict[str, Any]]:
     """
-    Missing data earns zero points and is marked UNVERIFIED.
-
-    No fabricated fundamental or on-chain values are permitted.
+    Missing data receives zero points.
+    No unverified data is treated as confirmed.
     """
-    if not isinstance(fundamental_data, dict):
-        return 0.0, {
-            "status": "UNVERIFIED",
-            "score": 0.0,
-            "unverified_categories": [
-                "token_supply",
-                "market_cap_fdv",
-                "exchange_flows",
-                "holder_concentration",
-                "security_development",
-            ],
-        }
-
-    score = 0.0
-    details = {}
-
     categories = {
         "token_supply": 2.0,
         "market_cap_fdv": 2.0,
@@ -1181,6 +1293,15 @@ def _fundamental_score(
         "security_development": 2.0,
     }
 
+    if not isinstance(fundamental_data, dict):
+        return 0.0, {
+            "status": "UNVERIFIED",
+            "score": 0.0,
+            "unverified_categories": list(categories),
+        }
+
+    score = 0.0
+    details: Dict[str, Any] = {}
     unverified = []
 
     for category, maximum in categories.items():
@@ -1242,10 +1363,8 @@ def _hard_gate_checks(
     risk_plan: Dict[str, Any],
 ) -> Dict[str, Any]:
     failures = []
-
     context = market_context or {}
 
-    # BTC High Risk.
     regime = str(
         context.get(
             "risk_level",
@@ -1259,52 +1378,76 @@ def _hard_gate_checks(
     if context.get("allow_new_buy") is False:
         failures.append("BTC_BUY_BLOCKED")
 
-    # Required technical data.
     if snapshot.get("close") is None:
         failures.append("INVALID_PRICE")
 
-    if snapshot.get("atr") is None or snapshot["atr"] <= 0:
+    atr = _number(snapshot.get("atr"))
+
+    if atr is None or atr <= 0:
         failures.append("INVALID_ATR")
 
-    # Liquidity gates.
-    spread = liquidity_details.get("spread_percent")
+    limits = _liquidity_limits()
+
+    spread = _number(
+        liquidity_details.get("spread_percent")
+    )
 
     if spread is None:
         failures.append("SPREAD_UNVERIFIED")
-    elif spread > DEFAULT_MAX_SPREAD_PERCENT:
+    elif spread > limits["max_spread"]:
         failures.append("SPREAD_LIMIT_EXCEEDED")
 
-    depth = liquidity_details.get("minimum_side_depth_usdt")
+    depth = _number(
+        liquidity_details.get("minimum_side_depth_usdt")
+    )
 
     if depth is None:
         failures.append("ORDER_BOOK_DEPTH_UNVERIFIED")
-    elif depth < DEFAULT_MIN_DEPTH_USDT:
+    elif depth < limits["min_depth"]:
         failures.append("INSUFFICIENT_ORDER_BOOK_DEPTH")
 
-    slippage = liquidity_details.get("buy_slippage_percent")
+    slippage = _number(
+        liquidity_details.get("buy_slippage_percent")
+    )
 
     if slippage is None:
         failures.append("SLIPPAGE_UNVERIFIED")
-    elif slippage > DEFAULT_MAX_SLIPPAGE_PERCENT:
+    elif slippage > limits["max_slippage"]:
         failures.append("SLIPPAGE_LIMIT_EXCEEDED")
 
-    # Overextended entry.
-    distance = entry_details.get("entry_distance_atr")
+    distance = _number(
+        entry_details.get("entry_distance_atr")
+    )
+
+    max_distance = _entry_limits()["max_entry_distance_atr"]
 
     if distance is None:
         failures.append("ENTRY_DISTANCE_UNVERIFIED")
-    elif distance > DEFAULT_MAX_ENTRY_DISTANCE_ATR:
+    elif distance > max_distance:
         failures.append("ENTRY_OVEREXTENDED")
 
-    # Risk plan.
-    if not risk_plan.get("valid", False):
-        failures.append(
-            "INVALID_RISK_PLAN:" + str(risk_plan.get("reason"))
+    if not isinstance(risk_plan, dict) or not risk_plan.get("valid", False):
+        reason = (
+            risk_plan.get("reason", "UNKNOWN")
+            if isinstance(risk_plan, dict)
+            else "INVALID_PLAN"
         )
+        failures.append("INVALID_RISK_PLAN:" + str(reason))
+
+    risk_validation = (
+        risk_plan.get("risk_validation", {})
+        if isinstance(risk_plan, dict)
+        else {}
+    )
+
+    if isinstance(risk_validation, dict):
+        if risk_validation.get("valid") is False:
+            failures.append("RISK_VALIDATION_FAILED")
 
     return {
         "passed": len(failures) == 0,
         "failures": failures,
+        "limits": limits,
     }
 
 
@@ -1317,12 +1460,7 @@ def _timeframe_confirmation(
     confirmation_snapshot: Dict[str, Any],
     structure_snapshot: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Three timeframe checks.
 
-    Correlated timeframes are not counted as independent statistical
-    confirmations. They are directional alignment checks only.
-    """
     def bullish(snapshot: Dict[str, Any]) -> bool:
         close = snapshot.get("close")
         ema20 = snapshot.get("ema20")
@@ -1357,11 +1495,7 @@ def _timeframe_confirmation(
         "structure_bullish": structure_bullish,
         "aligned_timeframes": aligned,
         "total_timeframes": 3,
-        "confirmed": (
-            entry_bullish
-            and confirmation_bullish
-            and structure_bullish
-        ),
+        "confirmed": aligned == 3,
         "interpretation": (
             "ALL_ALIGNED" if aligned == 3
             else "PARTIAL_ALIGNMENT" if aligned == 2
@@ -1369,6 +1503,43 @@ def _timeframe_confirmation(
         ),
         "statistical_independence": False,
     }
+
+
+# ============================================================
+# RISK PLAN ADAPTER
+# ============================================================
+
+def _build_strategy_risk_plan(
+    entry_price: float,
+    atr: float,
+    capital_usdt: float,
+    support: Optional[float],
+    resistance: Optional[float],
+    strategy: str,
+) -> Dict[str, Any]:
+    """
+    Supports both the current and strategy-aware risk_manager
+    signatures. The fallback keeps compatibility with the
+    existing V4 risk_manager while it is being updated.
+    """
+    kwargs = {
+        "entry_price": entry_price,
+        "atr": atr,
+        "capital_usdt": capital_usdt,
+        "support": support,
+        "resistances": [resistance] if resistance is not None else None,
+    }
+
+    try:
+        return build_risk_plan(
+            **kwargs,
+            strategy=strategy,
+        )
+    except TypeError as exc:
+        if "strategy" not in str(exc):
+            raise
+
+        return build_risk_plan(**kwargs)
 
 
 # ============================================================
@@ -1385,12 +1556,7 @@ def score_setup(
     capital_usdt: float = 100.0,
     symbol: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Score a candidate using seven layers.
 
-    Returns a complete analysis dictionary.
-    It does not send Telegram messages.
-    """
     strategy = str(strategy or "SCALP").upper()
 
     if strategy not in TIMEFRAME_MAP:
@@ -1399,6 +1565,18 @@ def score_setup(
             "decision": "REJECT",
             "reason": "INVALID_STRATEGY",
             "strategy": strategy,
+            "formula_version": FORMULA_VERSION,
+        }
+
+    capital = _number(capital_usdt)
+
+    if capital is None or capital <= 0:
+        return {
+            "valid": False,
+            "decision": "WAIT",
+            "reason": "INVALID_CAPITAL",
+            "strategy": strategy,
+            "symbol": symbol,
             "formula_version": FORMULA_VERSION,
         }
 
@@ -1442,29 +1620,25 @@ def score_setup(
 
     structure = _market_structure(structure_df)
 
-    # Multi-timeframe confirmation.
     mtf = _timeframe_confirmation(
         entry_snapshot,
         confirmation_snapshot,
         structure_snapshot,
     )
 
-    # Layer 1.
     layer1, btc_details = _btc_regime_score(market_context)
 
-    # Layer 2.
     layer2, technical_details = _technical_score(
         entry_snapshot,
         structure,
     )
 
-    # Layer 3.
     layer3, volume_details = _volume_score(entry_snapshot)
 
-    # Layer 4.
-    layer4, liquidity_details = _liquidity_score(market_context)
+    layer4, liquidity_details = _liquidity_score(
+        market_context
+    )
 
-    # Layer 5.
     layer5, entry_details = _entry_quality_score(
         entry_df,
         entry_snapshot,
@@ -1472,23 +1646,19 @@ def score_setup(
         breakout_data,
     )
 
-    # Risk plan.
-    risk_plan = build_risk_plan(
+    resistance = structure.get("resistance")
+
+    risk_plan = _build_strategy_risk_plan(
         entry_price=entry_snapshot["close"],
         atr=entry_snapshot["atr"],
-        capital_usdt=capital_usdt,
+        capital_usdt=capital,
         support=structure.get("support"),
-        resistances=(
-            [structure["resistance"]]
-            if structure.get("resistance") is not None
-            else None
-        ),
+        resistance=resistance,
+        strategy=strategy,
     )
 
-    # Layer 6.
     layer6, risk_details = _risk_score(risk_plan)
 
-    # Layer 7.
     layer7, fundamental_details = _fundamental_score(
         fundamental_data
     )
@@ -1535,7 +1705,6 @@ def score_setup(
         item["score"] for item in layers.values()
     )
 
-    # MTF is a confirmation requirement, not an additional layer.
     if mtf["aligned_timeframes"] == 2:
         mtf_adjustment = -3.0
     elif mtf["aligned_timeframes"] <= 1:
@@ -1625,6 +1794,7 @@ def validate_entry(
     fundamental_data: Optional[Dict[str, Any]] = None,
     capital_usdt: float = 100.0,
 ) -> Dict[str, Any]:
+
     result = score_setup(
         trigger_df=trigger_df,
         confirm_frames=confirm_frames,
@@ -1659,6 +1829,7 @@ def evaluate_scalp(
     fundamental_data: Optional[Dict[str, Any]] = None,
     capital_usdt: float = 100.0,
 ) -> Dict[str, Any]:
+
     return score_setup(
         trigger_df=trigger_df,
         confirm_frames=confirm_frames,
@@ -1678,6 +1849,7 @@ def evaluate_swing(
     fundamental_data: Optional[Dict[str, Any]] = None,
     capital_usdt: float = 100.0,
 ) -> Dict[str, Any]:
+
     return score_setup(
         trigger_df=trigger_df,
         confirm_frames=confirm_frames,
@@ -1703,7 +1875,10 @@ def get_entry_engine_config() -> Dict[str, Any]:
         "btc_timeframes": list(BTC_TIMEFRAMES),
         "minimum_signal_score": DEFAULT_MIN_SIGNAL_SCORE,
         "excellent_buy_score": DEFAULT_EXCELLENT_SCORE,
+        "minimum_net_rr_t1": _risk_minimum_rr(),
         "minimum_candles": DEFAULT_MIN_CANDLES,
+        "liquidity_limits": _liquidity_limits(),
+        "entry_limits": _entry_limits(),
         "spot_only": True,
         "score_is_win_probability": False,
     }
@@ -1713,78 +1888,129 @@ def get_entry_engine_config() -> Dict[str, Any]:
 # SELF-CHECK
 # ============================================================
 
-def self_check() -> bool:
-    """Deterministic offline checks."""
+def self_check() -> Dict[str, Any]:
+    checks: Dict[str, bool] = {}
 
-    assert sum(LAYER_WEIGHTS.values()) == 100
+    try:
+        checks["seven_layer_weights_total_100"] = (
+            sum(LAYER_WEIGHTS.values()) == 100
+            and len(LAYER_WEIGHTS) == 7
+        )
 
-    assert TIMEFRAME_MAP["SCALP"]["entry"] == "5m"
-    assert TIMEFRAME_MAP["SCALP"]["confirmation"] == "15m"
-    assert TIMEFRAME_MAP["SCALP"]["structure"] == "30m"
+        checks["scalp_timeframes"] = (
+            TIMEFRAME_MAP["SCALP"]["entry"] == "5m"
+            and TIMEFRAME_MAP["SCALP"]["confirmation"] == "15m"
+            and TIMEFRAME_MAP["SCALP"]["structure"] == "30m"
+        )
 
-    assert TIMEFRAME_MAP["SWING"]["entry"] == "15m"
-    assert TIMEFRAME_MAP["SWING"]["confirmation"] == "30m"
-    assert TIMEFRAME_MAP["SWING"]["structure"] == "1h"
+        checks["swing_timeframes"] = (
+            TIMEFRAME_MAP["SWING"]["entry"] == "15m"
+            and TIMEFRAME_MAP["SWING"]["confirmation"] == "30m"
+            and TIMEFRAME_MAP["SWING"]["structure"] == "1h"
+        )
 
-    # Generate deterministic synthetic OHLCV data.
-    count = 260
+        checks["signal_thresholds"] = (
+            DEFAULT_MIN_SIGNAL_SCORE == 85
+            and DEFAULT_EXCELLENT_SCORE == 90
+        )
 
-    index = pd.RangeIndex(count)
+        count = 260
+        index = pd.RangeIndex(count)
 
-    close = pd.Series(
-        [100 + i * 0.08 + math.sin(i / 5) * 0.15 for i in range(count)],
-        index=index,
-    )
+        close = pd.Series(
+            [
+                100 + i * 0.08 + math.sin(i / 5) * 0.15
+                for i in range(count)
+            ],
+            index=index,
+        )
 
-    df = pd.DataFrame({
-        "open": close - 0.03,
-        "high": close + 0.20,
-        "low": close - 0.20,
-        "close": close,
-        "volume": [
-            1000 + (i % 12) * 30
-            for i in range(count)
-        ],
-    })
+        df = pd.DataFrame({
+            "open": close - 0.03,
+            "high": close + 0.20,
+            "low": close - 0.20,
+            "close": close,
+            "volume": [
+                1000 + (i % 12) * 30
+                for i in range(count)
+            ],
+        })
 
-    snapshot = _calculate_snapshot(df)
+        snapshot = _calculate_snapshot(df)
 
-    assert snapshot["close"] is not None
-    assert snapshot["ema20"] is not None
-    assert snapshot["ema50"] is not None
-    assert snapshot["ema200"] is not None
-    assert snapshot["atr"] is not None
-    assert snapshot["rsi"] is not None
+        checks["indicator_snapshot"] = all(
+            snapshot.get(key) is not None
+            for key in (
+                "close",
+                "ema20",
+                "ema50",
+                "ema200",
+                "atr",
+                "rsi",
+            )
+        )
 
-    structure = _market_structure(df)
+        structure = _market_structure(df)
 
-    assert structure["valid"]
+        checks["market_structure"] = bool(
+            structure.get("valid")
+        )
 
-    # Incomplete timeframe data must not produce a BUY.
-    incomplete = score_setup(
-        trigger_df=df.tail(100).copy(),
-        confirm_frames={},
-        market_context={},
-        strategy="SCALP",
-    )
+        incomplete = score_setup(
+            trigger_df=df.tail(100).copy(),
+            confirm_frames={},
+            market_context={},
+            strategy="SCALP",
+        )
 
-    assert incomplete["decision"] == "WAIT"
-    assert not incomplete["valid"]
+        checks["incomplete_data_cannot_buy"] = (
+            incomplete.get("decision") == "WAIT"
+            and incomplete.get("valid") is False
+        )
 
-    return True
+        checks["invalid_strategy_rejected"] = (
+            score_setup(
+                trigger_df=df,
+                strategy="INVALID",
+            ).get("decision") == "REJECT"
+        )
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "passed": False,
+            "checks": checks,
+            "error": str(exc),
+        }
+
+    passed_count = sum(checks.values())
+    total_count = len(checks)
+
+    return {
+        "ok": passed_count == total_count,
+        "passed": passed_count == total_count,
+        "checks": checks,
+        "passed_count": passed_count,
+        "total_count": total_count,
+        "code_version": CODE_VERSION,
+        "formula_version": FORMULA_VERSION,
+    }
 
 
 if __name__ == "__main__":
-    try:
-        self_check()
+    result = self_check()
 
-        print("ENTRY ENGINE SELF-CHECK: PASS")
-        print("Seven-Layer Weights: 100")
-        print("Multi-Timeframe Confirmation: ENABLED")
-        print("BTC Market Context: ENABLED")
-        print("ATR-Based Risk Integration: ENABLED")
-        print("Spot Only: YES")
+    print("ENTRY ENGINE SELF-CHECK:", "PASS" if result["ok"] else "FAIL")
+    print("Checks:", result["passed_count"], "/", result["total_count"])
+    print("Seven-Layer Weights:", sum(LAYER_WEIGHTS.values()))
+    print("Multi-Timeframe Confirmation: ENABLED")
+    print("BTC Market Context: ENABLED")
+    print("ATR-Based Risk Integration: ENABLED")
+    print("Spot Only: YES")
 
-    except Exception as exc:
-        print(f"ENTRY ENGINE SELF-CHECK: FAIL - {exc}")
-        raise
+    if not result["ok"]:
+        print("Failed checks:", [
+            name for name, passed in result["checks"].items()
+            if not passed
+        ])
+        raise SystemExit(1)

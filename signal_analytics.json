@@ -1,15 +1,9 @@
 {
-  "version": 5,
-  "code_version": "4.0.0",
-  "formula_version": "4.0",
-  "updated_at": "2026-11-28T03:41:23.816645+00:00",
-  "retention_days": 30,
-  "tracking_hours": 48,
+  "version": "4.0.0",
+  "updated_at": "2026-11-28T03:44:27.757112+00:00",
+  "accounting_type": "ESTIMATED_NET_RETURN",
   "round_trip_fee_pct": 0.2,
-  "estimated_slippage_pct": 0.05,
-  "total_estimated_cost_pct": 0.25,
-  "accounting_type": "SIMULATED_CANDLE_BASED",
-  "accounting_note": "Closed Binance Spot 1m candles. Entry touch is not guaranteed exchange fill. Net return subtracts configured round-trip fee and estimated slippage. T1/T2 followed by Stop Loss uses conservative full-position Stop Loss exit because partial-exit quantities are not stored. Same-candle target and stop touches are marked AMBIGUOUS.",
+  "estimated_slippage_pct": 0.1,
   "signals": {
     "ETHUSDT_SCALP_20261122T214438.862501+0000": {
       "signal_id": "ETHUSDT_SCALP_20261122T214438.862501+0000",
@@ -1250,7 +1244,7 @@
       "gross_return_pct": null,
       "return_pct": null,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-28T03:40:59.999000+00:00",
+      "last_checked_at": "2026-11-28T03:43:59.999000+00:00",
       "last_closed_candle_at": "2026-11-27T21:02:00+00:00",
       "last_closed_candle_close": 0.1493,
       "data_error": null,
@@ -1259,7 +1253,8 @@
       "min_low_after_entry": 0.1472,
       "mfe_pct": 0.47043,
       "mae_pct": -1.075269,
-      "last_candle_close": "2026-11-28T03:40:59.999000+00:00"
+      "last_candle_close": "2026-11-28T03:40:59.999000+00:00",
+      "candles_checked": 3
     },
     "XRPUSDT_SWING_20261126T035101.586796+0000": {
       "signal_id": "XRPUSDT_SWING_20261126T035101.586796+0000",
@@ -2503,7 +2498,7 @@
       "gross_return_pct": null,
       "return_pct": null,
       "fee_estimate_pct": 0.2,
-      "last_checked_at": "2026-11-28T03:40:59.999000+00:00",
+      "last_checked_at": "2026-11-28T03:43:59.999000+00:00",
       "last_closed_candle_at": "2026-11-27T21:02:00+00:00",
       "last_closed_candle_close": 91.74,
       "data_error": null,
@@ -2512,7 +2507,8 @@
       "min_low_after_entry": 90.5,
       "mfe_pct": 0.271769,
       "mae_pct": -1.619741,
-      "last_candle_close": "2026-11-28T03:40:59.999000+00:00"
+      "last_candle_close": "2026-11-28T03:40:59.999000+00:00",
+      "candles_checked": 3
     },
     "FETUSDT_SCALP_20261127T191750.908178+0000": {
       "signal_id": "FETUSDT_SCALP_20261127T191750.908178+0000",
@@ -2797,5 +2793,21 @@
       "min_low_after_entry": 185.9,
       "completed": true
     }
+  },
+  "summary": {
+    "total": 78,
+    "pending": 2,
+    "entry_reached": 68,
+    "entry_window_expired": 0,
+    "invalidated_before_entry": 10,
+    "ambiguous": 0,
+    "stop_loss": 57,
+    "t1_hit": 24,
+    "t2_hit": 14,
+    "t3_hit": 5,
+    "completed": 62,
+    "net_positive": 0,
+    "net_negative": 0,
+    "average_net_return_pct": null
   }
 }
